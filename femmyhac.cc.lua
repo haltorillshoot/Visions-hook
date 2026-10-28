@@ -4433,7 +4433,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["safe_purchasing"] = {"safe_purchasing", "safe_purchasing"},
 	["auto_loadout"] = {"auto_loadout", "auto_loadout"},
 	["follow_target"] = {"follow_target", "follow_target"},
-	["target_strafe"] = {"target_strafe", "target_strafe"},
 	["auto_ammo"] = {"auto_ammo", "auto_ammo"},
 	["auto_armor"] = {"auto_armor", "auto_armor"},
 	["anti_stomp"] = {"anti_stomp", "anti_stomp"},
@@ -8980,7 +8979,7 @@ do
 	-- that belong to those options (they keep showing ON) and the Semi Rage options that shoot or move are not part of it, so a teardown
 	-- registered by Semi (below) calls Session.afterSafetyShutdown to switch them off the way the user would.
 	Session.SafetyShutdownFlags = {
-		"Ragebot", "AutoFire", "auto_fire_bullet_manipulation", "follow_target", "target_strafe", "void_hide_exploit", "void_hide",
+		"Ragebot", "AutoFire", "auto_fire_bullet_manipulation", "follow_target", "void_hide_exploit", "void_hide",
 		"target_selection_target_when_shot_at", "auto_equip", "auto_loadout", "auto_ammo", "auto_armor", "auto_mask", "auto_heal", "autostomp", "dt",
 	}
 	Session.SafetyShutdownSemi = {
@@ -13897,14 +13896,6 @@ local function buildInterface()
 		Default = false,
 		Flag = "follow_target",
 		Callback = onChanged("follow_target"),
-	})
-
-	rows.targetStrafe = Other:AddLabel("Target Strafe")
-	rows.targetStrafe:ToolTip("Taps A and D back and forth while the ragebot has a target")
-	addBindableToggle(rows.targetStrafe, "Target Strafe", {
-		Default = false,
-		Flag = "target_strafe",
-		Callback = onChanged("target_strafe"),
 	})
 
 	rows.autoAmmo = Other:AddLabel("Auto Ammo")
@@ -27989,7 +27980,6 @@ end
         menu_references["follow_target_teleport_max"]:set_visible(false)
         menu_references["follow_target_sky_min"]:set_visible(false)
         menu_references["follow_target_sky_max"]:set_visible(false)
-        menu_references["target_strafe"] = menu_references["utility_section"]:create_element({["name"] = "target strafe"}, {["toggle"] = {["flag"] = "target_strafe"}})
         menu_references["auto_stomp"] = menu_references["utility_section"]:create_element({["name"] = "auto stomp"}, {["toggle"] = {["flag"] = "auto_stomp"}})
         menu_references["auto_stomp_settings"] = menu_references["auto_stomp"]:create_settings()
         menu_references["auto_stomp_stop_when_dead"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "stop when target dead"}, {["toggle"] = {["flag"] = "auto_stomp_stop_when_dead", ["default"] = false}})
@@ -31314,7 +31304,8 @@ end
 
     -- >> ( target strafe )
 
-    -- Taps A and D back and forth for as long as the ragebot has a target.
+    -- Part of the ragebot, with no switch of its own: for as long as it has a target the character taps A and D back and forth, in the void and out of it
+    -- (the steps that hide the character put the body back where it was at the start of each frame, so the walking goes on underneath them).
     do
         local strafe_interval = 0.22
         local virtual_input_manager = cloneref(game:GetService("VirtualInputManager"))
@@ -31342,8 +31333,8 @@ end
         end)
 
         local do_target_strafe = LPH_NO_VIRTUALIZE(function(dt, hrp)
-            -- No target, or the player is typing in chat: let go of the key.
-            if not (flags["ragebot"] and ragebot_target and hrp) or (getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]()) then
+            -- No target (or the ragebot is off, or the Anti Report shutdown ran), a knocked character, or the player typing in chat: let go of the key.
+            if not (flags["ragebot"] and ragebot_target and hrp) or local_knocked or getgenv()["neverlose_safety_shutdown"] or (getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]()) then
                 press_key(nil)
                 return
             end
@@ -31356,20 +31347,7 @@ end
             end
         end)
 
-        create_connection(menu_references["target_strafe"]["on_toggle_change"], function(value)
-            for i = 1, #heartbeat do
-                if heartbeat[i] == do_target_strafe then
-                    remove(heartbeat, i)
-                    break
-                end
-            end
-
-            press_key(nil)
-
-            if value then
-                heartbeat[#heartbeat+1] = do_target_strafe
-            end
-        end)
+        heartbeat[#heartbeat+1] = do_target_strafe
 
         -- Unloading disconnects everything in connections, so a held key goes up with them.
         connections[#connections+1] = {
