@@ -4499,6 +4499,14 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["follow_target_stop_if"] = {"follow_target_stop_if", "follow_target_stop_if", "list"},
 	["follow_target_distance"] = {"follow_target_distance", "follow_target_distance"},
 	["follow_target_into_void"] = {"follow_target_into_void", "follow_target_into_void"},
+	["follow_target_orbit_shape"] = {"follow_target_orbit_shape", "follow_target_orbit_shape", "list"},
+	["follow_target_teleport_min"] = {"follow_target_teleport_min", "follow_target_teleport_min"},
+	["follow_target_teleport_max"] = {"follow_target_teleport_max", "follow_target_teleport_max"},
+	["follow_target_sky_min"] = {"follow_target_sky_min", "follow_target_sky_min"},
+	["follow_target_sky_max"] = {"follow_target_sky_max", "follow_target_sky_max"},
+	["follow_target_visualize"] = {"follow_target_visualize", "follow_target_visualize"},
+	["follow_target_visualize_color"] = {"follow_target_visualize_color", "follow_target_visualize_color", "color"},
+	["velocity_source"] = {"velocity_source", "velocity_source", "list"},
 	["auto_stomp_stop_when_dead"] = {"auto_stomp_stop_when_dead", "auto_stomp_stop_when_dead"},
 	["auto_stomp_target_statuses"] = {"auto_stomp_target_statuses", "auto_stomp_target_statuses", "list"},
 	["auto_stomp_wait_for_all"] = {"auto_stomp_wait_for_all", "auto_stomp_wait_for_all"},
@@ -8175,10 +8183,18 @@ function Session.buildSettingsPanels(rows)
 	panelSlider(loadout, "Ammo", "auto_loadout_ammo", 0, 50, 0, "x", 5)
 
 	local follow = rows.followTarget:AddOption()
-	local strafeRows = {}
-	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe" }, "random", function(value)
+	local strafeRows, randomizeRows, skyRows = {}, {}, {}
+	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above" }, "random", function(value)
 		for _, row in ipairs(strafeRows) do
 			row:SetVisible(isPicked(value, "strafe"))
+		end
+
+		for _, row in ipairs(randomizeRows) do
+			row:SetVisible(isPicked(value, "randomize"))
+		end
+
+		for _, row in ipairs(skyRows) do
+			row:SetVisible(isPicked(value, "above"))
 		end
 	end)
 	panelList(follow, "Stop If", "follow_target_stop_if", { "no gun equipped", "target knocked", "reloading" }, { "no gun equipped", "target knocked", "reloading" })
@@ -8186,10 +8202,20 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(follow, "Follow Into Void", "follow_target_into_void", true)
 	table.insert(strafeRows, select(2, panelSlider(follow, "Height", "follow_target_height", -200, 200, 0, " studs", 0)))
 	table.insert(strafeRows, select(2, panelSlider(follow, "Speed", "follow_target_speed", 1, 100, 0, "%", 75)))
+	-- Orbit Shape (strafe): the path round the target. Randomize: a random place 'Teleport Min' to 'Teleport Max' studs out. Above: a random height over the target.
+	table.insert(strafeRows, select(2, panelList(follow, "Orbit Shape", "follow_target_orbit_shape", { "circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart" }, "circle")))
+	table.insert(randomizeRows, select(2, panelSlider(follow, "Teleport Min", "follow_target_teleport_min", 1, 100, 0, " studs", 2)))
+	table.insert(randomizeRows, select(2, panelSlider(follow, "Teleport Max", "follow_target_teleport_max", 2, 200, 0, " studs", 17)))
+	table.insert(skyRows, select(2, panelSlider(follow, "Height Min", "follow_target_sky_min", 1, 100, 0, " studs", 10)))
+	table.insert(skyRows, select(2, panelSlider(follow, "Height Max", "follow_target_sky_max", 2, 200, 0, " studs", 20)))
+	panelToggle(follow, "Visualize", "follow_target_visualize", false)
+	panelColor(follow, "Visualize Color", "follow_target_visualize_color", Color3.fromRGB(255, 194, 254))
 
-	-- Height and speed only apply to the strafe style.
-	for _, row in ipairs(strafeRows) do
-		row:SetVisible(false)
+	-- Each of these only applies to its own style.
+	for _, group in ipairs({ strafeRows, randomizeRows, skyRows }) do
+		for _, row in ipairs(group) do
+			row:SetVisible(false)
+		end
 	end
 
 	local stomp = rows.autoStomp:AddOption()
@@ -8250,7 +8276,11 @@ function Session.buildSettingsPanels(rows)
 	panelList(equip, "Gun", "auto_equip_gun", { "double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug" }, { "rifle" })
 
 	-- Prediction --
-	panelSlider(rows.prediction:AddOption(), "Resolver Rate", "resolver_rate", 0, 0.1, 4, "s", 0.043)
+	local predictionPanel = rows.prediction:AddOption()
+	panelSlider(predictionPanel, "Resolver Rate", "resolver_rate", 0, 0.1, 4, "s", 0.043)
+	-- Where the target's velocity comes from: its position change between two reads (delta), the way its humanoid is walking or the way its body faces
+	-- (both times its walk speed), or nothing at all (no lead).
+	panelList(predictionPanel, "Velocity Source", "velocity_source", { "delta", "move direction", "look vector", "none" }, "delta")
 
 	-- Void hide --
 	local voidHide = rows.voidHide:AddOption()
@@ -27841,6 +27871,7 @@ end
         menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 0, ["min_text"] = "auto", ["max_text"] = "disabled", ["suffix"] = "%", ["decimals"] = 2}})
         menu_references["prediction_settings"] = menu_references["prediction"]:create_settings()
         menu_references["resolver_rate"] = menu_references["prediction_settings"]:create_element({["name"] = "resolver rate"}, {["slider"] = {["flag"] = "resolver_rate", ["min"] = 0, ["suffix"] = "s", ["max"] = 0.1, ["default"] = 0.043, ["decimals"] = 4}})
+        menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["shot_delay"] = menu_references["general_section"]:create_element({["name"] = "shot delay"}, {["slider"] = {["flag"] = "shot_delay", ["min"] = 0, ["max"] = 1000, ["suffix"] = "ms", ["default"] = 0, ["min_text"] = "none"}})
         menu_references["ragebot_field_of_view"] = menu_references["general_section"]:create_element({["name"] = "field of view"}, {["slider"] = {["flag"] = "ragebot_field_of_view", ["min"] = 5, ["max"] = 180, ["suffix"] = "°", ["default"] = 180, ["max_text"] = "full"}})
         menu_references["fire_cooldown"] = menu_references["general_section"]:create_element({["name"] = "fire cooldown"}, {["slider"] = {["flag"] = "fire_cooldown", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 5, ["min_text"] = "none"}})
@@ -27938,14 +27969,26 @@ end
         menu_references["auto_loadout_ammo"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "ammo"}, {["slider"] = {["flag"] = "auto_loadout_ammo", ["min"] = 0, ["max"] = 50, ["default"] = 5, ["suffix"] = "x"}})
         menu_references["follow_target"] = menu_references["utility_section"]:create_element({["name"] = "follow target"}, {["toggle"] = {["flag"] = "follow_target"}})
         menu_references["follow_target_settings"] = menu_references["follow_target"]:create_settings()
-        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["follow_target_stop_if"] = menu_references["follow_target_settings"]:create_element({["name"] = "stop if"}, {["dropdown"] = {["flag"] = "follow_target_stop_if", ["options"] = {"no gun equipped", "target knocked", "reloading"}, ["default"] = {"no gun equipped", "target knocked", "reloading"}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
         menu_references["follow_target_into_void"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow into void"}, {["toggle"] = {["flag"] = "follow_target_into_void", ["default"] = true}})
         menu_references["follow_target_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "height"}, {["slider"] = {["flag"] = "follow_target_height", ["min"] = -200, ["max"] = 200, ["default"] = 0, ["suffix"] = " studs"}})
         menu_references["follow_target_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "follow_target_speed", ["min"] = 1, ["max"] = 100, ["default"] = 75, ["suffix"] = "%"}})
+        menu_references["follow_target_orbit_shape"] = menu_references["follow_target_settings"]:create_element({["name"] = "orbit shape"}, {["dropdown"] = {["flag"] = "follow_target_orbit_shape", ["options"] = {"circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart"}, ["default"] = {"circle"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["follow_target_teleport_min"] = menu_references["follow_target_settings"]:create_element({["name"] = "teleport min"}, {["slider"] = {["flag"] = "follow_target_teleport_min", ["min"] = 1, ["max"] = 100, ["default"] = 2, ["suffix"] = " studs"}})
+        menu_references["follow_target_teleport_max"] = menu_references["follow_target_settings"]:create_element({["name"] = "teleport max"}, {["slider"] = {["flag"] = "follow_target_teleport_max", ["min"] = 2, ["max"] = 200, ["default"] = 17, ["suffix"] = " studs"}})
+        menu_references["follow_target_sky_min"] = menu_references["follow_target_settings"]:create_element({["name"] = "height min"}, {["slider"] = {["flag"] = "follow_target_sky_min", ["min"] = 1, ["max"] = 100, ["default"] = 10, ["suffix"] = " studs"}})
+        menu_references["follow_target_sky_max"] = menu_references["follow_target_settings"]:create_element({["name"] = "height max"}, {["slider"] = {["flag"] = "follow_target_sky_max", ["min"] = 2, ["max"] = 200, ["default"] = 20, ["suffix"] = " studs"}})
+        menu_references["follow_target_visualize"] = menu_references["follow_target_settings"]:create_element({["name"] = "visualize"}, {["toggle"] = {["flag"] = "follow_target_visualize", ["default"] = false}})
+        menu_references["follow_target_visualize_color"] = menu_references["follow_target_settings"]:create_element({["name"] = "visualize color"}, {["colorpicker"] = {["color_flag"] = "follow_target_visualize_color", ["transparency_flag"] = "follow_target_visualize_transparency", ["default_color"] = color3_fromrgb(255, 194, 254), ["default_transparency"] = 0}})
         menu_references["follow_target_height"]:set_visible(false)
         menu_references["follow_target_speed"]:set_visible(false)
+        menu_references["follow_target_orbit_shape"]:set_visible(false)
+        menu_references["follow_target_teleport_min"]:set_visible(false)
+        menu_references["follow_target_teleport_max"]:set_visible(false)
+        menu_references["follow_target_sky_min"]:set_visible(false)
+        menu_references["follow_target_sky_max"]:set_visible(false)
         menu_references["target_strafe"] = menu_references["utility_section"]:create_element({["name"] = "target strafe"}, {["toggle"] = {["flag"] = "target_strafe"}})
         menu_references["auto_stomp"] = menu_references["utility_section"]:create_element({["name"] = "auto stomp"}, {["toggle"] = {["flag"] = "auto_stomp"}})
         menu_references["auto_stomp_settings"] = menu_references["auto_stomp"]:create_settings()
@@ -29819,6 +29862,31 @@ end
         end
     end)
 
+    -- Velocity Source: other ways to read how the target is moving than the position change between two reads. The humanoid's MoveDirection and the
+    -- body's LookVector (each times the walk speed) are what the velocity resolvers of other Da Hood cheats use against targets that fake their velocity.
+    hide_manager["velocity_source"] = type(flags["velocity_source"]) == "table" and flags["velocity_source"][1] or "delta"
+
+    hide_manager["source_velocity"] = function(source, target, torso)
+        if source == "none" then
+            return vector3_zero
+        end
+
+        local humanoid = find_first_child(target[3], "Humanoid")
+        local walk_speed = humanoid and humanoid["WalkSpeed"] or 16
+
+        if source == "move direction" then
+            return humanoid and humanoid["MoveDirection"] * walk_speed or nil
+        elseif source == "look vector" then
+            return torso["CFrame"]["LookVector"] * walk_speed
+        end
+
+        return nil
+    end
+
+    create_connection(menu_references["velocity_source"]["on_dropdown_change"], function(value)
+        hide_manager["velocity_source"] = value[1] or "delta"
+    end)
+
     local is_defensive = false
     local params = RaycastParams["new"]()
     params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
@@ -29929,6 +29997,13 @@ end
                         end
 
                         target_velocity = velocity
+                    end
+
+                    -- Velocity Source other than delta: the velocity read above is replaced
+                    local source = hide_manager["velocity_source"]
+
+                    if source and source ~= "delta" then
+                        target_velocity = hide_manager["source_velocity"](source, target, torso) or target_velocity
                     end
 
                     target_last_position = torso_position
@@ -30650,8 +30725,145 @@ end
         local distance = flags["follow_target_distance"] or 15
         local speed = flags["follow_target_speed"] or 75
         local height = vector3_new(0, flags["follow_target_height"] or 0, 0)
+        local initial_shape = flags["follow_target_orbit_shape"]
+        local orbit_shape = type(initial_shape) == "table" and initial_shape[1] or "circle"
+
+        -- Orbit Shape: where `share` (0 to 1, once round) of the way along a path `radius` studs out is, flat round the middle. A polygon is walked
+        -- from corner to corner; the heart is the usual parametric curve.
+        hide_manager["orbit_offset"] = function(shape, share, radius)
+            local sin, cos, pi, floor = math["sin"], math["cos"], math["pi"], math["floor"]
+            local sides = ({["triangle"] = 3, ["square"] = 4, ["pentagon"] = 5, ["hexagon"] = 6, ["decagon"] = 10})[shape]
+
+            if sides then
+                local scaled = share * sides
+                local corner = floor(scaled)
+                local along = scaled - corner
+                local from_angle = corner / sides * 2 * pi
+                local to_angle = (corner + 1) / sides * 2 * pi
+
+                return vector3_new(sin(from_angle) * (1 - along) + sin(to_angle) * along, 0, cos(from_angle) * (1 - along) + cos(to_angle) * along) * radius
+            elseif shape == "heart" then
+                local angle = share * 2 * pi
+
+                return vector3_new(sin(angle) ^ 3, 0, (13 * cos(angle) - 5 * cos(2 * angle) - 2 * cos(3 * angle) - cos(4 * angle)) / 16) * radius
+            end
+
+            return vector3_new(sin(share * 2 * pi), 0, cos(share * 2 * pi)) * radius
+        end
+
+        -- Visualize: a flat disc over the strafe's radius, or a ring of balls on the places the other styles take the character to. Parts of the
+        -- Terrain (the camera's children are cleared by the game) that only this client has.
+        local follow_visual = {["disc"] = nil, ["balls"] = {}, ["next"] = 1, ["last"] = 0, ["drawn"] = nil}
+        hide_manager["follow_visual"] = follow_visual
+
+        hide_manager["follow_visual_clear"] = function()
+            if follow_visual["disc"] then
+                pcall(function()
+                    follow_visual["disc"]:Destroy()
+                end)
+
+                follow_visual["disc"] = nil
+            end
+
+            for index, ball in follow_visual["balls"] do
+                pcall(function()
+                    ball:Destroy()
+                end)
+
+                follow_visual["balls"][index] = nil
+            end
+
+            follow_visual["drawn"] = nil
+        end
+
+        hide_manager["follow_visual_show"] = function(kind, center, position, radius)
+            local color = flags["follow_target_visualize_color"]
+            color = typeof(color) == "Color3" and color or color3_fromrgb(255, 194, 254)
+
+            local make = function(shape)
+                local part = Instance.new("Part")
+                part["Anchored"] = true
+                part["CanCollide"] = false
+                part["CanQuery"] = false
+                part["CanTouch"] = false
+                part["CastShadow"] = false
+                part["Material"] = Enum["Material"]["ForceField"]
+                part["Shape"] = shape
+                part["Parent"] = workspace["Terrain"]
+
+                return part
+            end
+
+            follow_visual["drawn"] = clock()
+
+            if kind == "disc" then
+                for index, ball in follow_visual["balls"] do
+                    pcall(function()
+                        ball:Destroy()
+                    end)
+
+                    follow_visual["balls"][index] = nil
+                end
+
+                local disc = follow_visual["disc"]
+
+                if not disc or not disc["Parent"] then
+                    disc = make(Enum["PartType"]["Cylinder"])
+                    disc["Transparency"] = 0.5
+                    follow_visual["disc"] = disc
+                end
+
+                disc["Size"] = vector3_new(0.2, radius * 2, radius * 2)
+                disc["Color"] = color
+                disc["CFrame"] = cframe_new(center) * CFrame["Angles"](0, 0, math["pi"] / 2)
+
+                return
+            end
+
+            if follow_visual["disc"] then
+                pcall(function()
+                    follow_visual["disc"]:Destroy()
+                end)
+
+                follow_visual["disc"] = nil
+            end
+
+            local now = clock()
+
+            if now - follow_visual["last"] >= 0.08 then
+                follow_visual["last"] = now
+
+                local ball = follow_visual["balls"][follow_visual["next"]]
+
+                if not ball or not ball["Parent"] then
+                    ball = make(Enum["PartType"]["Ball"])
+                    ball["Size"] = vector3_new(1, 1, 1)
+                    ball["Transparency"] = 0.35
+                    follow_visual["balls"][follow_visual["next"]] = ball
+                end
+
+                ball["Color"] = color
+                ball["Position"] = position
+                follow_visual["next"] = follow_visual["next"] % 12 + 1
+            end
+        end
+
+        do
+            local teardowns = getgenv()["neverlose_teardowns"]
+
+            if teardowns then
+                teardowns[#teardowns+1] = function()
+                    hide_manager["follow_visual_clear"]()
+                end
+            end
+        end
 
         local follow_target = LPH_JIT_MAX(function(dt, hrp, bypass)
+            -- whatever Visualize drew stays only while the character is being sent to the target
+            if follow_visual["drawn"] and clock() - follow_visual["drawn"] > 0.4 then
+                hide_manager["follow_visual_clear"]()
+            end
+
             -- Follow needs a live target the ragebot is tracking: with the ragebot off nothing refreshes the aim position (a target set
             -- by "target when shot at" would send the character to where the last one stood), a target that left or is respawning,
             -- loading or protected has nothing to follow, and a knocked or dead local character has nowhere to go.
@@ -30723,8 +30935,39 @@ end
                         new_cframe = cframe_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647))
                     end
                     new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+                elseif follow_target_style == "randomize" then
+                    -- Teleport Min / Max: a random place that far out (flat) from the target, up to 5 studs over it
+                    local low = flags["follow_target_teleport_min"] or 2
+                    local high = math.max(flags["follow_target_teleport_max"] or 17, low)
+                    local radius = low + (high - low) * math_random()
+                    local angle = math_random() * 2 * math["pi"]
+
+                    new_cframe = cframe_new(ragebot_aim_position + vector3_new(math["cos"](angle) * radius, math_random() * 5, math["sin"](angle) * radius))
+                    new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+                elseif follow_target_style == "above" then
+                    -- Height Min / Max: straight over the target
+                    local low = flags["follow_target_sky_min"] or 10
+                    local high = math.max(flags["follow_target_sky_max"] or 20, low)
+
+                    new_cframe = cframe_new(ragebot_aim_position + vector3_new(0, low + (high - low) * math_random(), 0))
+                    new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+                elseif orbit_shape ~= "circle" then
+                    new_cframe = cframe_new(ragebot_aim_position + height + hide_manager["orbit_offset"](orbit_shape, (clock() * speed) % 1, distance))
                 else
                     new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (ragebot_aim_position + height)
+                end
+
+                hide_manager["follow_last"] = new_cframe
+
+                if not bypass and flags["follow_target_visualize"] == true and ragebot_aim_position["Magnitude"] < 9e5 then
+                    local strafing = follow_target_style ~= "random" and follow_target_style ~= "random spam" and follow_target_style ~= "randomize" and follow_target_style ~= "above"
+                    local new_position = new_cframe["Position"]
+
+                    if strafing then
+                        hide_manager["follow_visual_show"]("disc", ragebot_aim_position + height, nil, distance)
+                    elseif new_position["Magnitude"] < 9e5 then
+                        hide_manager["follow_visual_show"]("ball", nil, new_position, nil)
+                    end
                 end
 
                 local_following = true
@@ -30754,6 +30997,8 @@ end
             if value then
                 anti_aim[#anti_aim+1] = follow_target
             else
+                hide_manager["follow_visual_clear"]()
+
                 local camera_cframe = camera["CFrame"]
                 render_stepped_wait(render_stepped)
                 camera["CFrame"] = camera_cframe
@@ -30764,6 +31009,22 @@ end
             follow_target_style = value[1]
             menu_references["follow_target_height"]:set_visible(follow_target_style == "strafe")
             menu_references["follow_target_speed"]:set_visible(follow_target_style == "strafe")
+            menu_references["follow_target_orbit_shape"]:set_visible(follow_target_style == "strafe")
+            menu_references["follow_target_teleport_min"]:set_visible(follow_target_style == "randomize")
+            menu_references["follow_target_teleport_max"]:set_visible(follow_target_style == "randomize")
+            menu_references["follow_target_sky_min"]:set_visible(follow_target_style == "above")
+            menu_references["follow_target_sky_max"]:set_visible(follow_target_style == "above")
+            hide_manager["follow_visual_clear"]()
+        end)
+
+        create_connection(menu_references["follow_target_orbit_shape"]["on_dropdown_change"], function(value)
+            orbit_shape = value[1] or "circle"
+        end)
+
+        create_connection(menu_references["follow_target_visualize"]["on_toggle_change"], function(value)
+            if not value then
+                hide_manager["follow_visual_clear"]()
+            end
         end)
 
         create_connection(menu_references["follow_target_distance"]["on_slider_change"], function(value)
