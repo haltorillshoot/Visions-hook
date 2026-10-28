@@ -4378,6 +4378,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_bullet_tp"] = {"auto_fire_bullet_tp", "auto_fire_bullet_tp"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_skip_out_of_reach"] = {"auto_fire_skip_out_of_reach", "auto_fire_skip_out_of_reach"},
+	["auto_fire_walls"] = {"auto_fire_walls", "auto_fire_walls"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -8205,6 +8206,7 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Bullet TP", "auto_fire_bullet_tp", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Skip Out Of Reach", "auto_fire_skip_out_of_reach", true)
+	panelToggle(autoFire, "Walls", "auto_fire_walls", true)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -14906,6 +14908,22 @@ do
 
                         local pos = ragebot_aim_position + vector3_new(math_random(101,105)/100,0.008,-0.008)
                         local origin = local_server_position["p"] + vector3_new(0.004,3.0208,-0.048)
+
+                        -- Walls: the server looks at the line from this origin to this hit position, so a hit claimed behind a wall is moved to the nearest
+                        -- open point beside the target's part (hide_manager.walls_aim), and a shot with no way to a clear line is not sent at all.
+                        local walls_aim = flags["auto_fire_walls"] ~= false and hide_manager["walls_aim"] or nil
+
+                        if walls_aim then
+                            local walls_ok, claimed = pcall(walls_aim, origin, pos)
+
+                            if walls_ok then
+                                if claimed == nil then
+                                    return
+                                end
+
+                                pos = claimed
+                            end
+                        end
                 
                         local dir = (origin-pos)["Unit"]
                         local Magnitude = dir["Magnitude"]
@@ -27748,6 +27766,7 @@ end
         menu_references["auto_fire_bullet_tp"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet tp"}, {["toggle"] = {["flag"] = "auto_fire_bullet_tp", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_skip_out_of_reach"] = menu_references["auto_fire_settings"]:create_element({["name"] = "skip out of reach"}, {["toggle"] = {["flag"] = "auto_fire_skip_out_of_reach", ["default"] = true}})
+        menu_references["auto_fire_walls"] = menu_references["auto_fire_settings"]:create_element({["name"] = "walls"}, {["toggle"] = {["flag"] = "auto_fire_walls", ["default"] = true}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -29398,6 +29417,104 @@ end
     hide_manager["ensure_aim_hook"] = ensure_aim_hook
     hide_manager["release_aim_hook"] = release_aim_hook
 
+    -- >> ( walls )
+    -- What BASED Hub's Da Hood ragebot has measured about the server's wall check (its "Walls" option), put into the shots this script sends:
+    --   * the line the server looks at is the one from the shot's origin to where the hit is CLAIMED, not to the target's part;
+    --   * a hit is taken anywhere within about 22 studs of the part (20 is the hub's figure to stay inside: 22 taken, 26 refused);
+    --   * so a target standing behind or inside a wall is hit by claiming the hit at a point near it, out in the open, with a clear line from the
+    --     shot's origin, and naming the target's part as the part that was hit.
+    -- Every ShootGun the ragebot makes, its own forged call and the gun script's call under Bullet Manipulation alike, is rebuilt by the remote hook
+    -- (origin = the server position, hit = the aim position, part = the target's hitbox), so that is where the claim is moved. A line that is already
+    -- clear is left as it is.
+    do
+        local WALL_STEPS = {4, 8, 12, 16}
+        local WALL_MAX_RAY = 1500
+        local wall_ways = {}
+
+        for _, way in {{0, 1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {1, 1, 1}, {-1, 1, 1}, {1, 1, -1}, {-1, 1, -1}, {1, -1, 1}, {-1, -1, 1}, {1, -1, -1}, {-1, -1, -1}, {0, -1, 0}} do
+            wall_ways[#wall_ways+1] = vector3_new(way[1], way[2], way[3])["Unit"]
+        end
+
+        -- what the game's own bullet raycast leaves out (MainModule.Ignored: Workspace.Bush and Workspace.Ignored), the shooter and the target
+        local wall_params = RaycastParams["new"]()
+        wall_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+        wall_params["IgnoreWater"] = true
+
+        -- what the game's own wall check counts (GunHandler.WallShot): the map's parts that collide
+        local map_params = RaycastParams["new"]()
+        map_params["FilterType"] = Enum["RaycastFilterType"]["Include"]
+        map_params["RespectCanCollide"] = true
+
+        local wall_raycast = workspace["Raycast"]
+        local stats = {["checked"] = 0, ["clear"] = 0, ["moved"] = 0, ["none"] = 0}
+
+        hide_manager["walls_stats"] = stats
+
+        -- Where to claim a hit at `position` from `origin`: the position itself when the line is clear, else the nearest open point around it (4 to 16
+        -- studs), else nothing. The second value says the claim was moved.
+        hide_manager["walls_aim"] = LPH_NO_VIRTUALIZE(function(origin, position)
+            local offset = position - origin
+            local distance = offset["Magnitude"]
+
+            -- the void and anything past a ray's reach are not looked at (Skip Out Of Reach holds those shots back anyway)
+            if distance ~= distance or distance < 0.05 or distance > WALL_MAX_RAY then
+                return position, false
+            end
+
+            local filter = {}
+            local target = ragebot_target
+            local extras = {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")}
+
+            for _, instance in extras do
+                filter[#filter+1] = instance
+            end
+
+            wall_params["FilterDescendantsInstances"] = filter
+            stats["checked"] += 1
+
+            if wall_raycast(workspace, origin, offset, wall_params) == nil then
+                stats["clear"] += 1
+                return position, false
+            end
+
+            for pass = 1, 2 do
+                local params = wall_params
+
+                if pass == 2 then
+                    -- nothing found with everything counted as a wall: try again with only what the game's wall check counts
+                    local map = find_first_child(workspace, "MAP")
+
+                    if not map then
+                        break
+                    end
+
+                    map_params["FilterDescendantsInstances"] = {map}
+                    params = map_params
+
+                    if wall_raycast(workspace, origin, offset, params) == nil then
+                        stats["clear"] += 1
+                        return position, false
+                    end
+                end
+
+                for _, far in WALL_STEPS do
+                    for _, way in wall_ways do
+                        local point = position + way * far
+
+                        if wall_raycast(workspace, origin, point - origin, params) == nil then
+                            stats["moved"] += 1
+                            return point, true
+                        end
+                    end
+                end
+            end
+
+            stats["none"] += 1
+
+            return nil, true
+        end)
+    end
+
     -- the ragebot's answer: the direction to its aim position. The far void and a point on the gun itself are left to the gun's own aim.
     aim_chain["providers"]["rage"] = {
         enabled = function()
@@ -29944,6 +30061,12 @@ end
                         -- that hides in the void most of the time: 63% of all sends were aimed at a void position, from a body hundreds of millions of studs
                         -- away, and the server took 1 of 709. The shot waits for the target to be within reach (a quarter more than the range, as slack).
                         if chosen_gun and flags["auto_fire_skip_out_of_reach"] ~= false and (origin - pos)["Magnitude"] > (chosen_gun[2] or 250) * 1.25 + 20 then
+                            chosen_gun = nil
+                        end
+
+                        -- Walls: a shot with no clear line to the target and no open point near it to claim the hit at is only turned away by the server (and a
+                        -- shotgun's refused call is counted against its SecurityTolerance), so it is not sent. Worked out from the origin the rebuilt shot gets.
+                        if chosen_gun and flags["auto_fire_walls"] ~= false and hide_manager["walls_aim"] and hide_manager["walls_aim"](origin + vector3_new(0, 3.0208, 0), pos) == nil then
                             chosen_gun = nil
                         end
 
