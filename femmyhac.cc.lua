@@ -4377,6 +4377,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_dont_render"] = {"auto_fire_dont_render", "auto_fire_dont_render"},
 	["auto_fire_bullet_tp"] = {"auto_fire_bullet_tp", "auto_fire_bullet_tp"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
+	["auto_fire_skip_out_of_reach"] = {"auto_fire_skip_out_of_reach", "auto_fire_skip_out_of_reach"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -4470,11 +4471,18 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_mask_disable_when"] = {"auto_mask_disable_when", "auto_mask_disable_when", "list"},
 	["auto_heal_purchase_if_below"] = {"auto_heal_purchase_if_below", "auto_heal_purchase_if_below"},
 	["auto_heal_try_cooldown"] = {"auto_heal_try_cooldown", "auto_heal_try_cooldown"},
+	["auto_heal_stop_following"] = {"auto_heal_stop_following", "auto_heal_stop_following"},
 	["ue_resolver_refresh"] = {"ue_resolver_refresh", "ue_resolver_refresh"},
 	["ue_resolver_forgiveness"] = {"ue_resolver_forgiveness", "ue_resolver_forgiveness"},
 	["ue_resolver_void_bonus"] = {"ue_resolver_void_bonus", "ue_resolver_void_bonus"},
 	["ue_resolver_dist_penalty"] = {"ue_resolver_dist_penalty", "ue_resolver_dist_penalty"},
 	["ue_resolver_lerp"] = {"ue_resolver_lerp", "ue_resolver_lerp"},
+	["resolver_type"] = {"resolver_type", "resolver_type", "list"},
+	["resolver_rate"] = {"resolver_rate", "resolver_rate"},
+	["void_spam_resolver_position_weight"] = {"void_spam_resolver_position_weight", "void_spam_resolver_position_weight"},
+	["void_spam_resolver_forget_rate"] = {"void_spam_resolver_forget_rate", "void_spam_resolver_forget_rate"},
+	["void_spam_resolver_void_weight"] = {"void_spam_resolver_void_weight", "void_spam_resolver_void_weight"},
+	["void_spam_resolver_accuracy"] = {"void_spam_resolver_accuracy", "void_spam_resolver_accuracy"},
 	["target_selection_notification"] = {"target_selection_notification", "target_selection_notification"},
 	["target_selection_automatic"] = {"target_selection_automatic", "target_selection_automatic"},
 	["target_selection_target_when_shot_at"] = {"target_selection_target_when_shot_at", "target_selection_target_when_shot_at"},
@@ -6601,6 +6609,7 @@ local VisualSettings = {
 	LocalTracerColor = Color3.fromRGB(133, 220, 255),
 	LocalTracerGradient = Color3.fromRGB(241, 133, 255),
 	LocalTracerLifetime = 0.8,
+	LocalTracerServerOrigin = true,
 	PlayerTracerStyle = "laser",
 	PlayerTracerColor = Color3.fromRGB(133, 220, 255),
 	PlayerTracerGradient = Color3.fromRGB(241, 133, 255),
@@ -7102,6 +7111,20 @@ local function onBulletRay(object)
 	local startPosition = (object:IsA("BasePart") and object.Position) or (beam.Attachment0 and beam.Attachment0.WorldPosition) or endPosition
 	local isLocal = object:GetAttribute("OwnerCharacter") == LocalPlayer.Name
 
+	-- From Server Position: a shot the gun made starts at the drawn body; while desynced the tracer starts where the server has the character
+	-- instead (a shot the ragebot forged already starts there, far from the drawn body, and is left alone).
+	if isLocal and VisualSettings.LocalTracerServerOrigin then
+		local api = getgenv().neverlose
+		local okServer, server = pcall(function()
+			return api and api.get_server_cframe and api.get_server_cframe()
+		end)
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+		if okServer and server and root and server.Position.Magnitude < 9e5 and (server.Position - root.Position).Magnitude > 1 and (startPosition - root.Position).Magnitude < 12 then
+			startPosition = server.Position + (startPosition - root.Position)
+		end
+	end
+
 	-- the shots are only looked at by the hit visuals' health watch: nothing to record while none of them is on
 	if isLocal and anyHitVisual() then
 		recordShot(endPosition)
@@ -7384,6 +7407,11 @@ function buildGameSections(WorldTab)
 	settingColor(localTracerOptions, "Color", "visual_local_tracer_color", "LocalTracerColor")
 	settingColor(localTracerOptions, "Gradient Color", "visual_local_tracer_gradient", "LocalTracerGradient")
 	settingSlider(localTracerOptions, "Lifetime", "visual_local_tracer_lifetime", "LocalTracerLifetime", 0.1, 1.5, 1, "s")
+	localTracerOptions:AddLabel("From Server Position"):AddToggle({
+		Default = VisualSettings.LocalTracerServerOrigin,
+		Flag = "visual_local_tracer_server",
+		Callback = onVisualSetting("LocalTracerServerOrigin"),
+	})
 
 	-- Other players' bullet tracers --
 	local playerTracers = visualToggle(Bullets, "Player Tracers", "visual_player_tracers", "PlayerTracers")
@@ -8027,12 +8055,33 @@ function Session.buildSettingsPanels(rows)
 
 	-- Spam resolver --
 	local resolver = rows.spamResolver:AddOption()
+	-- Two resolvers: "cluster" aims at the busiest cluster of the spots the target was seen at; "weighted" gives every spot a weight that fades,
+	-- merges close spots and aims at the best scoring one. The distance penalty and the lerp are shared; the rest belongs to one of them.
+	local clusterRows, weightedRows = {}, {}
+	panelList(resolver, "Type", "resolver_type", { "cluster", "weighted" }, "cluster", function(value)
+		for _, row in ipairs(clusterRows) do
+			row:SetVisible(isPicked(value, "cluster"))
+		end
+
+		for _, row in ipairs(weightedRows) do
+			row:SetVisible(isPicked(value, "weighted"))
+		end
+	end)
 	-- 0.1 to 10 seconds; click the number to type one (0.1, 1.1 ...)
-	panelSlider(resolver, "Refresh Time", "ue_resolver_refresh", 0.1, 10, 2, "s", 3)
-	panelSlider(resolver, "Forgiveness", "ue_resolver_forgiveness", 0, 20, 1, "", 14.4)
-	panelSlider(resolver, "Out Of Void Bonus", "ue_resolver_void_bonus", 0, 12, 1, "", 5)
+	table.insert(clusterRows, select(2, panelSlider(resolver, "Refresh Time", "ue_resolver_refresh", 0.1, 10, 2, "s", 3)))
+	table.insert(clusterRows, select(2, panelSlider(resolver, "Forgiveness", "ue_resolver_forgiveness", 0, 20, 1, "", 14.4)))
+	table.insert(clusterRows, select(2, panelSlider(resolver, "Out Of Void Bonus", "ue_resolver_void_bonus", 0, 12, 1, "", 5)))
+	table.insert(weightedRows, select(2, panelSlider(resolver, "Normal Position Trust", "void_spam_resolver_position_weight", 0.1, 5, 2, "", 1.5)))
+	table.insert(weightedRows, select(2, panelSlider(resolver, "Forget Rate", "void_spam_resolver_forget_rate", 0, 1000, 2, "%", 80)))
+	table.insert(weightedRows, select(2, panelSlider(resolver, "Void Trust", "void_spam_resolver_void_weight", 0.1, 5, 2, "", 0.2)))
+	table.insert(weightedRows, select(2, panelSlider(resolver, "Accuracy", "void_spam_resolver_accuracy", 5, 110, 2, "%", 76.82)))
 	panelSlider(resolver, "Distance Based Penalty", "ue_resolver_dist_penalty", 0, 5, 1, "x", 2)
 	panelSlider(resolver, "Lerp % When Close", "ue_resolver_lerp", 10, 100, 1, "%", 10, { [100] = "instant" })
+
+	-- The weighted rows only show for the weighted type.
+	for _, row in ipairs(weightedRows) do
+		row:SetVisible(false)
+	end
 
 	-- Target selection --
 	local selection = rows.targetSelection:AddOption()
@@ -8073,7 +8122,7 @@ function Session.buildSettingsPanels(rows)
 	panelSlider(tracer, "Thickness", "ragebot_tracer_thickness", 2, 8, 0, "px", 2)
 	panelColor(tracer, "Color", "ragebot_tracer_color", Color3.fromRGB(200, 30, 175))
 	panelColor(tracer, "Outline", "ragebot_tracer_outline_color", Color3.fromRGB(15, 15, 15))
-	panelList(tracer, "Origin", "ragebot_tracer_origin", { "character", "mouse", "gun" }, "gun")
+	panelList(tracer, "Origin", "ragebot_tracer_origin", { "character", "mouse", "gun", "server position" }, "gun")
 	panelList(tracer, "End Point", "ragebot_tracer_end_point", { "predicted position", "character" }, "predicted position")
 
 	-- Other --
@@ -8103,7 +8152,7 @@ function Session.buildSettingsPanels(rows)
 	end
 
 	local stomp = rows.autoStomp:AddOption()
-	panelToggle(stomp, "Stop When Target Dead", "auto_stomp_stop_when_dead", true)
+	panelToggle(stomp, "Stop When Target Dead", "auto_stomp_stop_when_dead", false)
 	panelList(stomp, "Target Statuses", "auto_stomp_target_statuses", statuses, { "target" })
 	panelToggle(stomp, "Wait For All Targets Knocked", "auto_stomp_wait_for_all", false)
 
@@ -8131,6 +8180,7 @@ function Session.buildSettingsPanels(rows)
 	local heal = rows.autoHeal:AddOption()
 	panelSlider(heal, "Purchase If Below", "auto_heal_purchase_if_below", 0, 100, 0, "%", 70)
 	panelSlider(heal, "Try Cooldown", "auto_heal_try_cooldown", 0, 2, 2, "s", 0.05)
+	panelToggle(heal, "Stop Following While Healing", "auto_heal_stop_following", false)
 
 	-- Rapid fire: how much of each gun's own cooldown is taken away (100 = all of it, 0 = none)
 	panelSlider(rows.rapidFire:AddOption(), "Speed", "rapid_fire_speed", 0, 100, 0, "%", 100)
@@ -8152,6 +8202,7 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	panelToggle(autoFire, "Bullet TP", "auto_fire_bullet_tp", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
+	panelToggle(autoFire, "Skip Out Of Reach", "auto_fire_skip_out_of_reach", true)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -8159,6 +8210,7 @@ function Session.buildSettingsPanels(rows)
 	panelList(equip, "Gun", "auto_equip_gun", { "double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug" }, { "rifle" })
 
 	-- Prediction --
+	panelSlider(rows.prediction:AddOption(), "Resolver Rate", "resolver_rate", 0, 0.1, 4, "s", 0.043)
 
 	-- Void hide --
 	local voidHide = rows.voidHide:AddOption()
@@ -14207,6 +14259,10 @@ local stomping = false
 local invulnerable_void_active = false -- the void hide manager owns the local character because at least one hide reason is active
 local void_hide_runner = nil -- do_void_hide, shared so the hide manager can schedule it
 local hide_manager = {} -- hooks the ragebot section hands to earlier code (auto reload routes its requests through hide_manager.request_reload)
+-- getgenv().neverlose_debug_state = true before loading hands this table over, to look at the engine's own state while testing
+if getgenv()["neverlose_debug_state"] == true then
+    getgenv()["neverlose_debug_state"] = hide_manager
+end
 
 local real_drawing = getgenv()["Drawing"]
 local fake_drawing = getgenv()["fake_drawing"]
@@ -14832,6 +14888,17 @@ do
                 local packet = args[1]
                 
                 if packet == "ShootGun" then
+                    -- A shot the gun's own script made (not the ragebot's forged call): bullet manipulation's watchdog needs to know the pull did shoot.
+                    if not checkcaller() then
+                        local marks = hide_manager["bm_sent"]
+                        local shot_handle = args[2]
+                        local shot_tool = marks and typeof(shot_handle) == "Instance" and shot_handle["Parent"] or nil
+
+                        if shot_tool then
+                            marks[shot_tool] = clock()
+                        end
+                    end
+
                     if ragebot_aim_position and ragebot_target then
                         local handle = args[2]
 
@@ -18670,6 +18737,9 @@ do
         menu_references["smooth_server_position_indicator"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "smooth"}, {["toggle"] = {["flag"] = "smooth_server_position_indicator"}})
         menu_references["server_position_indicator_icon_color"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "icon color"}, {["colorpicker"] = {["color_flag"] = "server_position_indicator_icon_color", ["default_color"] = color3_fromrgb(193, 247, 255), ["default_transparency"] = 0.89, ["transparency_flag"] = "server_position_indicator_icon_transparency"}})
         menu_references["server_position_indicator_glow_color"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "glow color"}, {["colorpicker"] = {["color_flag"] = "server_position_indicator_glow_color", ["default_color"] = color3_fromrgb(193, 247, 255), ["default_transparency"] = 0.9, ["transparency_flag"] = "server_position_indicator_glow_transparency"}})
+        menu_references["server_position_ghost"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "ghost character"}, {["toggle"] = {["flag"] = "server_position_ghost"}})
+        menu_references["server_position_ghost_color"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "ghost color"}, {["colorpicker"] = {["color_flag"] = "server_position_ghost_color", ["default_color"] = color3_fromrgb(193, 247, 255), ["default_transparency"] = 0.55, ["transparency_flag"] = "server_position_ghost_transparency"}})
+        menu_references["server_position_ghost_material"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "ghost material"}, {["dropdown"] = {["options"] = {"forcefield", "neon", "glass", "ice", "foil", "metal", "smooth plastic", "plastic"}, ["requires_one"] = true, ["flag"] = "server_position_ghost_material", ["default"] = {"forcefield"}}})
         menu_references["server_position_indicator_background_color"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "background color"}, {["colorpicker"] = {["color_flag"] = "server_position_indicator_background_color", ["default_color"] = color3_fromrgb(15, 15, 15), ["default_transparency"] = 0.89, ["transparency_flag"] = "server_position_indicator_background_transparency"}})
         menu_references["crosshair_animations"] = menu_references["hud_section"]:create_element({["name"] = "crosshair animations"}, {["toggle"] = {["flag"] = "crosshair_animations"}})
         menu_references["crosshair_animations_settings"] = menu_references["crosshair_animations"]:create_settings()
@@ -18697,6 +18767,7 @@ do
         menu_references["center_panel_settings"] = menu_references["center_panel"]:create_settings()
         menu_references["center_panel_show_state"] = menu_references["center_panel_settings"]:create_element({["name"] = "show state"}, {["toggle"] = {["flag"] = "center_panel_show_state"}})
         menu_references["center_panel_primary_color"] = menu_references["center_panel_settings"]:create_element({["name"] = "primary color"}, {["colorpicker"] = {["color_flag"] = "center_panel_primary_color", ["default_color"] = color3_fromrgb(220, 214, 255), ["default_transparency"] = 0, ["transparency_flag"] = "center_panel_primary_transparency"}})
+        menu_references["center_panel_show_target"] = menu_references["center_panel_settings"]:create_element({["name"] = "show target"}, {["toggle"] = {["flag"] = "center_panel_show_target", ["default"] = true}})
         menu_references["center_panel_secondary_color"] = menu_references["center_panel_settings"]:create_element({["name"] = "secondary color"}, {["colorpicker"] = {["color_flag"] = "center_panel_secondary_color", ["default_color"] = color3_fromrgb(230, 230, 230), ["default_transparency"] = 0, ["transparency_flag"] = "center_panel_secondary_transparency"}})
         menu_references["aspect_ratio"] = menu_references["hud_section"]:create_element({["name"] = "aspect ratio"}, {["toggle"] = {["flag"] = "aspect_ratio"}, ["slider"] = {["flag"] = "aspect_ratio_value", ["min"] = 0.1, ["max"] = 1.2, ["default"] = 1, ["decimals"] = 2, ["suffix"] = "x"}})
         menu_references["show_chat"] = menu_references["hud_section"]:create_element({["name"] = "show chat"}, {["toggle"] = {["flag"] = "show_chat"}})
@@ -18786,6 +18857,121 @@ do
         tween_ratio(value)
     end)
 
+    -- >> ( score against the target )
+    -- Kills and deaths against each player, for the center panel's target line. A player counts for me when they go down (knocked, or dead without it)
+    -- while the game's own LastDamager (BodyEffects) names me; I count for them the same way. Once per life, so a knock followed by the death is one.
+    hide_manager["scores"] = {}
+    hide_manager["scored"] = setmetatable({}, {["__mode"] = "k"})
+
+    hide_manager["damager_of"] = function(character)
+        local body = character and find_first_child(character, "BodyEffects")
+        local value = body and find_first_child(body, "LastDamager")
+        local damager = value and value["Value"]
+
+        if typeof(damager) == "Instance" then
+            return damager["Name"]
+        end
+
+        return nil
+    end
+
+    hide_manager["score_of"] = function(player)
+        local entry = hide_manager["scores"][player]
+
+        if not entry then
+            entry = {["mine"] = 0, ["theirs"] = 0}
+            hide_manager["scores"][player] = entry
+        end
+
+        return entry
+    end
+
+    do
+        local function credit(data)
+            local character = data[3]
+
+            if not character or data[2] == local_player or hide_manager["scored"][character] then
+                return
+            end
+
+            if hide_manager["damager_of"](character) == local_player["Name"] then
+                hide_manager["scored"][character] = true
+                hide_manager["score_of"](data[2])["mine"] += 1
+            end
+        end
+
+        local function lost()
+            local character = local_character
+
+            if not character or hide_manager["scored"][character] then
+                return
+            end
+
+            local name = hide_manager["damager_of"](character)
+            local attacker = name and name ~= local_player["Name"] and find_first_child(players_service, name) or nil
+
+            if attacker then
+                hide_manager["scored"][character] = true
+                hide_manager["score_of"](attacker)["theirs"] += 1
+            end
+        end
+
+        create_connection(signals["on_player_knocked"], function(data, knocked)
+            if knocked then
+                credit(data)
+            end
+        end)
+
+        create_connection(signals["on_player_died"], function(data)
+            credit(data)
+        end)
+
+        create_connection(signals["on_local_knocked"], function(value)
+            if value then
+                lost()
+            end
+        end)
+
+        create_connection(signals["on_local_health_changed"], function(health)
+            if type(health) == "number" and health <= 0 then
+                lost()
+            end
+        end)
+    end
+
+    -- the line under the center panel's state: who is being killed, how sure the resolver is, and the score
+    hide_manager["cp_target_update"] = function(anchor)
+        local line = hide_manager["cp_target"]
+
+        if not line then
+            return
+        end
+
+        local player = ragebot_target and ragebot_target[2] or nil
+
+        if flags["center_panel_show_target"] == false or not flags["ragebot"] or not player or not player["Parent"] then
+            if line["Visible"] then
+                line["Visible"] = false
+            end
+
+            return
+        end
+
+        local entry = hide_manager["score_of"](player)
+        local text = string.format("killing: %s(resolved:%.3f:%s) [%d-%d]", player["Name"], hide_manager["resolver_confidence"] or 0, tostring(hide_manager["resolver_active"] == true), entry["mine"], entry["theirs"])
+
+        if line["Text"] ~= text then
+            line["Text"] = text
+        end
+
+        line["Transparency"] = 0.7 * (1 - (flags["center_panel_secondary_transparency"] or 0))
+        line["Position"] = anchor["Position"] + vector2_new(0, 13)
+
+        if not line["Visible"] then
+            line["Visible"] = true
+        end
+    end
+
     -- >> ( center panel )
 
     do
@@ -18846,6 +19032,8 @@ do
         end)
 
         local do_center_panel = LPH_JIT_MAX(function(dt)
+            hide_manager["cp_target_update"](text3)
+
             local old = text3["Text"]
             local new = local_reloading and "reloading" or local_following and "following" or stomping and "stomping" or purchasing and "purchasing" or (in_void or in_void == nil) and "void" or (local_parts["ForceField"] and "invulnerable" or "unsafe")
             text3["Text"] = new
@@ -18885,6 +19073,14 @@ do
         end)
 
         create_connection(menu_references["center_panel"]["on_toggle_change"], LPH_JIT_MAX(function(value)
+            if hide_manager["cp_target"] then
+                pcall(function()
+                    hide_manager["cp_target"]:Destroy()
+                end)
+
+                hide_manager["cp_target"] = nil
+            end
+
             if text then
                 text:Destroy()
                 text = nil
@@ -18970,6 +19166,19 @@ do
                     ["Text"] = "void",
                     ["Size"] = 12,
                     ["Visible"] = flags["center_panel_show_state"],
+                    ["Font"] = 2,
+                    ["Outline"] = true,
+                    ["Position"] = vector2_new(0, 0),
+                })
+
+                hide_manager["cp_target"] = create_real_drawing("Text", {
+                    ["Color"] = flags["center_panel_secondary_color"],
+                    ["Transparency"] = 0,
+                    ["ZIndex"] = 2,
+                    ["Center"] = true,
+                    ["Text"] = "",
+                    ["Size"] = 12,
+                    ["Visible"] = false,
                     ["Font"] = 2,
                     ["Outline"] = true,
                     ["Position"] = vector2_new(0, 0),
@@ -19931,6 +20140,266 @@ do
             circle_transparency["Transparency"] = -value+1
         end
     end)
+
+    -- >> ( ghost character )
+    -- Server Position Indicator's Ghost Character: a copy of the character, drawn in the ghost colour, that stands where the server has the character
+    -- and moves the way the real one does (the joints are copied every frame). It only shows while the two differ (desync, follow target, void
+    -- spam) and while the server position is on the map. The copy is built again for every new character and is only ever drawn on this client.
+    -- The game clears whatever is parented to Workspace.CurrentCamera within a frame (a Folder parked there was gone after 0.017 s, a Folder in Workspace
+    -- stayed), so the copy lives in Workspace.Terrain and is rebuilt if it is ever removed from there.
+    hide_manager["ghost"] = {["model"] = nil, ["root"] = nil, ["motors"] = {}, ["owner"] = nil, ["shown"] = false, ["retry_at"] = 0, ["last_cf"] = nil, ["last_seen"] = 0}
+
+    -- the material of the copy, from the Ghost Material dropdown
+    hide_manager["ghost_material"] = function()
+        local chosen = hide_manager["ghost_material_pick"] or flags["server_position_ghost_material"]
+
+        chosen = type(chosen) == "table" and chosen[1] or chosen
+
+        local materials = {
+            ["forcefield"] = Enum["Material"]["ForceField"],
+            ["neon"] = Enum["Material"]["Neon"],
+            ["glass"] = Enum["Material"]["Glass"],
+            ["ice"] = Enum["Material"]["Ice"],
+            ["foil"] = Enum["Material"]["Foil"],
+            ["metal"] = Enum["Material"]["Metal"],
+            ["smooth plastic"] = Enum["Material"]["SmoothPlastic"],
+            ["plastic"] = Enum["Material"]["Plastic"]
+        }
+
+        return materials[chosen] or materials["forcefield"]
+    end
+
+    hide_manager["ghost_destroy"] = function()
+        local ghost = hide_manager["ghost"]
+
+        if ghost["model"] then
+            pcall(function()
+                ghost["model"]:Destroy()
+            end)
+        end
+
+        ghost["model"] = nil
+        ghost["root"] = nil
+        ghost["motors"] = {}
+        ghost["owner"] = nil
+        ghost["shown"] = false
+        ghost["last_cf"] = nil
+    end
+
+    hide_manager["ghost_paint"] = function()
+        local ghost = hide_manager["ghost"]
+        local model = ghost["model"]
+
+        if not model then
+            return
+        end
+
+        local color = flags["server_position_ghost_color"]
+        local transparency = flags["server_position_ghost_transparency"]
+
+        transparency = type(transparency) == "number" and transparency or 0.55
+
+        local material = hide_manager["ghost_material"]()
+
+        for _, part in model:GetDescendants() do
+            if part:IsA("BasePart") and part ~= ghost["root"] then
+                part["Color"] = color
+                part["Transparency"] = transparency
+                part["Material"] = material
+            end
+        end
+    end
+
+    hide_manager["ghost_build"] = function()
+        hide_manager["ghost_destroy"]()
+
+        local ghost = hide_manager["ghost"]
+        local character = local_character
+
+        ghost["retry_at"] = clock() + 1
+
+        if not character or not character["Parent"] then
+            return
+        end
+
+        local archivable = character["Archivable"]
+
+        character["Archivable"] = true
+
+        local ok, copy = pcall(function()
+            return character:Clone()
+        end)
+
+        character["Archivable"] = archivable
+
+        if not ok or not copy then
+            return
+        end
+
+        local real_motors = {}
+
+        for _, motor in character:GetDescendants() do
+            if motor:IsA("Motor6D") and motor["Part1"] then
+                real_motors[motor["Part1"]["Name"].."/"..motor["Name"]] = motor
+            end
+        end
+
+        local motors = {}
+
+        for _, object in copy:GetDescendants() do
+            pcall(function()
+                if object:IsA("BaseScript") or object:IsA("Tool") or object:IsA("Humanoid") or object:IsA("ForceField") or object:IsA("Sound") or object:IsA("Decal")
+                    or object:IsA("Texture") or object:IsA("Shirt") or object:IsA("Pants") or object:IsA("ShirtGraphic") or object:IsA("BodyColors")
+                    or object:IsA("BillboardGui") or object:IsA("SurfaceGui") or object:IsA("ParticleEmitter") or object:IsA("Highlight") or object:IsA("Constraint") then
+                    object:Destroy()
+                elseif object:IsA("BasePart") then
+                    object["Anchored"] = false
+                    object["CanCollide"] = false
+                    object["CanQuery"] = false
+                    object["CanTouch"] = false
+                    object["Massless"] = true
+                    object["CastShadow"] = false
+                    object["Material"] = hide_manager["ghost_material"]()
+
+                    if object:IsA("MeshPart") then
+                        object["TextureID"] = ""
+                    end
+                elseif object:IsA("Motor6D") and object["Part1"] then
+                    local real = real_motors[object["Part1"]["Name"].."/"..object["Name"]]
+
+                    if real then
+                        motors[#motors+1] = {real, object}
+                    end
+                end
+            end)
+        end
+
+        local root = copy["PrimaryPart"] or find_first_child(copy, "HumanoidRootPart")
+
+        if not root then
+            copy:Destroy()
+            return
+        end
+
+        root["Anchored"] = true
+        root["Transparency"] = 1
+        copy["PrimaryPart"] = root
+        copy["Name"] = "ghost"
+
+        ghost["model"] = copy
+        ghost["root"] = root
+        ghost["motors"] = motors
+        ghost["owner"] = character
+        ghost["shown"] = false
+
+        hide_manager["ghost_paint"]()
+    end
+
+    hide_manager["ghost_step"] = LPH_NO_VIRTUALIZE(function(dt)
+        local ghost = hide_manager["ghost"]
+
+        if ghost["owner"] ~= local_character or not ghost["model"] then
+            if local_character and local_character["Parent"] and clock() >= ghost["retry_at"] then
+                hide_manager["ghost_build"]()
+            end
+
+            return
+        end
+
+        local now = clock()
+        local server = local_server_position
+        local client = local_client_position
+        local visible = false
+
+        if server and client then
+            local server_position = server["p"]
+
+            if server_position["Magnitude"] < 9e5 and (server_position - client["p"])["Magnitude"] > 2 then
+                visible = true
+                ghost["last_cf"] = server
+                ghost["last_seen"] = now
+            end
+        end
+
+        -- void spam sends the server position off the map between shots; the copy waits at the last place it was seen instead of blinking out
+        if not visible and ghost["shown"] and ghost["last_cf"] and now - ghost["last_seen"] < 0.4 then
+            visible = true
+            server = ghost["last_cf"]
+        end
+
+        local container = workspace["Terrain"]
+
+        if ghost["shown"] and ghost["model"]["Parent"] ~= container then
+            -- something removed the copy: drop it and build a fresh one a little later
+            hide_manager["ghost_destroy"]()
+            ghost["retry_at"] = now + 2
+
+            return
+        end
+
+        if visible then
+            if not ghost["shown"] then
+                if not pcall(function()
+                    ghost["model"]["Parent"] = container
+                end) then
+                    hide_manager["ghost_destroy"]()
+                    ghost["retry_at"] = now + 2
+
+                    return
+                end
+
+                ghost["shown"] = true
+            end
+
+            ghost["root"]["CFrame"] = server
+
+            for _, pair in ghost["motors"] do
+                pair[2]["Transform"] = pair[1]["Transform"]
+            end
+        elseif ghost["shown"] then
+            ghost["shown"] = false
+            ghost["model"]["Parent"] = nil
+        end
+    end)
+
+    create_connection(menu_references["server_position_ghost"]["on_toggle_change"], function(value)
+        for i = 1, #heartbeat do
+            if heartbeat[i] == hide_manager["ghost_step"] then
+                remove(heartbeat, i)
+                break
+            end
+        end
+
+        hide_manager["ghost_destroy"]()
+
+        if value then
+            hide_manager["ghost"]["retry_at"] = 0
+            heartbeat[#heartbeat+1] = hide_manager["ghost_step"]
+        end
+    end)
+
+    create_connection(menu_references["server_position_ghost_color"]["on_color_change"], function()
+        hide_manager["ghost_paint"]()
+    end)
+
+    create_connection(menu_references["server_position_ghost_color"]["on_transparency_change"], function()
+        hide_manager["ghost_paint"]()
+    end)
+
+    create_connection(menu_references["server_position_ghost_material"]["on_dropdown_change"], function(value)
+        hide_manager["ghost_material_pick"] = type(value) == "table" and value[1] or value
+        hide_manager["ghost_paint"]()
+    end)
+
+    do
+        local teardowns = getgenv()["neverlose_teardowns"]
+
+        if teardowns then
+            teardowns[#teardowns+1] = function()
+                hide_manager["ghost_destroy"]()
+            end
+        end
+    end
 
     menu_references["game_section"] = menu["groups"]["visuals"]:create_section("general", "game", 2, 0.65, 0)
     menu_references["player_bullet_volume"] = menu_references["game_section"]:create_element({["name"] = "player bullet volume"}, {["slider"] = {["flag"] = "player_bullet_volume", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["suffix"] = "%", ["max_text"] = "default"}})
@@ -27276,19 +27745,27 @@ end
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
         menu_references["auto_fire_bullet_tp"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet tp"}, {["toggle"] = {["flag"] = "auto_fire_bullet_tp", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
+        menu_references["auto_fire_skip_out_of_reach"] = menu_references["auto_fire_settings"]:create_element({["name"] = "skip out of reach"}, {["toggle"] = {["flag"] = "auto_fire_skip_out_of_reach", ["default"] = true}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
         menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle"}, ["options"] = {"double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
+        menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["ue_resolver_refresh"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "refresh time"}, {["slider"] = {["flag"] = "ue_resolver_refresh", ["min"] = 0.1, ["max"] = 10, ["default"] = 3, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["ue_resolver_forgiveness"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "forgiveness"}, {["slider"] = {["flag"] = "ue_resolver_forgiveness", ["min"] = 0, ["max"] = 20, ["default"] = 14.4, ["decimals"] = 1}})
         menu_references["ue_resolver_void_bonus"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "out of void bonus"}, {["slider"] = {["flag"] = "ue_resolver_void_bonus", ["min"] = 0, ["max"] = 12, ["default"] = 5, ["decimals"] = 1}})
+        menu_references["void_spam_resolver_position_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "normal position trust"}, {["slider"] = {["flag"] = "void_spam_resolver_position_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 1.5, ["decimals"] = 2}})
+        menu_references["void_spam_resolver_forget_rate"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "forget rate"}, {["slider"] = {["flag"] = "void_spam_resolver_forget_rate", ["min"] = 0, ["max"] = 1000, ["default"] = 80, ["decimals"] = 2, ["suffix"] = "%"}})
+        menu_references["void_spam_resolver_void_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "void trust"}, {["slider"] = {["flag"] = "void_spam_resolver_void_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 0.2, ["decimals"] = 2}})
+        menu_references["void_spam_resolver_accuracy"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "accuracy"}, {["slider"] = {["flag"] = "void_spam_resolver_accuracy", ["min"] = 5, ["suffix"] = "%", ["max_text"] = "high", ["max"] = 110, ["default"] = 76.82, ["decimals"] = 2}})
         menu_references["ue_resolver_dist_penalty"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "distance based penalty"}, {["slider"] = {["flag"] = "ue_resolver_dist_penalty", ["min"] = 0, ["max"] = 5, ["default"] = 2, ["decimals"] = 1, ["suffix"] = "x"}})
         menu_references["ue_resolver_lerp"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "lerp % when close"}, {["slider"] = {["flag"] = "ue_resolver_lerp", ["min"] = 10, ["max"] = 100, ["default"] = 10, ["decimals"] = 1, ["suffix"] = "%", ["max_text"] = "instant"}})
         menu_references["ragebot_hitbox"] = menu_references["general_section"]:create_element({["name"] = "target hitbox"}, {["dropdown"] = {["flag"] = "ragebot_hitbox", ["options"] = {"head", "root"}, ["default"] = {"head"}}})
         menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 0, ["min_text"] = "auto", ["max_text"] = "disabled", ["suffix"] = "%", ["decimals"] = 2}})
+        menu_references["prediction_settings"] = menu_references["prediction"]:create_settings()
+        menu_references["resolver_rate"] = menu_references["prediction_settings"]:create_element({["name"] = "resolver rate"}, {["slider"] = {["flag"] = "resolver_rate", ["min"] = 0, ["suffix"] = "s", ["max"] = 0.1, ["default"] = 0.043, ["decimals"] = 4}})
         menu_references["shot_delay"] = menu_references["general_section"]:create_element({["name"] = "shot delay"}, {["slider"] = {["flag"] = "shot_delay", ["min"] = 0, ["max"] = 1000, ["suffix"] = "ms", ["default"] = 0, ["min_text"] = "none"}})
         menu_references["ragebot_field_of_view"] = menu_references["general_section"]:create_element({["name"] = "field of view"}, {["slider"] = {["flag"] = "ragebot_field_of_view", ["min"] = 5, ["max"] = 180, ["suffix"] = "°", ["default"] = 180, ["max_text"] = "full"}})
         menu_references["fire_cooldown"] = menu_references["general_section"]:create_element({["name"] = "fire cooldown"}, {["slider"] = {["flag"] = "fire_cooldown", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 5, ["min_text"] = "none"}})
@@ -27333,7 +27810,7 @@ end
         menu_references["ragebot_tracer_thickness"] = menu_references["ragebot_tracer_settings"]:create_element({["name"] = "thickness"}, {["slider"] = {["flag"] = "ragebot_tracer_thickness", ["min"] = 2, ["max"] = 8, ["default"] = 2, ["suffix"] = "px"}})
         menu_references["ragebot_tracer_color"] = menu_references["ragebot_tracer_settings"]:create_element({["name"] = "color"}, {["colorpicker"] = {["color_flag"] = "ragebot_tracer_color", ["default_color"] = color3_fromrgb(200, 30, 175), ["default_transparency"] = 0.1, ["transparency_flag"] = "ragebot_tracer_transparency"}})
         menu_references["ragebot_tracer_outline_color"] = menu_references["ragebot_tracer_settings"]:create_element({["name"] = "outline"}, {["colorpicker"] = {["color_flag"] = "ragebot_tracer_outline_color", ["default_color"] = color3_fromrgb(15, 15, 15), ["default_transparency"] = 0.05, ["transparency_flag"] = "ragebot_tracer_outline_transparency"}})
-        menu_references["ragebot_tracer_origin"] = menu_references["ragebot_tracer_settings"]:create_element({["name"] = "origin"}, {["dropdown"] = {["flag"] = "ragebot_tracer_origin", ["options"] = {"character", "mouse", "gun"}, ["default"] = {"gun"}, ["requires_one"] = true}})
+        menu_references["ragebot_tracer_origin"] = menu_references["ragebot_tracer_settings"]:create_element({["name"] = "origin"}, {["dropdown"] = {["flag"] = "ragebot_tracer_origin", ["options"] = {"character", "mouse", "gun", "server position"}, ["default"] = {"gun"}, ["requires_one"] = true}})
         menu_references["ragebot_tracer_end_point"] = menu_references["ragebot_tracer_settings"]:create_element({["name"] = "end point"}, {["dropdown"] = {["flag"] = "ragebot_tracer_end_point", ["options"] = {"predicted position", "character"}, ["default"] = {"predicted position"}, ["requires_one"] = true}})
     menu_references["anti_section"] = menu["groups"]["main"]:create_section("ragebot", "anti", 2, 0.3, 0)
         menu_references["sender_rate_value"] = menu_references["anti_section"]:create_element({["name"] = "sender rate value"}, {["toggle"] = {["flag"] = "sender_rate_value"}})
@@ -27397,7 +27874,7 @@ end
         menu_references["target_strafe"] = menu_references["utility_section"]:create_element({["name"] = "target strafe"}, {["toggle"] = {["flag"] = "target_strafe"}})
         menu_references["auto_stomp"] = menu_references["utility_section"]:create_element({["name"] = "auto stomp"}, {["toggle"] = {["flag"] = "auto_stomp"}})
         menu_references["auto_stomp_settings"] = menu_references["auto_stomp"]:create_settings()
-        menu_references["auto_stomp_stop_when_dead"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "stop when target dead"}, {["toggle"] = {["flag"] = "auto_stomp_stop_when_dead", ["default"] = true}})
+        menu_references["auto_stomp_stop_when_dead"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "stop when target dead"}, {["toggle"] = {["flag"] = "auto_stomp_stop_when_dead", ["default"] = false}})
         menu_references["auto_stomp_target_statuses"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "target statuses"}, {["dropdown"] = {["flag"] = "auto_stomp_target_statuses", ["options"] = {"friendly", "neutral", "target", "enemy"}, ["default"] = {"target"}, ["multi"] = true, ["requires_one"] = true}})
         menu_references["auto_stomp_wait_for_all"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "wait for all targets knocked"}, {["toggle"] = {["flag"] = "auto_stomp_wait_for_all", ["default"] = false}})
         menu_references["auto_ammo"] = menu_references["utility_section"]:create_element({["name"] = "auto ammo"}, {["toggle"] = {["flag"] = "auto_ammo"}})
@@ -27424,6 +27901,7 @@ end
         menu_references["auto_heal_settings"] = menu_references["auto_heal"]:create_settings()
         menu_references["auto_heal_purchase_if_below"] = menu_references["auto_heal_settings"]:create_element({["name"] = "purchase if below"}, {["slider"] = {["flag"] = "auto_heal_purchase_if_below", ["min"] = 0, ["max"] = 100, ["default"] = 70, ["suffix"] = "%"}})
         menu_references["auto_heal_try_cooldown"] = menu_references["auto_heal_settings"]:create_element({["name"] = "try cooldown"}, {["slider"] = {["flag"] = "auto_heal_try_cooldown", ["min"] = 0, ["max"] = 2, ["default"] = 0.05, ["decimals"] = 2, ["suffix"] = "s"}})
+        menu_references["auto_heal_stop_following"] = menu_references["auto_heal_settings"]:create_element({["name"] = "stop following while healing"}, {["toggle"] = {["flag"] = "auto_heal_stop_following", ["default"] = false}})
         menu_references["anti_taser"] = menu_references["utility_section"]:create_element({["name"] = "anti taser"}, {["toggle"] = {["flag"] = "anti_taser"}})
         menu_references["rapid_fire"] = menu_references["utility_section"]:create_element({["name"] = "rapid fire"}, {["toggle"] = {["flag"] = "rapid_fire", ["default"] = false}})
         menu_references["rapid_fire_settings"] = menu_references["rapid_fire"]:create_settings()
@@ -27480,6 +27958,9 @@ end
     -- hide_manager.pace_slow_guns = false puts the old behaviour back.
     hide_manager["pace_slow_guns"] = true
     hide_manager["gun_ammo_sent"] = setmetatable({}, {["__mode"] = "k"})
+    -- Sends in a row after which the ammo had not moved (the server took nothing): a gun that keeps being turned away (a shotgun past its
+    -- SecurityTolerance is locked out for the rest of the server; any gun while the target is out of reach) is only tried now and then.
+    hide_manager["gun_refused"] = setmetatable({}, {["__mode"] = "k"})
 
     -- Pellets in one shot: the shotguns fire five, a call each.
     local pellet_guns = {["[Double-Barrel SG]"] = 5, ["[Shotgun]"] = 5, ["[TacticalShotgun]"] = 5, ["[Drum-Shotgun]"] = 5}
@@ -27492,6 +27973,14 @@ end
         local policed = tool:GetAttribute("SecurityTolerance") ~= nil
         local cooldown = find_first_child(tool, "ShootingCooldown")
         local wait_time = cooldown and cooldown["Value"] or 0
+
+        if (hide_manager["gun_refused"][tool] or 0) >= (policed and 10 or 12) then
+            local tried_at = hide_manager["gun_fired_at"][tool]
+
+            if tried_at and clock() - tried_at < (policed and 15 or 1.2) then
+                return false
+            end
+        end
 
         if not policed then
             if not hide_manager["pace_slow_guns"] or wait_time < 0.25 then
@@ -28041,10 +28530,127 @@ end
                         ue_resolver_result = vector3_new(sum_x[i] / neighbours, sum_y[i] / neighbours, sum_z[i] / neighbours)
                     end
                 end
+
+                -- the share of the history that sits in the winning cluster (the center panel shows it as "resolved")
+                hide_manager["resolver_confidence"] = ue_resolver_result and best_count / count or 0
             end
         end
 
         return ue_resolver_result
+    end)
+
+    -- >> ( weighted resolver )
+    -- The other resolver (Type: weighted; the "void spam" resolver of the older builds). Every spot the target is seen at gets a weight. Spots within a
+    -- merge radius of each other fold into one that moves toward the newest sighting (Lerp % When Close). Weights fade at the Forget Rate, twice as fast
+    -- for spots away from where the target is now, and a spot seen on the map is held while the target sits in the far void. The spot with the best
+    -- score (weight x how often it was seen) wins once it passes Accuracy. Normal Position Trust / Void Trust are what a sighting on the map / in the
+    -- void adds, and Distance Based Penalty makes a far target add less. Kept in hide_manager: this function is at its limit of local variables.
+    hide_manager["weighted_positions"] = {}
+
+    hide_manager["weighted_resolve"] = LPH_NO_VIRTUALIZE(function(hitbox_position, current_time)
+        local positions = hide_manager["weighted_positions"]
+        local dist_to_target = (local_server_position["p"] - hitbox_position)["Magnitude"]
+        local penalty = tonumber(flags["ue_resolver_dist_penalty"]) or 2
+        local dist_penalty_factor = clamp(1 - (dist_to_target / 100) * (penalty * 0.01), 0.25, 1)
+        local lerp = clamp(tonumber(flags["ue_resolver_lerp"]) or 10, 10, 100)/100
+        local target_speed = target_velocity and target_velocity["Magnitude"] or 0
+        -- A target that hardly moves gets three times the share, up to 60% (the cap may not fall below the share itself).
+        local adaptive_lerp = lerp >= 1 and 1 or (target_speed < 5 and clamp(lerp * 3, lerp, math["max"](lerp, 0.6)) or lerp)
+        local merge_radius = clamp(200 - dist_to_target * 0.4, 80, 200)
+        local target_in_void = hitbox_position["Magnitude"] >= 9e5
+        local forget = (tonumber(flags["void_spam_resolver_forget_rate"]) or 80)/20
+        local accuracy = 1 + (0.6525 * ((-50 + (tonumber(flags["void_spam_resolver_accuracy"]) or 76.82))/50))
+        local expired = {}
+        local count = 0
+
+        for position, data in positions do
+            local time_delta = current_time - data["last_update_time"]
+
+            if time_delta > 0 then
+                -- While the target hides in the void nothing says the spot it was last seen at is wrong: it is held for a moment.
+                if target_in_void and data["seen"] and current_time - data["seen"] < 1.25 then
+                    data["last_update_time"] = current_time
+                else
+                    local decay = (position - hitbox_position)["Magnitude"] > merge_radius and 2.5 or 1
+
+                    data["weight"] -= time_delta * forget * decay
+                    data["last_update_time"] = current_time
+                end
+            end
+
+            if data["weight"] < 0.1 then
+                expired[#expired+1] = position
+            else
+                count += 1
+            end
+        end
+
+        for _, position in expired do
+            positions[position] = nil
+        end
+
+        local base_weight = target_in_void and (tonumber(flags["void_spam_resolver_void_weight"]) or 0.2) or (tonumber(flags["void_spam_resolver_position_weight"]) or 1.5)
+        local weight_to_add = base_weight * dist_penalty_factor
+        local merge_from, merge_data = nil, nil
+
+        for position, data in positions do
+            if (position - hitbox_position)["Magnitude"] <= merge_radius then
+                merge_from, merge_data = position, data
+                break
+            end
+        end
+
+        if merge_from then
+            positions[merge_from] = nil
+            positions[merge_from:Lerp(hitbox_position, adaptive_lerp)] = {
+                ["weight"] = clamp(merge_data["weight"] + weight_to_add, -1, 18),
+                ["last_update_time"] = current_time,
+                ["cluster_count"] = (merge_data["cluster_count"] or 1) + 1,
+                ["seen"] = (not target_in_void) and current_time or merge_data["seen"],
+            }
+        else
+            positions[hitbox_position] = {
+                ["weight"] = weight_to_add,
+                ["last_update_time"] = current_time,
+                ["cluster_count"] = 1,
+                ["seen"] = (not target_in_void) and current_time or nil,
+            }
+            count += 1
+        end
+
+        -- A forget rate of 0 never lets a spot go: the list is kept to the 48 best.
+        if count > 48 then
+            local worst, worst_weight = nil, math["huge"]
+
+            for position, data in positions do
+                if data["weight"] < worst_weight then
+                    worst, worst_weight = position, data["weight"]
+                end
+            end
+
+            if worst then
+                positions[worst] = nil
+            end
+        end
+
+        local best, best_score = nil, 0
+
+        for position, data in positions do
+            local score = data["weight"] * clamp((data["cluster_count"] or 1) * 0.25, 1, 3)
+
+            if score > best_score then
+                best_score = score
+                best = position
+            end
+        end
+
+        hide_manager["resolver_confidence"] = best and clamp(best_score / (accuracy * 2), 0, 1) or 0
+
+        if best and best_score > accuracy then
+            return best
+        end
+
+        return nil
     end)
 
     set_ragebot_target = LPH_NO_VIRTUALIZE(function(target, message)
@@ -28062,6 +28668,7 @@ end
         target_last_position = nil
         -- F-C1: wipe the void-spam resolver cluster so it doesn't bleed across targets.
         for k in defensive_positions do defensive_positions[k] = nil end
+        hide_manager["weighted_positions"] = {}
         -- The answer worked out from the old target's positions goes with them: otherwise the new target is aimed at the old cluster until the next
         -- clustering pass (and for good with a short refresh time, which keeps the last answer).
         ue_resolver_result = nil
@@ -28091,7 +28698,8 @@ end
         ["invulnerable"] = "ragebot target is invulnerable, void spamming",
         ["respawning"] = "ragebot target is respawning, void hiding",
         ["loading"] = "ragebot target is still loading, void hiding",
-        ["reload"] = "reloading, void hiding"
+        ["reload"] = "reloading, void hiding",
+        ["healing"] = "healing, void hiding"
     }
 
     -- Schedules or removes the void runner depending on whether any reason is left.
@@ -28169,6 +28777,9 @@ end
             refresh_void_hide(nil)
         end
     end)
+
+    -- Auto Heal's Stop Following While Healing asks for the void through this while the popcorn is being eaten.
+    hide_manager["set_hide_reason"] = set_hide_reason
 
     -- The original entry point, now just one reason among several.
     local set_invulnerable_void = LPH_NO_VIRTUALIZE(function(active, force)
@@ -28646,6 +29257,14 @@ end
                         handler["getAim"] = previous["original"]
                     end) or peeled
                 end
+
+                local can_top = previous and previous["can_dispatch"]
+
+                if can_top and previous["handler"] == handler and handler["getCanShoot"] == can_top and type(previous["can_original"]) == "function" then
+                    peeled = pcall(function()
+                        handler["getCanShoot"] = previous["can_original"]
+                    end) or peeled
+                end
             end
 
             if not peeled then
@@ -28701,7 +29320,40 @@ end
             return false, "module"
         end
 
-        getgenv()["neverlose_aim_chain"] = {handler = handler, original = current, dispatch = aim_chain["dispatch"]}
+        -- Every gun script also asks GunHandler.getCanShoot(character) before it shoots, and that module only ever looks at the FIRST tool in the
+        -- character: its ammo, its cooldown, the gun that fired last. With several guns in the hand (auto equip) a gun that is not first was
+        -- judged by another gun's state and turned its own pull away without sending anything (measured: 24 pulls, no shot). A gun the ragebot
+        -- is pulling the trigger of is judged by its own state instead (hide_manager.can_shoot_tool); every other call goes to the game's own.
+        local can_current = handler["getCanShoot"]
+
+        if type(can_current) == "function" then
+            aim_chain["can_original"] = can_current
+            aim_chain["can_dispatch"] = function(character, ...)
+                local pulling = hide_manager["bm_pulling"]
+
+                if pulling and rage_bullet_manipulation["enabled"] then
+                    local ok, caller = pcall(getcallingscript)
+                    local tool = ok and caller and caller["Parent"] or nil
+                    local at = tool and pulling[tool]
+
+                    if at and clock() - at < 0.5 then
+                        if hide_manager["can_shoot_tool"](tool) then
+                            return true
+                        end
+
+                        return nil
+                    end
+                end
+
+                return aim_chain["can_original"](character, ...)
+            end
+
+            pcall(function()
+                handler["getCanShoot"] = aim_chain["can_dispatch"]
+            end)
+        end
+
+        getgenv()["neverlose_aim_chain"] = {handler = handler, original = current, dispatch = aim_chain["dispatch"], can_original = aim_chain["can_original"], can_dispatch = aim_chain["can_dispatch"]}
 
         return true
     end)
@@ -28720,6 +29372,12 @@ end
             pcall(function()
                 handler["getAim"] = aim_chain["original"]
             end)
+
+            if aim_chain["can_dispatch"] and handler["getCanShoot"] == aim_chain["can_dispatch"] then
+                pcall(function()
+                    handler["getCanShoot"] = aim_chain["can_original"]
+                end)
+            end
 
             aim_chain["installed"] = false
         end
@@ -28795,6 +29453,83 @@ end
         return true
     end)
 
+    -- The game's own CanShoot rules (ReplicatedStorage.Modules.GunHandler.CanShoot, the file the server runs as well), worked out for ONE tool.
+    hide_manager["switch_slow"] = {["[Deagle]"] = true, ["[Rifle]"] = true, ["[Glock]"] = true, ["[Silencer]"] = true}
+    hide_manager["bm_pulling"] = setmetatable({}, {["__mode"] = "k"})
+    hide_manager["bm_sent"] = setmetatable({}, {["__mode"] = "k"})
+
+    hide_manager["can_shoot_tool"] = LPH_NO_VIRTUALIZE(function(tool)
+        local character = local_character
+        local humanoid = local_parts["Humanoid"]
+        local body_effects = local_parts["BodyEffects"]
+
+        if not character or typeof(tool) ~= "Instance" or tool["Parent"] ~= character or not humanoid or humanoid["Health"] <= 0 or not body_effects then
+            return false
+        end
+
+        local ammo = find_first_child(tool, "Ammo")
+
+        if not (find_first_child(tool, "Handle") and ammo) or ammo["Value"] <= 0 or find_first_child(body_effects, "Block") then
+            return false
+        end
+
+        local name = tool["Name"]
+
+        if workspace:GetAttribute("SERVER_AIM") or (name == "[Flintlock]" and workspace:GetAttribute("FlintlockDisabled")) then
+            return false
+        end
+
+        if not find_first_child(character, "FULLY_LOADED_CHAR") or find_first_child(character, "FORCEFIELD") or character:GetAttribute("BasketballTeam") or character:GetAttribute("BasketballZone")
+            or find_first_child(character, "GRABBING_CONSTRAINT") or find_first_child(character, "Christmas_Sock") or find_first_child(character, "[CarHitBox]") then
+            return false
+        end
+
+        local cuff = find_first_child(body_effects, "Cuff")
+        local attacking = find_first_child(body_effects, "Attacking")
+        local knocked = find_first_child(body_effects, "K.O")
+        local grabbed = find_first_child(body_effects, "Grabbed")
+        local reload = find_first_child(body_effects, "Reload")
+        local dead = find_first_child(body_effects, "Dead")
+
+        if (cuff and cuff["Value"] == true) or (attacking and attacking["Value"] == true) or (knocked and knocked["Value"] == true) or (grabbed and grabbed["Value"]) or (dead and dead["Value"] == true) then
+            return false
+        end
+
+        if reload and reload["Value"] == true and (reload:GetAttribute("ShellReload") ~= name or ammo["Value"] <= 0) then
+            return false
+        end
+
+        if tool:GetAttribute("Cooldown") then
+            return false
+        end
+
+        local cooldown = find_first_child(tool, "ShootingCooldown")
+
+        if cooldown then
+            local now = clock()
+            local last = tool:GetAttribute("LocalLastShotAt")
+
+            if last and now - last < cooldown["Value"] then
+                return false
+            end
+
+            local switch_slow = hide_manager["switch_slow"]
+            local last_gun, last_time = character:GetAttribute("LocalLastFiredGun"), character:GetAttribute("LocalLastGunShotAt")
+
+            if last_gun ~= name and last_time and now - last_time < ((switch_slow[last_gun] and switch_slow[name]) and 0.5 or 0.1) then
+                return false
+            end
+
+            local server_gun, server_time = character:GetAttribute("LastFiredGun"), character:GetAttribute("LastGunShotAt")
+
+            if server_gun ~= name and server_time and workspace:GetServerTimeNow() - server_time < ((switch_slow[server_gun] and switch_slow[name]) and 0.5 or 0.1) then
+                return false
+            end
+        end
+
+        return true
+    end)
+
     -- Whether the server takes a gun's own shots is watched, per gun, through its ammo (the server drops it when it takes a round). Measured
     -- on two accounts: the shots the guns made themselves, rewritten by the hook to the ragebot's aim, were refused every time (0 of 61)
     -- while the forged ones, built the same way, were taken (9 of 15 and 24 of 24, the rest sent as the target went down), whether or
@@ -28814,7 +29549,20 @@ end
 
         -- the verdict on the last pull: a round left the gun, or it did not
         if watch["pulled_at"] and now - watch["pulled_at"] > 0.5 + local_ping/1000 then
-            if ammo < watch["ammo"] then
+            local sent = hide_manager["bm_sent"][tool]
+
+            if not sent or sent < watch["pulled_at"] then
+                -- The gun sent nothing at all: its own rules turned the pull away, which says nothing about whether the server takes the gun's shots.
+                -- It was counted as a refusal before, and two of those switched bullet manipulation off for 20 s. A few in a row and the ragebot
+                -- sends the shots itself for a moment instead.
+                watch["dry"] = (watch["dry"] or 0) + 1
+
+                if watch["dry"] >= 4 then
+                    watch["dry"] = 0
+                    watch["off_until"] = now + 3
+                end
+            elseif ammo < watch["ammo"] then
+                watch["dry"] = 0
                 watch["strikes"] = 0
             elseif ammo > watch["ammo"] or now - watch["pulled_at"] > 4 + local_ping/1000 then
                 -- The ammo went up since the pull (a reload), or the pull is long past (the gun was reloaded and the count came back to what it was, or
@@ -28845,6 +29593,17 @@ end
         end
 
         return true
+    end)
+
+    -- The pull of one gun: only when the game would let it shoot (its own state, see can_shoot_tool) and the watchdog allows it.
+    hide_manager["bm_try_pull"] = LPH_NO_VIRTUALIZE(function(tool, ammo, pulled)
+        if not hide_manager["can_shoot_tool"](tool) or not hide_manager["bm_may_pull"](tool, ammo) then
+            return false
+        end
+
+        hide_manager["bm_pulling"][tool] = clock()
+
+        return pull_trigger(tool, pulled)
     end)
 
     -- lets go a moment later, so an automatic gun fires its one shot and stops
@@ -29002,17 +29761,26 @@ end
 
                 local local_server_position = local_server_position["p"]
                 if flags["auto_fire_defensive"] then
-                    local resolved = ue_resolve(hitbox_position, current_time)
+                    local weighted = hide_manager["resolver_weighted"] == true
+                    local resolved
+
+                    if weighted then
+                        resolved = hide_manager["weighted_resolve"](hitbox_position, current_time)
+                    else
+                        resolved = ue_resolve(hitbox_position, current_time)
+                    end
 
                     if resolved then
-                        -- Lerp % When Close: while the target is within the cluster's radius of where the resolver put it, the aim moves that share of the
-                        -- way to where the target really is (100 = all of it, "instant"). A target that hardly moves gets three times the share, up to 60%.
-                        local lerp = clamp(tonumber(flags["ue_resolver_lerp"]) or 10, 10, 100)/100
-                        local target_speed = target_velocity and target_velocity["Magnitude"] or 0
-                        local share = lerp >= 1 and 1 or (target_speed < 5 and clamp(lerp * 3, lerp, math.max(lerp, 0.6)) or lerp)
+                        if not weighted then
+                            -- Lerp % When Close: while the target is within the cluster's radius of where the resolver put it, the aim moves that share of the
+                            -- way to where the target really is (100 = all of it, "instant"). A target that hardly moves gets three times the share, up to 60%.
+                            local lerp = clamp(tonumber(flags["ue_resolver_lerp"]) or 10, 10, 100)/100
+                            local target_speed = target_velocity and target_velocity["Magnitude"] or 0
+                            local share = lerp >= 1 and 1 or (target_speed < 5 and clamp(lerp * 3, lerp, math.max(lerp, 0.6)) or lerp)
 
-                        if (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
-                            resolved = resolved:Lerp(hitbox_position, share)
+                            if (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
+                                resolved = resolved:Lerp(hitbox_position, share)
+                            end
                         end
 
                         ragebot_aim_position = resolved
@@ -29022,6 +29790,7 @@ end
                     end
                 end
 
+                hide_manager["resolver_active"] = did_defensive
                 ragebot_aim_position = ragebot_force_position or ragebot_aim_position
 
                 if custom_ragebot_aim_position then
@@ -29158,6 +29927,14 @@ end
                         local pos = ragebot_aim_position
                         local origin = local_server_position
 
+                        -- Skip Out Of Reach: the server turns away a shot whose hit position is farther from its origin than the gun's Range, and a shotgun's
+                        -- refused call is counted against its SecurityTolerance (past it the gun is locked out for the rest of the server). Measured on a target
+                        -- that hides in the void most of the time: 63% of all sends were aimed at a void position, from a body hundreds of millions of studs
+                        -- away, and the server took 1 of 709. The shot waits for the target to be within reach (a quarter more than the range, as slack).
+                        if chosen_gun and flags["auto_fire_skip_out_of_reach"] ~= false and (origin - pos)["Magnitude"] > (chosen_gun[2] or 250) * 1.25 + 20 then
+                            chosen_gun = nil
+                        end
+
                         -- >> ( bullet tp )
                         -- Only on a tick that sends a gun, and one at a time. It used to run on every frame the fire gate was open - with a slow gun on
                         -- cooldown that is every frame - cycling the tool through the bag each time (equip signals, new connections), and with the window
@@ -29228,12 +30005,19 @@ end
                             if ammo > 0 and handle["Parent"] and hide_manager["gun_ready"](handle["Parent"], ammo) then
                                 last_fire = clock()
                                 hide_manager["gun_fired_at"][handle["Parent"]] = last_fire
+
+                                if hide_manager["gun_ammo_sent"][handle["Parent"]] == ammo then
+                                    hide_manager["gun_refused"][handle["Parent"]] = (hide_manager["gun_refused"][handle["Parent"]] or 0) + 1
+                                else
+                                    hide_manager["gun_refused"][handle["Parent"]] = 0
+                                end
+
                                 hide_manager["gun_ammo_sent"][handle["Parent"]] = ammo
                                 hide_manager["last_sent_gun"] = handle["Parent"]
                                 hide_manager["last_sent_at"] = last_fire
 
                                 -- bullet manipulation: the gun shoots by itself, aimed by the hook above
-                                if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and hide_manager["bm_may_pull"](handle["Parent"], ammo) and pull_trigger(handle["Parent"], pulled) then
+                                if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and hide_manager["bm_try_pull"](handle["Parent"], ammo, pulled) then
                                     continue
                                 end
 
@@ -29476,6 +30260,30 @@ end
 
     create_connection(menu_references["ragebot_hitbox"]["on_dropdown_change"], function(value)
         ragebot_hitbox = value[1] == "head" and "Head" or "HumanoidRootPart"
+    end)
+
+    -- Resolver type: the history of one kind is no use to the other, and only the rows of the type in use are shown.
+    create_connection(menu_references["resolver_type"]["on_dropdown_change"], function(value)
+        local weighted = value[1] == "weighted"
+
+        hide_manager["resolver_weighted"] = weighted
+        hide_manager["weighted_positions"] = {}
+
+        for k in defensive_positions do defensive_positions[k] = nil end
+
+        ue_resolver_result = nil
+
+        for _, name in {"ue_resolver_refresh", "ue_resolver_forgiveness", "ue_resolver_void_bonus"} do
+            menu_references[name]:set_visible(not weighted)
+        end
+
+        for _, name in {"void_spam_resolver_position_weight", "void_spam_resolver_forget_rate", "void_spam_resolver_void_weight", "void_spam_resolver_accuracy"} do
+            menu_references[name]:set_visible(weighted)
+        end
+    end)
+
+    create_connection(menu_references["resolver_rate"]["on_slider_change"], function(value)
+        resolver_rate = value
     end)
 
     create_connection(menu_references["target_selection_target_distance"]["on_slider_change"], function(value)
@@ -29725,6 +30533,10 @@ end
                     local_following = false
                     return
                 elseif follow_target_stop_if_no_gun_equipped and not local_gun then
+                    local_following = false
+                    return
+                elseif hide_manager["healing"] and flags["auto_heal_stop_following"] then
+                    -- Auto Heal's Stop Following While Healing: the popcorn is out and being eaten.
                     local_following = false
                     return
                 end
@@ -30221,7 +31033,16 @@ end
                 local constant_note = record["constant"] and ("constant #"..record["constant"][1].." was "..tostring(record["constant"][2])) or "no constant"
                 local upvalue_note = record["upvalue"] and ("upvalue #"..record["upvalue"][1].." was "..tostring(record["upvalue"][2])) or "no upvalue"
 
-                print("[femmyhac.cc] rapid fire: patched "..tool["Name"].." ("..constant_note..", "..upvalue_note..")")
+                -- The same gun patched the same way again (every respawn brings new gun scripts) is not worth another line.
+                local note = tool["Name"].." ("..constant_note..", "..upvalue_note..")"
+                local logged = hide_manager["rapid_fire_logged"] or {}
+
+                hide_manager["rapid_fire_logged"] = logged
+
+                if logged[tool["Name"]] ~= note then
+                    logged[tool["Name"]] = note
+                    print("[femmyhac.cc] rapid fire: patched "..note)
+                end
             end
         end
 
@@ -31097,10 +31918,23 @@ end
 
         local tools = {}
 
+        -- Stop Following While Healing: while the popcorn is out the character goes into the void (the hide manager's "healing" reason, which also
+        -- keeps Follow Target off) and comes back once it is eaten or the setting is switched off.
+        local set_healing = function(active)
+            hide_manager["healing"] = active
+
+            local hide = hide_manager["set_hide_reason"]
+
+            if hide then
+                hide("healing", active and flags["auto_heal_stop_following"] == true, true)
+            end
+        end
+
         local do_auto_heal = LPH_JIT_MAX(function(dt, hrp)
             local humanoid = local_parts["Humanoid"]
 
             if not humanoid or local_knocked or purchasing then
+                set_healing(false)
                 return
             end
 
@@ -31127,6 +31961,7 @@ end
                 local parent = popcorn["Parent"]
                 if parent == nil then
                     popcorn = nil
+                    set_healing(false)
                     return
                 elseif parent ~= local_character then
                     setscriptable(popcorn, "Parent", true)
@@ -31135,6 +31970,8 @@ end
 
                 popcorn["Activate"](popcorn)
             end
+
+            set_healing(popcorn ~= nil)
         end)
 
         create_connection(menu_references["auto_heal"]["on_toggle_change"], function(value)
@@ -31144,6 +31981,8 @@ end
                     break
                 end
             end
+
+            set_healing(false)
 
             if value then
                 heartbeat[#heartbeat+1] = do_auto_heal
@@ -31782,7 +32621,7 @@ end
         local auto_stomp_target_target = true
         local auto_stomp_target_friendly = false
         local auto_stomp_target_enemy = false
-        local auto_stomp_stop_when_dead = true
+        local auto_stomp_stop_when_dead = false
         local auto_stomp_wait_for_all = false
 
         -- True while one of the targets is still on their feet: not knocked, not dead, with a character in the game. A target that is respawning
@@ -31835,7 +32674,7 @@ end
                     if torso then
                         local velocity = torso["Velocity"]
 
-                        if not waiting and not target[4]["GRABBING_CONSTRAINT"] and (not auto_stomp_stop_when_dead or not target[7]) and target[18] and torso and velocity["Magnitude"] < 100 then
+                        if not waiting and not target[4]["GRABBING_CONSTRAINT"] and (not auto_stomp_stop_when_dead or not target[7]) and (target[18] or target[7]) and torso and velocity["Magnitude"] < 100 then
                             if tick - auto_stomp_tick > 0.025 then
                                 auto_stomp_tick = tick
                                 event:FireServer("Stomp")
@@ -32554,6 +33393,9 @@ end
                 origin = world_to_viewport_point(camera, handle["Position"])
             elseif tracer_origin == "character" and hrp then
                 origin = world_to_viewport_point(camera, hrp["Position"])
+            elseif tracer_origin == "server position" and local_server_position and local_server_position["p"]["Magnitude"] < 9e5 then
+                -- Where the server has this character (differs from the drawn one while desynced).
+                origin = world_to_viewport_point(camera, local_server_position["p"])
             end
 
             origin = origin or get_mouse_location(user_input_service)
@@ -35093,6 +35935,12 @@ do
             end
 
             target_list["refresh"] = true
+        end,
+        -- kills and deaths against a player since the script started: mine, theirs
+        get_score = function(player)
+            local entry = hide_manager["scores"][player]
+
+            return entry and entry["mine"] or 0, entry and entry["theirs"] or 0
         end,
         get_target_list = function()
             local list = {}
