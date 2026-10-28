@@ -30858,6 +30858,67 @@ end
             end
         end
 
+        -- Where the character stands for the Follow Target settings (style, Distance, Height and Speed, Orbit Shape, Teleport Min / Max, Height Min / Max).
+        -- The follow step uses it every frame, and so does the Void Hide Spam for the windows it spends out of the void on the target: `window` is that, and
+        -- Random Spam then leaves out its jumps into the void (the cycle has the void already). `quiet` keeps Visualize from drawing.
+        hide_manager["follow_cframe"] = function(aim, window, quiet)
+            local new_cframe
+
+            if follow_target_style == "random" then
+                new_cframe = cframe_new(aim + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
+                new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+            elseif follow_target_style == "random spam" then
+                local tick = clock()
+                local difference = tick - follow_target_avoid_last_tick
+                local old_difference = difference < 0.06
+                if window or difference > 0.11 or old_difference then
+                    new_cframe = cframe_new(aim + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
+                    if not window and not old_difference then
+                        follow_target_avoid_last_tick = tick
+                    end
+                else
+                    new_cframe = cframe_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647))
+                end
+                new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+            elseif follow_target_style == "randomize" then
+                -- Teleport Min / Max: a random place that far out (flat) from the target, up to 5 studs over it
+                local low = flags["follow_target_teleport_min"] or 2
+                local high = math.max(flags["follow_target_teleport_max"] or 17, low)
+                local radius = low + (high - low) * math_random()
+                local angle = math_random() * 2 * math["pi"]
+
+                new_cframe = cframe_new(aim + vector3_new(math["cos"](angle) * radius, math_random() * 5, math["sin"](angle) * radius))
+                new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+            elseif follow_target_style == "above" then
+                -- Height Min / Max: straight over the target
+                local low = flags["follow_target_sky_min"] or 10
+                local high = math.max(flags["follow_target_sky_max"] or 20, low)
+
+                new_cframe = cframe_new(aim + vector3_new(0, low + (high - low) * math_random(), 0))
+                new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+            elseif orbit_shape ~= "circle" then
+                new_cframe = cframe_new(aim + height + hide_manager["orbit_offset"](orbit_shape, (clock() * speed) % 1, distance))
+            else
+                new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (aim + height)
+            end
+
+            hide_manager["follow_last"] = new_cframe
+            hide_manager["follow_aim"] = aim
+
+            if not quiet and flags["follow_target_visualize"] == true and aim["Magnitude"] < 9e5 then
+                local strafing = follow_target_style ~= "random" and follow_target_style ~= "random spam" and follow_target_style ~= "randomize" and follow_target_style ~= "above"
+                local new_position = new_cframe["Position"]
+
+                if strafing then
+                    hide_manager["follow_visual_show"]("disc", aim + height, nil, distance)
+                elseif new_position["Magnitude"] < 9e5 then
+                    hide_manager["follow_visual_show"]("ball", nil, new_position, nil)
+                end
+            end
+
+            return new_cframe
+        end
+
         local follow_target = LPH_JIT_MAX(function(dt, hrp, bypass)
             -- whatever Visualize drew stays only while the character is being sent to the target
             if follow_visual["drawn"] and clock() - follow_visual["drawn"] > 0.4 then
@@ -30917,58 +30978,7 @@ end
                 -- The position saved at the start of this frame, before any anti aim step moved the character: every step then
                 -- restores the same value whatever order they run in.
                 local old_cframe = local_client_position
-                local new_cframe = old_cframe
-
-                if follow_target_style == "random" then
-                    new_cframe = cframe_new(ragebot_aim_position + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
-                    new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
-                elseif follow_target_style == "random spam" then
-                    local tick = clock()
-                    local difference = tick - follow_target_avoid_last_tick
-                    local old_difference = difference < 0.06
-                    if difference > 0.11 or old_difference then
-                        new_cframe = cframe_new(ragebot_aim_position + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
-                        if not old_difference then
-                            follow_target_avoid_last_tick = tick
-                        end
-                    else
-                        new_cframe = cframe_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647))
-                    end
-                    new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
-                elseif follow_target_style == "randomize" then
-                    -- Teleport Min / Max: a random place that far out (flat) from the target, up to 5 studs over it
-                    local low = flags["follow_target_teleport_min"] or 2
-                    local high = math.max(flags["follow_target_teleport_max"] or 17, low)
-                    local radius = low + (high - low) * math_random()
-                    local angle = math_random() * 2 * math["pi"]
-
-                    new_cframe = cframe_new(ragebot_aim_position + vector3_new(math["cos"](angle) * radius, math_random() * 5, math["sin"](angle) * radius))
-                    new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
-                elseif follow_target_style == "above" then
-                    -- Height Min / Max: straight over the target
-                    local low = flags["follow_target_sky_min"] or 10
-                    local high = math.max(flags["follow_target_sky_max"] or 20, low)
-
-                    new_cframe = cframe_new(ragebot_aim_position + vector3_new(0, low + (high - low) * math_random(), 0))
-                    new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
-                elseif orbit_shape ~= "circle" then
-                    new_cframe = cframe_new(ragebot_aim_position + height + hide_manager["orbit_offset"](orbit_shape, (clock() * speed) % 1, distance))
-                else
-                    new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (ragebot_aim_position + height)
-                end
-
-                hide_manager["follow_last"] = new_cframe
-
-                if not bypass and flags["follow_target_visualize"] == true and ragebot_aim_position["Magnitude"] < 9e5 then
-                    local strafing = follow_target_style ~= "random" and follow_target_style ~= "random spam" and follow_target_style ~= "randomize" and follow_target_style ~= "above"
-                    local new_position = new_cframe["Position"]
-
-                    if strafing then
-                        hide_manager["follow_visual_show"]("disc", ragebot_aim_position + height, nil, distance)
-                    elseif new_position["Magnitude"] < 9e5 then
-                        hide_manager["follow_visual_show"]("ball", nil, new_position, nil)
-                    end
-                end
+                local new_cframe = hide_manager["follow_cframe"](ragebot_aim_position, false, bypass)
 
                 local_following = true
 
@@ -33482,10 +33492,13 @@ end
 
                     -- Spam on target: the window out of the void is spent on the target, where the server takes the shots, instead of
                     -- back at the character's own position (that is also what the follow step does, which this step would override).
-                    -- The character is held still and faces the target: a shot's origin is this frame's position, the server has the gun
-                    -- wherever the last frames put it, so a position that jumps about from frame to frame never matches.
+                    -- The window stands where the Follow Target settings put the character (its style, distance, orbit shape and the rest, whether
+                    -- or not the Follow Target toggle is on): it used to be a fixed place 3 studs behind the target. A place that moves quickly
+                    -- is a place the server has late, so fewer of the shots sent from it are taken than from one that stays.
                     if spam_on_target and not invulnerable_void_active and ragebot_aim_position and ragebot_aim_position["Magnitude"] < (flags["follow_target_into_void"] ~= false and 1e10 or 9e5) then
-                        resting_cframe = cframe_new(ragebot_aim_position + vector3_new(0, 0, 3), ragebot_aim_position)
+                        local follow_cframe = hide_manager["follow_cframe"]
+
+                        resting_cframe = follow_cframe and follow_cframe(ragebot_aim_position, true) or cframe_new(ragebot_aim_position + vector3_new(0, 0, 3), ragebot_aim_position)
                     end
 
                     hrp["CFrame"] = resting_cframe
