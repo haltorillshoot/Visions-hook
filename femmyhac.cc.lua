@@ -17119,27 +17119,23 @@ do
 
     hide_manager["redeeming_codes"] = true
 
-    local finished = pcall(function()
-    local raw = game:HttpGet("https://raw.githubusercontent.com/alex541-juju/juju/refs/heads/main/codes.txt")
-    
-    local codes = {}
-    for code in raw:gmatch("[^\n]+") do
-        code = code:gsub("%s+$", ""):gsub("^%s+", "") -- trim
-        if code ~= "" then
-            codes[#codes+1] = code
-        end
-    end
+    -- The codes are kept here (they used to be read from a codes.txt in somebody else's repository). Six seconds between them: the game answers one
+    -- code at a time.
+    local codes = {"MACRO!", "ETERNAL", "HALLOWEEN26"}
 
-    for i = 1, #codes do
-        event:FireServer("EnterPromoCode", codes[i])
-        wait(6)
-    end
+    local finished = pcall(function()
+        for i = 1, #codes do
+            event:FireServer("EnterPromoCode", codes[i])
+            wait(6)
+        end
     end)
 
     hide_manager["redeeming_codes"] = nil
 
-    if not finished then
-        new_notification("failed to get the codes", 3)
+    if finished then
+        new_notification("sent "..tostring(#codes).." codes", 2)
+    else
+        new_notification("redeeming the codes failed", 3)
     end
 end)
 
