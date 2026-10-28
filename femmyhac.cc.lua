@@ -4445,7 +4445,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["anti_taser"] = {"anti_taser", "anti_taser"},
 	-- visualization, fake pos and main-section additions
 	["auto_equip"] = {"auto_equip", "auto_equip"},
-	["prediction"] = {"prediction", "prediction"},
+	["prediction_level"] = {"prediction", "prediction"},
 	["shot_delay"] = {"shot_delay", "shot_delay"},
 	["ragebot_field_of_view"] = {"ragebot_field_of_view", "ragebot_field_of_view"},
 	["fire_cooldown"] = {"fire_cooldown", "fire_cooldown"},
@@ -8274,7 +8274,7 @@ function Session.buildSettingsPanels(rows)
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
-	panelList(equip, "Gun", "auto_equip_gun", { "double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug" }, { "rifle" })
+	panelList(equip, "Gun", "auto_equip_gun", { "double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug" }, { "rifle", "double-barrel sg" })
 
 	-- Prediction --
 	local predictionPanel = rows.prediction:AddOption()
@@ -13727,15 +13727,16 @@ local function buildInterface()
 	})
 
 	rows.prediction = Raging:AddLabel("Prediction")
+	rows.prediction:ToolTip("All the way down: no prediction. All the way up: automatic, worked out from your ping. In between: a fixed lead")
 	addTextSlider(rows.prediction, {
 		Min = 0,
 		Max = 2000,
 		Rounding = 2,
 		Type = "%",
-		Nums = { [0] = "auto" },
-		Default = 0,
-		Flag = "prediction",
-		Callback = onChanged("prediction"),
+		Nums = { [0] = "off", [2000] = "auto" },
+		Default = 2000,
+		Flag = "prediction_level",
+		Callback = onChanged("prediction_level"),
 	})
 
 	addTextSlider(Raging:AddLabel("Shot Delay"), {
@@ -27843,7 +27844,7 @@ end
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
-        menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle"}, ["options"] = {"double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug"}, ["requires_one"] = true, ["multi"] = true}})
+        menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle", "double-barrel sg"}, ["options"] = {"double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
         menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
@@ -27857,7 +27858,7 @@ end
         menu_references["ue_resolver_dist_penalty"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "distance based penalty"}, {["slider"] = {["flag"] = "ue_resolver_dist_penalty", ["min"] = 0, ["max"] = 5, ["default"] = 2, ["decimals"] = 1, ["suffix"] = "x"}})
         menu_references["ue_resolver_lerp"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "lerp % when close"}, {["slider"] = {["flag"] = "ue_resolver_lerp", ["min"] = 10, ["max"] = 100, ["default"] = 10, ["decimals"] = 1, ["suffix"] = "%", ["max_text"] = "instant"}})
         menu_references["ragebot_hitbox"] = menu_references["general_section"]:create_element({["name"] = "target hitbox"}, {["dropdown"] = {["flag"] = "ragebot_hitbox", ["options"] = {"head", "root"}, ["default"] = {"head"}}})
-        menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 0, ["min_text"] = "auto", ["max_text"] = "disabled", ["suffix"] = "%", ["decimals"] = 2}})
+        menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 2000, ["min_text"] = "off", ["max_text"] = "auto", ["suffix"] = "%", ["decimals"] = 2}})
         menu_references["prediction_settings"] = menu_references["prediction"]:create_settings()
         menu_references["resolver_rate"] = menu_references["prediction_settings"]:create_element({["name"] = "resolver rate"}, {["slider"] = {["flag"] = "resolver_rate", ["min"] = 0, ["suffix"] = "s", ["max"] = 0.1, ["default"] = 0.043, ["decimals"] = 4}})
         menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
@@ -28069,6 +28070,81 @@ end
     -- Sends in a row after which the ammo had not moved (the server took nothing): a gun that keeps being turned away (a shotgun past its
     -- SecurityTolerance is locked out for the rest of the server; any gun while the target is out of reach) is only tried now and then.
     hide_manager["gun_refused"] = setmetatable({}, {["__mode"] = "k"})
+
+    -- One Tap: which gun goes at this target now so that it is knocked in as few shots as possible, from what the hub and the game's armor rule say.
+    -- Armor takes the whole value of a hit and the health 22.5% of it while there is any; the Rifle (99) takes all the armor that is left whatever its
+    -- damage; one Double-Barrel shell is five pellets of 23.1 (115.5; the head's double is not counted against armor, measured on a body with 130 armor:
+    -- 104 off the armor and 23 off the health from a shell at the head). So a full body (100 health, 130 armor) falls to the Rifle and then a shell, 0.15 s
+    -- apart, or to two shells 0.35 s apart; with no armor one shell is enough. Returns the gun to send (nil: no gun in particular) and whether the shell
+    -- should wait for the Rifle, which is about to be ready to strip the armor first.
+    local function hit_on_body(damage, strips, armor, health)
+        if armor > 0 then
+            if strips then
+                return 0, health - damage * 0.225
+            elseif damage <= armor then
+                return armor - damage, health - damage * 0.225
+            end
+
+            return 0, health - armor * 0.225 - (damage - armor)
+        end
+
+        return 0, health - damage
+    end
+
+    hide_manager["one_tap_plan"] = function(target, guns, distance)
+        local armor = target[14] or 0
+        local health = target[9] or 100
+        local rifle, shell = nil, nil
+
+        for _, gun in guns do
+            local tool = gun[1]["Parent"]
+
+            if tool and gun[3] > 0 then
+                if tool["Name"] == "[Rifle]" then
+                    rifle = {tool, gun}
+                elseif tool["Name"] == "[Double-Barrel SG]" then
+                    shell = {tool, gun}
+                end
+            end
+        end
+
+        local rifle_ready = rifle and distance <= 230 and hide_manager["gun_ready"](rifle[1], rifle[2][3])
+        local shell_ready = shell and distance <= 110 and hide_manager["gun_ready"](shell[1], shell[2][3])
+
+        if shell_ready then
+            local damage_value = find_first_child(shell[1], "Damage")
+            local _, left = hit_on_body((damage_value and damage_value["Value"] or 23.1) * hide_manager["pellets_of"](shell[1]), false, armor, health)
+
+            if left <= 0.5 then
+                return shell[1], false
+            end
+        end
+
+        if rifle_ready then
+            local damage_value = find_first_child(rifle[1], "Damage")
+            local _, left = hit_on_body(damage_value and damage_value["Value"] or 99, true, armor, health)
+
+            if left <= 0.5 or armor >= 20 then
+                return rifle[1], false
+            end
+        end
+
+        if shell_ready then
+            -- armored and the Rifle comes back within 0.4 s: the shell waits for it
+            if armor >= 20 and rifle and not rifle_ready and distance <= 230 then
+                local sent = hide_manager["gun_fired_at"][rifle[1]]
+                local cooldown = find_first_child(rifle[1], "ShootingCooldown")
+
+                if sent and cooldown and sent + cooldown["Value"] + 0.0095 - clock() <= 0.4 then
+                    return nil, true
+                end
+            end
+
+            return shell[1], false
+        end
+
+        return nil, false
+    end
 
     -- Pellets in one shot: the shotguns fire five, a call each.
     local pellet_guns = {["[Double-Barrel SG]"] = 5, ["[Shotgun]"] = 5, ["[TacticalShotgun]"] = 5, ["[Drum-Shotgun]"] = 5}
@@ -28523,7 +28599,7 @@ end
         return get_ragebot_target(dt, hrp, ...)
     end)
 
-    local prediction = 0
+    local prediction = 2 -- the slider's top: automatic (0 is off)
 
     local last_auto = clock()
 
@@ -30031,7 +30107,7 @@ end
                 ragebot_aim_position = hitbox_position
 
                 if target_velocity then
-                    local lead = target_velocity*(prediction == 0 and local_ping/500 or prediction == 2 and 0 or prediction)
+                    local lead = target_velocity*(prediction == 0 and 0 or prediction == 2 and local_ping/500 or prediction)
                     local lead_length = lead["Magnitude"]
 
                     -- The lead is capped, so a bad velocity sample can never throw the aim far away from the target.
@@ -30162,11 +30238,19 @@ end
                             return cooldown ~= nil and cooldown["Value"] >= 0.25
                         end
 
+                        -- One Tap (see hide_manager.one_tap_plan): with the Rifle and the Double-Barrel in hand the gun that knocks this target soonest goes first,
+                        -- and the other waits its turn
+                        local plan_tool, plan_hold = hide_manager["one_tap_plan"](target, new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
+
                         table.sort(new_local_guns, function(a, b)
                             local tool_a, tool_b = a[1]["Parent"], b[1]["Parent"]
 
                             if not tool_a or not tool_b then
                                 return tool_a ~= nil and tool_b == nil
+                            end
+
+                            if plan_tool and (tool_a == plan_tool) ~= (tool_b == plan_tool) then
+                                return tool_a == plan_tool
                             end
 
                             local slow_a, slow_b = is_slow_gun(tool_a), is_slow_gun(tool_b)
@@ -30185,6 +30269,15 @@ end
                         for i = 1, #new_local_guns do
                             local candidate = new_local_guns[i]
                             local tool = candidate[1]["Parent"]
+
+                            if plan_tool and tool ~= plan_tool and (tool["Name"] == "[Rifle]" or tool["Name"] == "[Double-Barrel SG]") then
+                                -- the plan names the other of the two: this one waits
+                                continue
+                            end
+
+                            if plan_hold and tool and tool["Name"] == "[Double-Barrel SG]" then
+                                continue
+                            end
 
                             if tool and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
                                 local since = pick_time - sent_at
@@ -33690,7 +33783,7 @@ end
     -- > ( auto equip)
 
     do
-        local auto_equip_guns = {"[Rifle]"}
+        local auto_equip_guns = {"[Rifle]", "[Double-Barrel SG]"}
         local fake_local_guns = {}
         local auto_equip_unequip_when_when_no_target = true
         local auto_equip_unequip_when_when_no_target_connection = nil
