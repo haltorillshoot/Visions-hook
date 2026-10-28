@@ -4505,6 +4505,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["follow_target_sky_max"] = {"follow_target_sky_max", "follow_target_sky_max"},
 	["follow_target_visualize"] = {"follow_target_visualize", "follow_target_visualize"},
 	["follow_target_visualize_color"] = {"follow_target_visualize_color", "follow_target_visualize_color", "color"},
+	["follow_target_adjust"] = {"follow_target_adjust", "follow_target_adjust"},
 	["velocity_source"] = {"velocity_source", "velocity_source", "list"},
 	["auto_stomp_stop_when_dead"] = {"auto_stomp_stop_when_dead", "auto_stomp_stop_when_dead"},
 	["auto_stomp_target_statuses"] = {"auto_stomp_target_statuses", "auto_stomp_target_statuses", "list"},
@@ -8199,6 +8200,7 @@ function Session.buildSettingsPanels(rows)
 	panelList(follow, "Stop If", "follow_target_stop_if", { "no gun equipped", "target knocked", "reloading" }, { "no gun equipped", "target knocked", "reloading" })
 	panelSlider(follow, "Distance", "follow_target_distance", 2, 200, 0, " studs", 15)
 	panelToggle(follow, "Follow Into Void", "follow_target_into_void", true)
+	panelToggle(follow, "Adjust", "follow_target_adjust", false)
 	table.insert(strafeRows, select(2, panelSlider(follow, "Height", "follow_target_height", -200, 200, 0, " studs", 0)))
 	table.insert(strafeRows, select(2, panelSlider(follow, "Speed", "follow_target_speed", 1, 100, 0, "%", 75)))
 	-- Orbit Shape (strafe): the path round the target. Randomize: a random place 'Teleport Min' to 'Teleport Max' studs out. Above: a random height over the target.
@@ -27964,6 +27966,7 @@ end
         menu_references["follow_target_stop_if"] = menu_references["follow_target_settings"]:create_element({["name"] = "stop if"}, {["dropdown"] = {["flag"] = "follow_target_stop_if", ["options"] = {"no gun equipped", "target knocked", "reloading"}, ["default"] = {"no gun equipped", "target knocked", "reloading"}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
         menu_references["follow_target_into_void"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow into void"}, {["toggle"] = {["flag"] = "follow_target_into_void", ["default"] = true}})
+        menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
         menu_references["follow_target_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "height"}, {["slider"] = {["flag"] = "follow_target_height", ["min"] = -200, ["max"] = 200, ["default"] = 0, ["suffix"] = " studs"}})
         menu_references["follow_target_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "follow_target_speed", ["min"] = 1, ["max"] = 100, ["default"] = 75, ["suffix"] = "%"}})
         menu_references["follow_target_orbit_shape"] = menu_references["follow_target_settings"]:create_element({["name"] = "orbit shape"}, {["dropdown"] = {["flag"] = "follow_target_orbit_shape", ["options"] = {"circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart"}, ["default"] = {"circle"}, ["multi"] = false, ["requires_one"] = true}})
@@ -29609,6 +29612,27 @@ end
 
             return nil, true
         end)
+
+        -- True when nothing that counts as a wall lies on the straight line between two points (the same filter as above). Follow Target's Adjust uses it.
+        hide_manager["walls_clear"] = LPH_NO_VIRTUALIZE(function(origin, point)
+            local offset = point - origin
+            local distance = offset["Magnitude"]
+
+            if distance ~= distance or distance > WALL_MAX_RAY then
+                return false
+            end
+
+            local filter = {}
+            local target = ragebot_target
+
+            for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")} do
+                filter[#filter+1] = instance
+            end
+
+            wall_params["FilterDescendantsInstances"] = filter
+
+            return wall_raycast(workspace, origin, offset, wall_params) == nil
+        end)
     end
 
     -- the ragebot's answer: the direction to its aim position. The far void and a point on the gun itself are left to the gun's own aim.
@@ -30848,6 +30872,78 @@ end
             end
         end
 
+        -- Adjust: the place the style gives is only kept if a shot from it can reach the target: in range of the gun and with no wall on the line from the muzzle
+        -- (3 studs over the body, where the rebuilt shot starts) to the target. Otherwise the character stands at the nearest place around the target that has a
+        -- clear line. A target inside a wall is reached from inside the same wall (a ray does not see the part it starts in), one under a roof or floor from
+        -- the side. The search is made at most four times a second (and again when the target has moved on), the result is reused until the style's place is
+        -- fine again.
+        local adjust_state = {["aim"] = nil, ["offset"] = nil, ["at"] = -1}
+        hide_manager["follow_adjust_state"] = adjust_state
+
+        local adjust_ways = {}
+
+        for _, way in {{0, 1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {1, 1, 1}, {-1, 1, 1}, {1, 1, -1}, {-1, 1, -1}, {1, -1, 1}, {-1, -1, 1}, {1, -1, -1}, {-1, -1, -1}, {0, -1, 0}} do
+            adjust_ways[#adjust_ways+1] = vector3_new(way[1], way[2], way[3])["Unit"]
+        end
+
+        hide_manager["follow_adjust"] = function(cf, aim)
+            local position = cf["Position"]
+            local clear = hide_manager["walls_clear"]
+
+            if not clear or position["Magnitude"] > 9e5 then
+                return cf
+            end
+
+            local range = type(local_gun) == "number" and local_gun or 200
+            local lift = vector3_new(0, 3.0208, 0)
+
+            if (position - aim)["Magnitude"] <= range and clear(position + lift, aim) then
+                adjust_state["offset"] = nil
+
+                return cf
+            end
+
+            local now = clock()
+
+            if not adjust_state["aim"] or (aim - adjust_state["aim"])["Magnitude"] > 4 or now - adjust_state["at"] > 0.25 then
+                adjust_state["at"] = now
+                adjust_state["aim"] = aim
+                adjust_state["offset"] = nil
+
+                local wanted = position - aim
+                local candidates = {}
+
+                for _, way in adjust_ways do
+                    for _, radius in {2, 4, 7, 11, 16, 24, 34} do
+                        if radius <= range then
+                            local offset = way * radius
+
+                            candidates[#candidates+1] = {offset, (offset - wanted)["Magnitude"]}
+                        end
+                    end
+                end
+
+                table.sort(candidates, function(a, b)
+                    return a[2] < b[2]
+                end)
+
+                for _, candidate in candidates do
+                    if clear(aim + candidate[1] + lift, aim) then
+                        adjust_state["offset"] = candidate[1]
+                        break
+                    end
+                end
+            end
+
+            local offset = adjust_state["offset"]
+
+            if offset then
+                return cframe_new(aim + offset) * (cf - position)
+            end
+
+            return cf
+        end
+
         -- Where the character stands for the Follow Target settings (style, Distance, Height and Speed, Orbit Shape, Teleport Min / Max, Height Min / Max).
         -- The follow step uses it every frame, and so does the Void Hide Spam for the windows it spends out of the void on the target: `window` is that, and
         -- Random Spam then leaves out its jumps into the void (the cycle has the void already). `quiet` keeps Visualize from drawing.
@@ -30890,6 +30986,14 @@ end
                 new_cframe = cframe_new(aim + height + hide_manager["orbit_offset"](orbit_shape, (clock() * speed) % 1, distance))
             else
                 new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (aim + height)
+            end
+
+            if flags["follow_target_adjust"] == true and aim["Magnitude"] < 9e5 then
+                local adjust_ok, adjusted = pcall(hide_manager["follow_adjust"], new_cframe, aim)
+
+                if adjust_ok and adjusted then
+                    new_cframe = adjusted
+                end
             end
 
             hide_manager["follow_last"] = new_cframe
