@@ -2556,6 +2556,22 @@ local function createJujuLib()
 			local rowButtons = {}
 			local MAX_SHOWN = 10
 
+			-- Search = true puts a box at the top of the list that narrows it as you type. Describe(key) is the text of a row (and what the search is
+			-- matched against, so a row can carry a display name next to the key); the picked value stays the key.
+			local searchText = ""
+
+			local function applyFilter()
+				if not config.Search then
+					return
+				end
+
+				local needle = string.lower(searchText)
+
+				for _, entry in pairs(rowButtons) do
+					entry.Button.Visible = needle == "" or string.find(string.lower(entry.Label), needle, 1, true) ~= nil
+				end
+			end
+
 			local function paintRows()
 				for name, entry in pairs(rowButtons) do
 					local on = picked(name)
@@ -2591,7 +2607,7 @@ local function createJujuLib()
 					BackgroundColor3 = POPUP_COLOR,
 					BorderColor3 = OFF_COLOR,
 					BorderSizePixel = 1,
-					Size = UDim2.new(1, -4, 0, shown * 20 + 2),
+					Size = UDim2.new(1, -4, 0, shown * 20 + 2 + (config.Search and 22 or 0)),
 					Visible = isOpen,
 				}
 
@@ -2615,8 +2631,33 @@ local function createJujuLib()
 					holderOrder = listHolder.LayoutOrder
 				end
 
+				if config.Search then
+					local searchBox = new("TextBox", {
+						Name = "Search",
+						BackgroundColor3 = BOX_COLOR,
+						BorderSizePixel = 0,
+						ClearTextOnFocus = false,
+						Font = FONT,
+						LayoutOrder = 0,
+						PlaceholderColor3 = MUTED_COLOR,
+						PlaceholderText = "search name or display name",
+						Size = UDim2.new(1, scrolls and -4 or 0, 0, 22),
+						Text = searchText,
+						TextColor3 = TEXT_COLOR,
+						TextSize = 15,
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}, listHolder)
+					new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, searchBox)
+
+					searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+						searchText = searchBox.Text
+						applyFilter()
+					end)
+				end
+
 				for order, name in ipairs(values) do
 					local key = tostring(name)
+					local rowLabel = config.Describe and tostring(config.Describe(key)) or key
 					local button = new("TextButton", {
 						AutoButtonColor = false,
 						BackgroundColor3 = BOX_COLOR,
@@ -2631,7 +2672,7 @@ local function createJujuLib()
 						Position = UDim2.fromOffset(config.Multi and 22 or 8, 0),
 						Size = UDim2.new(1, config.Multi and -28 or -14, 1, 0),
 						Font = FONT,
-						Text = key,
+						Text = rowLabel,
 						TextColor3 = TEXT_COLOR,
 						TextSize = 15,
 						TextTruncate = Enum.TextTruncate.AtEnd,
@@ -2646,7 +2687,7 @@ local function createJujuLib()
 						Visible = config.Multi and true or false,
 					}, button)
 
-					rowButtons[key] = { Text = text, Mark = mark }
+					rowButtons[key] = { Text = text, Mark = mark, Button = button, Label = rowLabel }
 
 					button.MouseEnter:Connect(function()
 						button.BackgroundTransparency = 0.5
@@ -2671,6 +2712,7 @@ local function createJujuLib()
 				end
 
 				paintRows()
+				applyFilter()
 			end
 
 			build()
@@ -4372,13 +4414,9 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["Ragebot"] = {"ragebot", "ragebot_enabled"},
 	["AutoFire"] = {"auto_fire", "auto_fire"},
 	["auto_fire_at_target_vehicle"] = {"auto_fire_at_target_vehicle", "auto_fire_at_target_vehicle"},
-	["auto_fire_wall_bang"] = {"auto_fire_wall_bang", "auto_fire_wall_bang"},
 	["auto_fire_always_fire"] = {"auto_fire_always_fire", "auto_fire_always_fire"},
 	["auto_fire_dont_render"] = {"auto_fire_dont_render", "auto_fire_dont_render"},
-	["auto_fire_bullet_tp"] = {"auto_fire_bullet_tp", "auto_fire_bullet_tp"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
-	["auto_fire_skip_out_of_reach"] = {"auto_fire_skip_out_of_reach", "auto_fire_skip_out_of_reach"},
-	["auto_fire_walls"] = {"auto_fire_walls", "auto_fire_walls"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -8194,7 +8232,6 @@ function Session.buildSettingsPanels(rows)
 	-- Automatic fire --
 	local autoFire = rows.autoFire:AddOption()
 	panelToggle(autoFire, "At Target Vehicle", "auto_fire_at_target_vehicle", true)
-	panelToggle(autoFire, "Wall Bang", "auto_fire_wall_bang", false)
 
 	-- Same engine option the old Force Shoot row drove; still bindable with a right click.
 	addBindableToggle(autoFire:AddLabel("Always Fire"), "Always Fire", {
@@ -8203,10 +8240,7 @@ function Session.buildSettingsPanels(rows)
 		Callback = forward("auto_fire_always_fire", true),
 	})
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
-	panelToggle(autoFire, "Bullet TP", "auto_fire_bullet_tp", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
-	panelToggle(autoFire, "Skip Out Of Reach", "auto_fire_skip_out_of_reach", true)
-	panelToggle(autoFire, "Walls", "auto_fire_walls", true)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -13723,6 +13757,17 @@ local function buildInterface()
 		Default = {},
 		Multi = true,
 		Values = playerNames(),
+		-- a search box over the list: a few letters of a username or of a display name narrow it down
+		Search = true,
+		Describe = function(name)
+			local player = Players:FindFirstChild(name)
+
+			if player and player.DisplayName ~= player.Name then
+				return name .. "  (" .. player.DisplayName .. ")"
+			end
+
+			return name
+		end,
 		Flag = "target_players",
 		Callback = function(value)
 			if Session.Alive then
@@ -14911,10 +14956,12 @@ do
 
                         -- Walls: the server looks at the line from this origin to this hit position, so a hit claimed behind a wall is moved to the nearest
                         -- open point beside the target's part (hide_manager.walls_aim), and a shot with no way to a clear line is not sent at all.
-                        local walls_aim = flags["auto_fire_walls"] ~= false and hide_manager["walls_aim"] or nil
+                        local walls_aim = hide_manager["bm_active"] and hide_manager["walls_aim"] or nil
 
                         if walls_aim then
-                            local walls_ok, claimed = pcall(walls_aim, origin, pos)
+                            local walls_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+                            local walls_range = walls_tool and find_first_child(walls_tool, "Range")
+                            local walls_ok, claimed = pcall(walls_aim, origin, pos, walls_range and walls_range["Value"] or nil)
 
                             if walls_ok then
                                 if claimed == nil then
@@ -16803,6 +16850,7 @@ do
     menu_references["auto_reload"] = menu_references["utility_section"]:create_element({["name"] = "auto reload"}, {["toggle"] = {["flag"] = "auto_reload"}})
         menu_references["auto_reload_settings"] = menu_references["auto_reload"]:create_settings()
         menu_references["auto_reload_activate_when"] = menu_references["auto_reload_settings"]:create_element({["name"] = "activate when"}, {["dropdown"] = {["flag"] = "auto_reload_activate_when", ["options"] = {"rifle has 1/3", "target knocked", "target died", "clip empty"}, ["multi"] = true, ["default"] = {"rifle has 1/3", "target died", "clip empty"}}})
+        menu_references["auto_reload_wait_for_stomp"] = menu_references["auto_reload_settings"]:create_element({["name"] = "wait for stomp"}, {["toggle"] = {["flag"] = "auto_reload_wait_for_stomp", ["default"] = false}})
 
     local auto_reload_connection = nil
     local auto_reload_connection2 = nil
@@ -16869,6 +16917,13 @@ do
                 end
             end
 
+            return
+        end
+
+        -- Wait For Stomp: with no ragebot to queue the reload, it is sent straight away, so it is held back here while a stomp is due
+        local stomp_priority = hide_manager["stomp_priority"]
+
+        if stomp_priority and stomp_priority() then
             return
         end
 
@@ -27760,13 +27815,9 @@ end
         menu_references["auto_fire"] = menu_references["general_section"]:create_element({["name"] = "auto fire"}, {["toggle"] = {["flag"] = "auto_fire", ["default"] = false}})
         menu_references["auto_fire_settings"] = menu_references["auto_fire"]:create_settings()
         menu_references["auto_fire_at_target_vehicle"] = menu_references["auto_fire_settings"]:create_element({["name"] = "at target vehicle"}, {["toggle"] = {["flag"] = "auto_fire_at_target_vehicle", ["default"] = true}})
-        menu_references["auto_fire_wall_bang"] = menu_references["auto_fire_settings"]:create_element({["name"] = "wall bang"}, {["toggle"] = {["flag"] = "auto_fire_wall_bang", ["default"] = false}})
         menu_references["auto_fire_always_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "always fire"}, {["toggle"] = {["flag"] = "auto_fire_always_fire", ["default"] = true}})
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
-        menu_references["auto_fire_bullet_tp"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet tp"}, {["toggle"] = {["flag"] = "auto_fire_bullet_tp", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
-        menu_references["auto_fire_skip_out_of_reach"] = menu_references["auto_fire_settings"]:create_element({["name"] = "skip out of reach"}, {["toggle"] = {["flag"] = "auto_fire_skip_out_of_reach", ["default"] = true}})
-        menu_references["auto_fire_walls"] = menu_references["auto_fire_settings"]:create_element({["name"] = "walls"}, {["toggle"] = {["flag"] = "auto_fire_walls", ["default"] = true}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -29452,7 +29503,7 @@ end
 
         -- Where to claim a hit at `position` from `origin`: the position itself when the line is clear, else the nearest open point around it (4 to 16
         -- studs), else nothing. The second value says the claim was moved.
-        hide_manager["walls_aim"] = LPH_NO_VIRTUALIZE(function(origin, position)
+        hide_manager["walls_aim"] = LPH_NO_VIRTUALIZE(function(origin, position, range)
             local offset = position - origin
             local distance = offset["Magnitude"]
 
@@ -29501,7 +29552,8 @@ end
                     for _, way in wall_ways do
                         local point = position + way * far
 
-                        if wall_raycast(workspace, origin, point - origin, params) == nil then
+                        -- (the server wants the body within the gun's Range of the hit as well)
+                        if (not range or (point - origin)["Magnitude"] <= range) and wall_raycast(workspace, origin, point - origin, params) == nil then
                             stats["moved"] += 1
                             return point, true
                         end
@@ -29540,6 +29592,9 @@ end
     local set_rage_bullet_manipulation = LPH_NO_VIRTUALIZE(function(value)
         rage_bullet_manipulation["enabled"] = value
 
+        -- read by the remote hook, which sits earlier in the file and cannot see this table: the Walls claim is part of Bullet Manipulation
+        hide_manager["bm_active"] = false
+
         if not value then
             rage_bullet_manipulation["installed"] = false
             release_aim_hook()
@@ -29550,6 +29605,7 @@ end
         local ok, reason = ensure_aim_hook()
 
         rage_bullet_manipulation["installed"] = ok == true
+        hide_manager["bm_active"] = ok == true
 
         return ok, reason
     end)
@@ -30056,65 +30112,24 @@ end
                         local pos = ragebot_aim_position
                         local origin = local_server_position
 
-                        -- Skip Out Of Reach: the server turns away a shot whose hit position is farther from its origin than the gun's Range, and a shotgun's
-                        -- refused call is counted against its SecurityTolerance (past it the gun is locked out for the rest of the server). Measured on a target
-                        -- that hides in the void most of the time: 63% of all sends were aimed at a void position, from a body hundreds of millions of studs
-                        -- away, and the server took 1 of 709. The shot waits for the target to be within reach (a quarter more than the range, as slack).
-                        if chosen_gun and flags["auto_fire_skip_out_of_reach"] ~= false and (origin - pos)["Magnitude"] > (chosen_gun[2] or 250) * 1.25 + 20 then
-                            chosen_gun = nil
-                        end
+                        -- Bullet Manipulation's shot checks (they used to be the Skip Out Of Reach and Walls toggles; Bullet TP is gone). Reach: the server turns
+                        -- away a shot whose hit position is farther from its origin than the gun's Range, and a shotgun's refused call is counted against its
+                        -- SecurityTolerance (past it the gun is locked out for the rest of the server). Measured on a target that hides in the void most of the
+                        -- time: 63% of all sends were aimed at a void position, from a body hundreds of millions of studs away, and the server took 1 of 709. The
+                        -- shot waits for the target to be within reach (a quarter more than the range, as slack). Walls: the server looks at the line from the
+                        -- shot's origin to the claimed hit; a shot with no clear line to the target and no open point near it to claim the hit at is only turned
+                        -- away, so it is not sent either (hide_manager.walls_aim, worked out from the origin the rebuilt shot gets).
+                        if chosen_gun and rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] then
+                            local reach = chosen_gun[2] or 250
 
-                        -- Walls: a shot with no clear line to the target and no open point near it to claim the hit at is only turned away by the server (and a
-                        -- shotgun's refused call is counted against its SecurityTolerance), so it is not sent. Worked out from the origin the rebuilt shot gets.
-                        if chosen_gun and flags["auto_fire_walls"] ~= false and hide_manager["walls_aim"] and hide_manager["walls_aim"](origin + vector3_new(0, 3.0208, 0), pos) == nil then
-                            chosen_gun = nil
-                        end
+                            if (origin - pos)["Magnitude"] > reach * 1.25 + 20 then
+                                chosen_gun = nil
+                            else
+                                local walls_aim = hide_manager["walls_aim"]
 
-                        -- >> ( bullet tp )
-                        -- Only on a tick that sends a gun, and one at a time. It used to run on every frame the fire gate was open - with a slow gun on
-                        -- cooldown that is every frame - cycling the tool through the bag each time (equip signals, new connections), and with the window
-                        -- not drawing a new thread per heartbeat piled up behind the next frame, each one taking the previous one's offset grip as the
-                        -- grip to put back. The busy mark is the character it was started for, so a respawn clears it.
-                        if chosen_gun and flags["auto_fire_bullet_tp"] and local_tool and ragebot_target and hide_manager["bullet_tp_busy"] ~= local_character then
-                            local right_hand = local_parts["RightHand"]
-                            local target_hrp = ragebot_target[4]["HumanoidRootPart"]
-                            if right_hand and target_hrp then
-                                local bullet_tp_tool = local_tool; local original_grip = bullet_tp_tool["Grip"]
-                                hide_manager["bullet_tp_busy"] = local_character
-                                -- disable grip property changed connections (the ones that are on: the bypass keeps the others off, and they stay off)
-                                local grip_watchers = {}
-                                pcall(function()
-                                    for _, conn in getconnections(bullet_tp_tool:GetPropertyChangedSignal("Grip")) do
-                                        if conn["Enabled"] ~= false then
-                                            grip_watchers[#grip_watchers+1] = conn
-                                        end
-
-                                        conn:Disable()
-                                    end
-                                end)
-                                -- compute offset: RightHand → target HRP
-                                local actual_origin = right_hand["CFrame"] * CFrame.new(0, -1, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0)
-                                local offset = (actual_origin:ToObjectSpace(target_hrp["CFrame"])):Inverse()
-                                pcall(function()
-                                    setscriptable(bullet_tp_tool, "Parent", true)
-                                    bullet_tp_tool["Parent"] = local_player["Backpack"]
-                                    bullet_tp_tool["Grip"] = offset
-                                    bullet_tp_tool["Parent"] = local_character
-                                    render_stepped_wait(render_stepped)
-                                end)
-                                -- Put back as it was whatever happened above (a tool destroyed meanwhile has nothing to put back).
-                                pcall(function()
-                                    bullet_tp_tool["Parent"] = local_player["Backpack"]
-                                    bullet_tp_tool["Grip"] = original_grip
-                                    bullet_tp_tool["Parent"] = local_character
-                                end)
-                                -- re-enable the grip connections that were on before
-                                pcall(function()
-                                    for _, conn in grip_watchers do
-                                        conn:Enable()
-                                    end
-                                end)
-                                hide_manager["bullet_tp_busy"] = nil
+                                if walls_aim and walls_aim(origin + vector3_new(0, 3.0208, 0), pos, reach) == nil then
+                                    chosen_gun = nil
+                                end
                             end
                         end
 
@@ -30670,7 +30685,7 @@ end
                 elseif follow_target_stop_if_no_gun_equipped and not local_gun then
                     local_following = false
                     return
-                elseif hide_manager["healing"] and flags["auto_heal_stop_following"] then
+                elseif hide_manager["healing"] and flags["auto_heal"] == true and flags["auto_heal_stop_following"] == true then
                     -- Auto Heal's Stop Following While Healing: the popcorn is out and being eaten.
                     local_following = false
                     return
@@ -32061,11 +32076,36 @@ end
             local hide = hide_manager["set_hide_reason"]
 
             if hide then
-                hide("healing", active and flags["auto_heal_stop_following"] == true, true)
+                hide("healing", active and flags["auto_heal"] == true and flags["auto_heal_stop_following"] == true, true)
+            end
+        end
+
+        -- the popcorn goes back in the bag instead of staying out
+        local put_popcorn_back = function()
+            local held = popcorn
+            popcorn = nil
+
+            if held then
+                pcall(function()
+                    if held["Parent"] == local_character then
+                        setscriptable(held, "Parent", true)
+                        held["Parent"] = local_player["Backpack"]
+                    end
+                end)
             end
         end
 
         local do_auto_heal = LPH_JIT_MAX(function(dt, hrp)
+            -- Whatever scheduled this step, it does nothing while Auto Heal is off: no popcorn bought, taken out or eaten, no void hide.
+            if flags["auto_heal"] ~= true then
+                if popcorn then
+                    put_popcorn_back()
+                end
+
+                set_healing(false)
+                return
+            end
+
             local humanoid = local_parts["Humanoid"]
 
             if not humanoid or local_knocked or purchasing then
@@ -32123,15 +32163,7 @@ end
                 heartbeat[#heartbeat+1] = do_auto_heal
             elseif popcorn then
                 -- Switched off with the popcorn in hand: it goes back in the bag instead of staying out.
-                local held = popcorn
-                popcorn = nil
-
-                pcall(function()
-                    if held["Parent"] == local_character then
-                        setscriptable(held, "Parent", true)
-                        held["Parent"] = local_player["Backpack"]
-                    end
-                end)
+                put_popcorn_back()
             end
         end)
 
@@ -32814,7 +32846,7 @@ end
         local stomp_priority_since = nil
 
         hide_manager["stomp_priority"] = LPH_NO_VIRTUALIZE(function()
-            if flags["auto_stomp"] ~= true or flags["auto_stomp_prioritize_over_reload"] ~= true or local_knocked then
+            if flags["auto_stomp"] ~= true or (flags["auto_stomp_prioritize_over_reload"] ~= true and flags["auto_reload_wait_for_stomp"] ~= true) or local_knocked then
                 stomp_priority_since = nil
                 return false
             end
@@ -32844,7 +32876,7 @@ end
 
         local do_auto_stomp = LPH_JIT_MAX(function(dt, hrp, bypass)
             -- A knocked out character can't stomp, and the Stomp requests would only fight Anti Stomp for the character.
-            if hrp and not purchasing and (not local_reloading or flags["auto_stomp_prioritize_over_reload"] == true) and (not in_void or bypass) and not local_knocked then
+            if hrp and not purchasing and (not local_reloading or flags["auto_stomp_prioritize_over_reload"] == true or flags["auto_reload_wait_for_stomp"] == true) and (not in_void or bypass) and not local_knocked then
                 local tick = clock()
 
                 local targets = gather_stomp_targets()
