@@ -4462,6 +4462,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_stomp_stop_when_dead"] = {"auto_stomp_stop_when_dead", "auto_stomp_stop_when_dead"},
 	["auto_stomp_target_statuses"] = {"auto_stomp_target_statuses", "auto_stomp_target_statuses", "list"},
 	["auto_stomp_wait_for_all"] = {"auto_stomp_wait_for_all", "auto_stomp_wait_for_all"},
+	["auto_stomp_prioritize_over_reload"] = {"auto_stomp_prioritize_over_reload", "auto_stomp_prioritize_over_reload"},
 	["auto_ammo_disable_when"] = {"auto_ammo_disable_when", "auto_ammo_disable_when", "list"},
 	["auto_ammo_minimum_clips"] = {"auto_ammo_minimum_clips", "auto_ammo_minimum_clips"},
 	["auto_ammo_purchase_amount"] = {"auto_ammo_purchase_amount", "auto_ammo_purchase_amount"},
@@ -8155,6 +8156,7 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(stomp, "Stop When Target Dead", "auto_stomp_stop_when_dead", false)
 	panelList(stomp, "Target Statuses", "auto_stomp_target_statuses", statuses, { "target" })
 	panelToggle(stomp, "Wait For All Targets Knocked", "auto_stomp_wait_for_all", false)
+	panelToggle(stomp, "Prioritize Over Reloading", "auto_stomp_prioritize_over_reload", false)
 
 	local ammo = rows.autoAmmo:AddOption()
 	panelList(ammo, "Disable When", "auto_ammo_disable_when", { "target alive" }, {})
@@ -27877,6 +27879,7 @@ end
         menu_references["auto_stomp_stop_when_dead"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "stop when target dead"}, {["toggle"] = {["flag"] = "auto_stomp_stop_when_dead", ["default"] = false}})
         menu_references["auto_stomp_target_statuses"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "target statuses"}, {["dropdown"] = {["flag"] = "auto_stomp_target_statuses", ["options"] = {"friendly", "neutral", "target", "enemy"}, ["default"] = {"target"}, ["multi"] = true, ["requires_one"] = true}})
         menu_references["auto_stomp_wait_for_all"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "wait for all targets knocked"}, {["toggle"] = {["flag"] = "auto_stomp_wait_for_all", ["default"] = false}})
+        menu_references["auto_stomp_prioritize_over_reload"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "prioritize over reloading"}, {["toggle"] = {["flag"] = "auto_stomp_prioritize_over_reload", ["default"] = false}})
         menu_references["auto_ammo"] = menu_references["utility_section"]:create_element({["name"] = "auto ammo"}, {["toggle"] = {["flag"] = "auto_ammo"}})
         menu_references["auto_ammo_settings"] = menu_references["auto_ammo"]:create_settings()
         menu_references["auto_ammo_disable_when"] = menu_references["auto_ammo_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"target alive"}, ["flag"] = "auto_ammo_disable_when", ["multi"] = true, ["requires_one"] = false}})
@@ -29008,6 +29011,15 @@ end
         -- until the queue is empty.
         if wants and reload_current == nil and not hide_reasons["reload"] and not reload_batch_ready() then
             wants = false
+        end
+
+        -- Auto Stomp's Prioritize Over Reloading: a target that can be stomped goes first, the reload waits for it.
+        if wants then
+            local stomp_priority = hide_manager["stomp_priority"]
+
+            if stomp_priority and stomp_priority() then
+                wants = false
+            end
         end
 
         set_hide_reason("reload", wants, true)
@@ -32651,19 +32663,68 @@ end
             return false
         end)
 
+        -- The players the auto stomp is going for this frame.
+        local gather_stomp_targets = LPH_NO_VIRTUALIZE(function()
+            local targets = auto_stomp_target_target and {ragebot_target} or {}
+
+            for player, data in player_data do
+                local status = data[1]
+                if auto_stomp_target_neutral and status == 1 or auto_stomp_target_enemy and status == 3 or auto_stomp_target_friendly and status == 2 or ragebot_targets[data] then
+                    targets[#targets+1] = data
+                end
+            end
+
+            return targets
+        end)
+
+        -- Whether this target is one to stomp right now (not held back by Wait For All, not grabbed, knocked or dead, not flying about).
+        local stompable = LPH_NO_VIRTUALIZE(function(target, waiting)
+            local torso = target[4]["UpperTorso"]
+
+            return torso ~= nil and not waiting and not target[4]["GRABBING_CONSTRAINT"] and (not auto_stomp_stop_when_dead or not target[7]) and (target[18] or target[7]) and torso["Velocity"]["Magnitude"] < 100
+        end)
+
+        -- Prioritize Over Reloading: true while a target can be stomped and the setting is on. The reload step holds back its void hide for as long as
+        -- this is true, and the stomp no longer waits for a reload that is under way. A target that stays stompable (a dead one waiting for the respawn,
+        -- with Stop When Target Dead off) only holds the reload back for STOMP_PRIORITY_MAX seconds, so a reload can never be starved.
+        local STOMP_PRIORITY_MAX = 4
+        local stomp_priority_since = nil
+
+        hide_manager["stomp_priority"] = LPH_NO_VIRTUALIZE(function()
+            if flags["auto_stomp"] ~= true or flags["auto_stomp_prioritize_over_reload"] ~= true or local_knocked then
+                stomp_priority_since = nil
+                return false
+            end
+
+            local targets = gather_stomp_targets()
+            local waiting = auto_stomp_wait_for_all and any_target_standing(targets)
+            local wanted = false
+
+            for _, target in targets do
+                if stompable(target, waiting) then
+                    wanted = true
+                    break
+                end
+            end
+
+            if not wanted then
+                stomp_priority_since = nil
+                return false
+            end
+
+            local now = clock()
+
+            stomp_priority_since = stomp_priority_since or now
+
+            return now - stomp_priority_since < STOMP_PRIORITY_MAX
+        end)
+
         local do_auto_stomp = LPH_JIT_MAX(function(dt, hrp, bypass)
             -- A knocked out character can't stomp, and the Stomp requests would only fight Anti Stomp for the character.
-            if hrp and not purchasing and not local_reloading and (not in_void or bypass) and not local_knocked then
+            if hrp and not purchasing and (not local_reloading or flags["auto_stomp_prioritize_over_reload"] == true) and (not in_void or bypass) and not local_knocked then
                 local tick = clock()
 
-                local targets = auto_stomp_target_target and {ragebot_target} or {}
-
-                for player, data in player_data do
-                    local status = data[1]
-                    if auto_stomp_target_neutral and status == 1 or auto_stomp_target_enemy and status == 3 or auto_stomp_target_friendly and status == 2 or ragebot_targets[data] then
-                        targets[#targets+1] = data
-                    end
-                end
+                local targets = gather_stomp_targets()
 
                 local old = local_client_position
                 local found_target = false
@@ -32672,9 +32733,7 @@ end
                     local torso = target[4]["UpperTorso"]
 
                     if torso then
-                        local velocity = torso["Velocity"]
-
-                        if not waiting and not target[4]["GRABBING_CONSTRAINT"] and (not auto_stomp_stop_when_dead or not target[7]) and (target[18] or target[7]) and torso and velocity["Magnitude"] < 100 then
+                        if stompable(target, waiting) then
                             if tick - auto_stomp_tick > 0.025 then
                                 auto_stomp_tick = tick
                                 event:FireServer("Stomp")
