@@ -4417,6 +4417,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_always_fire"] = {"auto_fire_always_fire", "auto_fire_always_fire"},
 	["auto_fire_dont_render"] = {"auto_fire_dont_render", "auto_fire_dont_render"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
+	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -8241,6 +8242,7 @@ function Session.buildSettingsPanels(rows)
 	})
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
+	panelToggle(autoFire, "Fast Retry", "auto_fire_fast_retry", false)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -27818,6 +27820,7 @@ end
         menu_references["auto_fire_always_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "always fire"}, {["toggle"] = {["flag"] = "auto_fire_always_fire", ["default"] = true}})
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
+        menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -28071,6 +28074,14 @@ end
             -- the server took the last one (the ammo moved): a whole cooldown. Otherwise one round trip, then ask again.
             if hide_manager["gun_ammo_sent"][tool] ~= ammo then
                 return elapsed >= wait_time + 0.0095
+            end
+
+            -- Fast Retry (BASED Hub's Da Hood ragebot asks again every 0.04 s until the ammo count moves, which it does about 0.03 s after the server took
+            -- a shot, and says a refused shot costs nothing): one round trip and a little more. Off by default: an account here was locked out of shooting
+            -- after a run of refused sends, and Bullet Manipulation's pulls cannot go faster than the gun script's own ToleranceCooldown (0.6 s) anyway, so
+            -- this only changes the shots sent directly. The back-off after a run of refusals above still applies. Policed guns (shotguns) never get here.
+            if flags["auto_fire_fast_retry"] == true then
+                return elapsed >= math.max(local_ping / 1000 + 0.06, 0.1)
             end
 
             -- A refused send is a violation the server counts, so it is not asked again straight away.
