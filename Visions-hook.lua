@@ -4483,6 +4483,34 @@ local function createJujuLib()
 			table.insert(V.Borrows, { Entry = entry, Item = item, Home = home, Slot = slot })
 		end
 
+		-- the panels were drawn in one accent and are shown in the other: every colour that is exactly the other one is swapped
+		local CLASSIC_ACCENT, VISIONS_ACCENT = ACCENT, VISIONS_THEME.Accent
+		local COLOR_PROPERTIES = { "BackgroundColor3", "ScrollBarImageColor3", "TextColor3", "ImageColor3", "Color", "BorderColor3", "PlaceholderColor3" }
+
+		local function recolor(root)
+			local want = Lib:Accent()
+			local other = want == VISIONS_ACCENT and CLASSIC_ACCENT or VISIONS_ACCENT
+			local function close(a, b)
+				return math.abs(a.R - b.R) + math.abs(a.G - b.G) + math.abs(a.B - b.B) < 0.02
+			end
+			local function paint(object)
+				for _, property in ipairs(COLOR_PROPERTIES) do
+					local ok, value = pcall(function()
+						return object[property]
+					end)
+					if ok and typeof(value) == "Color3" and close(value, other) then
+						pcall(function()
+							object[property] = want
+						end)
+					end
+				end
+			end
+			paint(root)
+			for _, object in ipairs(root:GetDescendants()) do
+				paint(object)
+			end
+		end
+
 		local function placeBorrows(activeEntry)
 			local told = {}
 
@@ -4495,6 +4523,8 @@ local function createJujuLib()
 						item.Parent = wanted
 					end)
 				end
+
+				pcall(recolor, item)
 
 				local classicTab = borrow.Entry.Record.Tab
 				if classicTab and classicTab.Signal and told[classicTab] == nil then
@@ -13693,7 +13723,7 @@ local function buildSkinsTab()
 		list.BorderSizePixel = 0
 		list.CanvasSize = UDim2.new()
 		list.Position = position
-		list.ScrollBarImageColor3 = ACCENT_COLOR
+		list.ScrollBarImageColor3 = (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 		list.ScrollBarThickness = 2
 		list.Size = size
 		list.ZIndex = 22
@@ -13711,7 +13741,7 @@ local function buildSkinsTab()
 	local function newRow(parent, text, order)
 		local button = Instance.new("TextButton")
 		button.AutoButtonColor = false
-		button.BackgroundColor3 = ACCENT_COLOR
+		button.BackgroundColor3 = (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 		button.BackgroundTransparency = 1
 		button.BorderSizePixel = 0
 		button.LayoutOrder = order
@@ -13730,7 +13760,7 @@ local function buildSkinsTab()
 		-- Marks the row of whatever is currently applied.
 		local dot = Instance.new("Frame")
 		dot.AnchorPoint = Vector2.new(1, 0.5)
-		dot.BackgroundColor3 = ACCENT_COLOR
+		dot.BackgroundColor3 = (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 		dot.BorderSizePixel = 0
 		dot.Position = UDim2.new(1, -8, 0.5, 0)
 		dot.Size = UDim2.fromOffset(6, 6)
@@ -13747,12 +13777,12 @@ local function buildSkinsTab()
 		row.Label.TextTransparency = selected and 0 or 0.25
 	end
 
-	-- Layout: weapon list | skin list | preview (624 wide, 8px gaps).
-	local weaponCard = newCard(UDim2.fromOffset(8, 8), UDim2.new(0, 118, 1, -16))
+	-- Layout: weapon list | skin list | preview, sharing the page's width (19% / 32% / the rest, 8px gaps), so it fills whichever window it is in.
+	local weaponCard = newCard(UDim2.fromOffset(8, 8), UDim2.new(0.19, -12, 1, -16))
 	newTitle(weaponCard, "WEAPON")
 	local weaponList = newList(weaponCard, UDim2.fromOffset(6, 28), UDim2.new(1, -12, 1, -34))
 
-	local skinCard = newCard(UDim2.fromOffset(134, 8), UDim2.new(0, 196, 1, -16))
+	local skinCard = newCard(UDim2.new(0.19, 4, 0, 8), UDim2.new(0.32, -8, 1, -16))
 	local skinTitle = newTitle(skinCard, "SKINS")
 
 	local searchBox = Instance.new("TextBox")
@@ -13782,7 +13812,7 @@ local function buildSkinsTab()
 
 	local skinList = newList(skinCard, UDim2.fromOffset(6, 60), UDim2.new(1, -12, 1, -66))
 
-	local previewCard = newCard(UDim2.fromOffset(338, 8), UDim2.new(0, 278, 1, -16))
+	local previewCard = newCard(UDim2.new(0.51, 4, 0, 8), UDim2.new(0.49, -12, 1, -16))
 	newTitle(previewCard, "PREVIEW")
 
 	local viewport = Instance.new("ViewportFrame")
@@ -13857,6 +13887,13 @@ local function buildSkinsTab()
 	local applyButton = newActionButton("Apply", UDim2.new(0, 8, 1, -8), 112)
 	local spinButton = newActionButton("Spin: on", UDim2.new(0, 126, 1, -8), 70)
 	local soundButton = newActionButton("Sound", UDim2.new(0, 202, 1, -8), 68)
+
+	-- the three buttons share the card's width too (Apply the widest)
+	applyButton.Size = UDim2.new(0.42, -10, 0, 28)
+	spinButton.Position = UDim2.new(0.42, 2, 1, -8)
+	spinButton.Size = UDim2.new(0.29, -6, 0, 28)
+	soundButton.Position = UDim2.new(0.71, 0, 1, -8)
+	soundButton.Size = UDim2.new(0.29, -8, 0, 28)
 
 	-- State of the browser. skin is what is being previewed, skins[tool] is what is applied.
 	local view = { weapon = nil, skin = SKIN_DEFAULT, search = "", rows = {}, weaponRows = {}, built = {} }
@@ -14122,7 +14159,7 @@ local function buildSkinsTab()
 
 		applyButton.Text = isApplied and "Applied" or "Apply"
 		applyButton.TextTransparency = isApplied and 0.5 or 0
-		applyButton.BackgroundColor3 = isApplied and CARD_COLOR or ACCENT_COLOR
+		applyButton.BackgroundColor3 = isApplied and CARD_COLOR or (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 		soundButton.Visible = soundId ~= nil
 	end
 
@@ -14491,7 +14528,7 @@ local function buildPlayerListTab()
 	scroll.BorderSizePixel = 1
 	scroll.CanvasSize = UDim2.new()
 	scroll.LayoutOrder = listSection.NextOrder()
-	scroll.ScrollBarImageColor3 = ACCENT_COLOR
+	scroll.ScrollBarImageColor3 = (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 	scroll.ScrollBarThickness = 3
 	scroll.Size = UDim2.new(1, 0, 0, 330)
 	scroll.Parent = listSection.Body
@@ -14682,7 +14719,7 @@ local function buildPlayerListTab()
 		button.Parent = scroll
 
 		local marker = Instance.new("Frame")
-		marker.BackgroundColor3 = ACCENT_COLOR
+		marker.BackgroundColor3 = (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 		marker.BorderSizePixel = 0
 		marker.Size = UDim2.new(0, 3, 1, 0)
 		marker.Visible = false
