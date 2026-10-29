@@ -3754,51 +3754,107 @@ local function createJujuLib()
 		end)
 
 		---------- watermark ----------
+		-- A dark bar at the bottom of the screen with a thin accent line on top:
+		--   femmyhac.cc | <game> | <player> | <fps> fps | <ping> ms | <time>
+		-- (the name in the accent colour). It keeps itself up to date twice a second. Clicking it opens and closes the menu (the blocks the
+		-- menu adds keep working: their Input goes to the bar, their text is not shown).
 		function window:Watermark()
 			local watermark = {}
 
-			local frame = new("Frame", {
+			local frame = new("TextButton", {
 				Name = "Watermark",
-				AnchorPoint = Vector2.new(1, 0),
+				AnchorPoint = Vector2.new(0.5, 1),
+				AutoButtonColor = false,
 				AutomaticSize = Enum.AutomaticSize.X,
-				BackgroundColor3 = MENU_COLOR,
-				BorderColor3 = LINE_COLOR,
-				BorderSizePixel = 1,
-				Position = UDim2.new(1, -12, 0, 12),
-				Size = UDim2.fromOffset(10, 24),
+				BackgroundColor3 = Color3.fromRGB(12, 12, 14),
+				BackgroundTransparency = 0.12,
+				BorderSizePixel = 0,
+				Position = UDim2.new(0.5, 0, 1, -64),
+				Size = UDim2.fromOffset(10, 26),
+				Text = "",
 				Visible = false,
 				ZIndex = 20,
 			}, gui)
-			local line = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), ZIndex = 21 }, frame)
-			new("UIGradient", { Color = GRADIENT }, line)
-			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 12) }, frame)
-			new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, frame)
+			new("UIStroke", { Color = Color3.fromRGB(0, 0, 0), Transparency = 0.4, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, frame)
+			new("Frame", { Name = "Line", BackgroundColor3 = ACCENT, BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), ZIndex = 21 }, frame)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9), PaddingTop = UDim.new(0, 2) }, frame)
 
-			local count = 0
+			local label = new("TextLabel", {
+				Name = "Text",
+				AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundTransparency = 1,
+				Font = FONT,
+				RichText = true,
+				Size = UDim2.new(0, 10, 1, 0),
+				Text = "",
+				TextColor3 = Color3.fromRGB(205, 205, 210),
+				TextSize = 14,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 21,
+			}, frame)
 
-			function watermark:AddBlock(_, text)
-				count += 1
+			local player_name = game:GetService("Players").LocalPlayer.Name
+			local game_name = "Roblox"
 
-				local block = {}
-				local button = new("TextButton", {
-					AutoButtonColor = false,
-					AutomaticSize = Enum.AutomaticSize.X,
-					BackgroundTransparency = 1,
-					Font = FONT,
-					LayoutOrder = count,
-					Size = UDim2.fromOffset(10, 20),
-					Text = tostring(text),
-					TextColor3 = TEXT_COLOR,
-					TextSize = 15,
-					ZIndex = 21,
-				}, frame)
+			task.spawn(function()
+				local ok, info = pcall(function()
+					return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+				end)
 
-				function block:SetText(newText)
-					button.Text = tostring(newText)
+				if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+					game_name = info.Name
+				end
+			end)
+
+			local frames, fps = 0, 0
+			local counted_at = os.clock()
+			local alive = true
+
+			local frame_counter = game:GetService("RunService").RenderStepped:Connect(function()
+				frames += 1
+			end)
+
+			local function accent_hex()
+				return string.format("#%02X%02X%02X", math.floor(ACCENT.R * 255 + 0.5), math.floor(ACCENT.G * 255 + 0.5), math.floor(ACCENT.B * 255 + 0.5))
+			end
+
+			local function refresh()
+				local now = os.clock()
+
+				if now - counted_at > 0 then
+					fps = math.floor(frames / (now - counted_at) + 0.5)
 				end
 
+				frames, counted_at = 0, now
+
+				local ping = 0
+				pcall(function()
+					ping = math.floor(game:GetService("Players").LocalPlayer:GetNetworkPing() * 1000 + 0.5)
+				end)
+
+				label.Text = string.format('<font color="%s">femmyhac.cc</font> | %s | %s | %d fps | %d ms | %s', accent_hex(), game_name, player_name, fps, ping, os.date("%H:%M:%S"))
+			end
+
+			task.spawn(function()
+				while alive and frame.Parent do
+					refresh()
+					task.wait(0.5)
+				end
+
+				frame_counter:Disconnect()
+			end)
+
+			frame.Destroying:Connect(function()
+				alive = false
+			end)
+
+			function watermark:AddBlock(_, text)
+				local block = {}
+
+				function block:SetText(newText) end
+
 				function block:Input(callback)
-					button.MouseButton1Click:Connect(callback)
+					frame.MouseButton1Click:Connect(callback)
 				end
 
 				return block
@@ -3806,6 +3862,10 @@ local function createJujuLib()
 
 			function watermark:SetRender(visible)
 				frame.Visible = visible and true or false
+
+				if visible then
+					refresh()
+				end
 			end
 
 			return watermark
@@ -19250,7 +19310,7 @@ do
         end
 
         line["Transparency"] = 0.7 * (1 - (flags["center_panel_secondary_transparency"] or 0))
-        line["Position"] = anchor["Position"] + vector2_new(0, 13)
+        line["Position"] = anchor["Position"] + vector2_new(0, 15)
 
         if not line["Visible"] then
             line["Visible"] = true
@@ -19277,24 +19337,21 @@ do
 
         local update_center_panel = LPH_JIT_MAX(function(bypass)
             local screen_size = camera["ViewportSize"]/2
-            local x_size = screen_size["X"] - 4
-            local y_size = screen_size["Y"] - 2
 
             local neverlose_textbounds = text["TextBounds"]
             local build_textbounds = text2["TextBounds"]
 
             local total_size = neverlose_textbounds["X"] + build_textbounds["X"] + 13
-            local do_offset = user_input_service["MouseBehavior"] ~= Enum["MouseBehavior"]["Default"]
-            local offset = do_offset and total_size/2 + 5 or 0
-
-            y_size = do_offset and y_size + 5 or y_size - neverlose_textbounds["Y"]/2
-
             local shadow_size = floor(total_size/11)
 
-            local new_text_position = vector2_new(x_size - neverlose_textbounds["X"] + offset - 3, y_size + 1)
-            local new_text2_position = vector2_new(x_size + 12 + offset, y_size + 1)
-            local new_heart_position = vector2_new(x_size + offset, y_size + 3)
-            local new_text3_position = vector2_new(x_size + offset + 5, y_size + 14)
+            -- Under the crosshair, centred: the state ("ragebot: reloading..."), then the name, then the target / resolver line (cp_target_update).
+            local center_x = screen_size["X"]
+            local below = screen_size["Y"] + 22
+
+            local new_text3_position = vector2_new(center_x, below)
+            local new_text_position = vector2_new(center_x, below + 13)
+            local new_text2_position = new_text_position
+            local new_heart_position = new_text_position
 
             local new_shadow_position = new_text_position - vector2_new(shadow_size / 2, 0)
 
@@ -19317,21 +19374,21 @@ do
         end)
 
         local do_center_panel = LPH_JIT_MAX(function(dt)
-            hide_manager["cp_target_update"](text3)
+            hide_manager["cp_target_update"](text)
 
             local old = text3["Text"]
-            local new = local_reloading and "reloading" or local_following and "following" or stomping and "stomping" or purchasing and "purchasing" or (in_void or in_void == nil) and "void" or (local_parts["ForceField"] and "invulnerable" or "unsafe")
+            local state = local_reloading and "reloading" or local_following and "following" or stomping and "stomping" or purchasing and "purchasing" or (in_void or in_void == nil) and "void" or (local_parts["ForceField"] and "invulnerable" or "unsafe")
+            local new = "ragebot: " .. state .. "..."
             text3["Text"] = new
             if old ~= new then
                 local secondary = 1 - (flags["center_panel_secondary_transparency"] or 0)
 
-                tween(text3, {["Transparency"] = 0.35 * secondary}, linear, out, 0.09)
-                if new ~= "void" then
-                    delay(0.07, tween, text3, {["Transparency"] = 0.7 * secondary}, linear, out, 0.09)
-                end
+                tween(text3, {["Transparency"] = 0.6 * secondary}, linear, out, 0.09)
+                delay(0.07, tween, text3, {["Transparency"] = 0.85 * secondary}, linear, out, 0.09)
             end
             local tick = clock()
-            if tick - last_beat > 0.8 then
+            -- (the heart and its beat are gone from the new look)
+            if false and tick - last_beat > 0.8 then
                 last_beat = tick
                 local heart_position = heart["Position"]
 
@@ -19424,8 +19481,9 @@ do
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
                     ["Visible"] = true,
+                    ["Center"] = true,
                     ["Text"] = "femmyhac.cc",
-                    ["Size"] = 12,
+                    ["Size"] = 14,
                     ["Font"] = 2,
                     ["Outline"] = true,
                     ["Position"] = vector2_new(0, 0),
@@ -19442,15 +19500,17 @@ do
                     ["Outline"] = true,
                     ["Position"] = vector2_new(0, 0),
                 })
+                -- the new look has no "live" tag, no glow and no heart
+                text2["Visible"] = false
 
                 text3 = create_real_drawing("Text", {
                     ["Color"] = flags["center_panel_secondary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
                     ["Center"] = true,
-                    ["Text"] = "void",
+                    ["Text"] = "ragebot: void...",
                     ["Size"] = 12,
-                    ["Visible"] = flags["center_panel_show_state"],
+                    ["Visible"] = flags["center_panel_show_state"] ~= false,
                     ["Font"] = 2,
                     ["Outline"] = true,
                     ["Position"] = vector2_new(0, 0),
@@ -19473,7 +19533,7 @@ do
                     ["Color"] = flags["center_panel_primary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 3,
-                    ["Visible"] = true,
+                    ["Visible"] = false,
                     ["Data"] = shadow_image_data,
                     ["Position"] = vector2_new(0, 0),
                     ["Size"] = vector2_new(76, 18),
@@ -19483,7 +19543,7 @@ do
                     ["Color"] = flags["center_panel_primary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
-                    ["Visible"] = true,
+                    ["Visible"] = false,
                     ["Data"] = heart_image_data,
                     ["Position"] = vector2_new(0, 0),
                     ["Size"] = vector2_new(9, 9),
@@ -19493,7 +19553,7 @@ do
                     ["Color"] = flags["center_panel_primary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 1,
-                    ["Visible"] = true,
+                    ["Visible"] = false,
                     ["Data"] = heart_overlay_image_data,
                     ["Position"] = vector2_new(0, 0),
                     ["Size"] = vector2_new(9, 9),
@@ -19507,7 +19567,7 @@ do
                 tween(shadow, {["Transparency"] = 0.2 * primary}, quad, out, 0.3)
                 tween(heart, {["Transparency"] = primary}, quad, out, 0.3)
                 tween(text2, {["Transparency"] = secondary}, quad, out, 0.3)
-                tween(text3, {["Transparency"] = 0.5 * secondary}, quad, out, 0.3)
+                tween(text3, {["Transparency"] = 0.85 * secondary}, quad, out, 0.3)
 
                 update_center_panel(1)
             end
@@ -19544,7 +19604,7 @@ do
 
                 text["Transparency"] = secondary
                 text2["Transparency"] = secondary
-                text3["Transparency"] = (text3["Text"] == "void" and 0.35 or 0.7) * secondary
+                text3["Transparency"] = 0.85 * secondary
             end
         end)
 
