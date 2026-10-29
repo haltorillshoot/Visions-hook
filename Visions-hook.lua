@@ -4473,6 +4473,40 @@ local function createJujuLib()
 		end
 
 		local V = { Syncs = {}, Tabs = {}, Count = 0 }
+
+		-- Panels a tab draws by itself (the Player List's list, the whole Skins browser) are not rows, so they cannot be drawn twice. They are
+		-- borrowed instead: while the Visions look is on screen with that tab open, the classic panel itself is moved into it (and that classic
+		-- tab is told it is open, which is what those panels listen to), and it goes back the moment the tab, the look or the menu changes.
+		V.Borrows = {}
+
+		local function borrowFor(entry, item, home, slot)
+			table.insert(V.Borrows, { Entry = entry, Item = item, Home = home, Slot = slot })
+		end
+
+		local function placeBorrows(activeEntry)
+			local told = {}
+
+			for _, borrow in ipairs(V.Borrows) do
+				local item = borrow.Item
+				local wanted = borrow.Entry == activeEntry and borrow.Slot or borrow.Home
+
+				if item.Parent ~= wanted and wanted.Parent ~= nil then
+					pcall(function()
+						item.Parent = wanted
+					end)
+				end
+
+				local classicTab = borrow.Entry.Record.Tab
+				if classicTab and classicTab.Signal and told[classicTab] == nil then
+					local open = borrow.Entry == activeEntry or (classicTab.Page and classicTab.Page.Visible and window.Panel.Visible) or false
+					told[classicTab] = open
+					if classicTab.Signal:GetValue() ~= open then
+						classicTab.Signal:Fire(open)
+					end
+				end
+			end
+		end
+		V.PlaceBorrows = placeBorrows
 		local function countRecords()
 			local n = 0
 			local function rows(list)
@@ -5098,7 +5132,7 @@ local function createJujuLib()
 					Name = tostring(rowRecord.Name),
 					AutomaticSize = Enum.AutomaticSize.Y,
 					BackgroundTransparency = 1,
-					LayoutOrder = index,
+					LayoutOrder = typeof(rowRecord.Row) == "Instance" and rowRecord.Row.LayoutOrder or index,
 					Size = UDim2.new(1, 0, 0, 22),
 				}, parent)
 				new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3) }, rowFrame)
@@ -5175,6 +5209,11 @@ local function createJujuLib()
 				entry.Built = true
 				entry.Build()
 			end
+
+			V.Current = entry
+			if frame.Visible then
+				placeBorrows(entry)
+			end
 		end
 
 		local ordered = table.clone(Lib.MenuRecord)
@@ -5217,17 +5256,18 @@ local function createJujuLib()
 			-- a page is drawn the first time it is opened, so a menu with hundreds of rows opens at once
 			entry.Build = function()
 				if #tabRecord.Sections == 0 then
-					textLabel(page, "This tab is drawn by the classic look only.", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.45), Size = UDim2.fromOffset(320, 20), TextColor3 = T.TextDim, TextXAlignment = Enum.TextXAlignment.Center })
-					local open = box(page, 160, 26)
-					open.AnchorPoint = Vector2.new(0.5, 0)
-					open.Position = UDim2.fromScale(0.5, 0.5)
-					open.Text = "Open it in Classic"
-					bind(open.MouseButton1Click, function()
-						Lib:SetMenuStyle("classic", true)
-						pcall(function()
-							window:SelectTab(tabRecord.Tab)
-						end)
-					end)
+					-- the tab draws everything itself (the Skins browser): its classic page content is shown here
+					local slot = new("Frame", { Name = "Borrowed", BackgroundTransparency = 1, ClipsDescendants = true, Size = UDim2.fromScale(1, 1) }, page)
+					local classicPage = tabRecord.Tab and tabRecord.Tab.Page
+
+					if typeof(classicPage) == "Instance" then
+						for _, child in ipairs(classicPage:GetChildren()) do
+							if child:IsA("GuiObject") and child ~= tabRecord.Tab.Left and child ~= tabRecord.Tab.Right then
+								borrowFor(entry, child, classicPage, slot)
+							end
+						end
+					end
+
 					return
 				end
 
@@ -5276,6 +5316,22 @@ local function createJujuLib()
 					end)
 
 					renderRows(sectionRecord.Rows, body, 0)
+
+					-- a panel the section draws by itself (the Player List's list) is borrowed into this section
+					local classicBody = sectionRecord.Section and sectionRecord.Section.Body
+					if typeof(classicBody) == "Instance" then
+						local isRow = {}
+						for _, rowRecord in ipairs(sectionRecord.Rows) do
+							if typeof(rowRecord.Row) == "Instance" then
+								isRow[rowRecord.Row] = true
+							end
+						end
+						for _, child in ipairs(classicBody:GetChildren()) do
+							if child:IsA("GuiObject") and not isRow[child] then
+								borrowFor(entry, child, classicBody, body)
+							end
+						end
+					end
 
 					local shownVisible = nil
 					sync(function()
@@ -5391,6 +5447,8 @@ local function createJujuLib()
 					end
 				end
 				if fresh ~= visions.Shallow then
+					-- borrowed panels go home first, or they would be destroyed with the old drawing
+					pcall(visions.PlaceBorrows, nil)
 					visions.Frame:Destroy()
 					visions = nil
 				end
@@ -5419,6 +5477,13 @@ local function createJujuLib()
 		window.Panel.Visible = open and style == "classic"
 		if visions and visions.Frame.Parent then
 			visions.Frame.Visible = open and style == "visions"
+
+			-- borrowed panels sit in the Visions look while it is on screen, and are back in the classic menu otherwise
+			if style == "visions" and open then
+				pcall(visions.PlaceBorrows, visions.Current)
+			elseif style == "classic" then
+				pcall(visions.PlaceBorrows, nil)
+			end
 		end
 	end
 	Lib.ApplyMenuStyle = applyMenuStyle
@@ -14708,7 +14773,8 @@ local function buildPlayerListTab()
 		while Session.Alive do
 			task.wait(1)
 
-			if Session.Alive and tab.Signal:GetValue() then
+			-- while the menu is open, whatever tab or look is showing, so the list always has everyone
+			if Session.Alive and (tab.Signal:GetValue() or menuIsOpen()) then
 				refresh()
 				describeSelected()
 			end
