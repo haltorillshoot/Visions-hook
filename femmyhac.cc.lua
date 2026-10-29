@@ -8106,7 +8106,8 @@ function Session.buildSettingsPanels(rows)
 	-- Spam resolver --
 	local resolver = rows.spamResolver:AddOption()
 	-- Two resolvers: "cluster" aims at the busiest cluster of the spots the target was seen at; "weighted" gives every spot a weight that fades,
-	-- merges close spots and aims at the best scoring one. The distance penalty and the lerp are shared; the rest belongs to one of them.
+	-- merges close spots and aims at the best scoring one. The distance penalty is shared; the rest belongs to one of them (the lerp is the weighted one's:
+	-- the cluster resolver holds its spot and goes straight onto the target once it is close).
 	local clusterRows, weightedRows = {}, {}
 	panelList(resolver, "Type", "resolver_type", { "cluster", "weighted" }, "cluster", function(value)
 		for _, row in ipairs(clusterRows) do
@@ -8126,7 +8127,7 @@ function Session.buildSettingsPanels(rows)
 	table.insert(weightedRows, select(2, panelSlider(resolver, "Void Trust", "void_spam_resolver_void_weight", 0.1, 5, 2, "", 0.2)))
 	table.insert(weightedRows, select(2, panelSlider(resolver, "Accuracy", "void_spam_resolver_accuracy", 5, 110, 2, "%", 76.82)))
 	panelSlider(resolver, "Distance Based Penalty", "ue_resolver_dist_penalty", 0, 5, 1, "x", 2)
-	panelSlider(resolver, "Lerp % When Close", "ue_resolver_lerp", 10, 100, 1, "%", 10, { [100] = "instant" })
+	table.insert(weightedRows, select(2, panelSlider(resolver, "Lerp % When Close", "ue_resolver_lerp", 10, 100, 1, "%", 10, { [100] = "instant" })))
 
 	-- The weighted rows only show for the weighted type.
 	for _, row in ipairs(weightedRows) do
@@ -28630,22 +28631,15 @@ end
     -- Clusters where the target has been over the last few seconds and aims at the busiest cluster instead of the spot it is drawn at: a target
     -- that hops between spots shows up at one of them far more often than at the others. A cluster is the spots within "forgiveness" studs of
     -- each other; a spot with 4 or more neighbours counts and the one with the most wins. Out Of Void Bonus widens the radius while the target
-    -- is on the map instead of in the far void, Distance Based Penalty narrows it the farther the target is from this client, and the history
-    -- is wiped every Refresh Time seconds. The clustering is re-run about 12 times a second, not on every frame.
+    -- is on the map instead of in the far void, Distance Based Penalty narrows it the farther the target is from this client.
+    -- Refresh Time is how often the resolver picks a new spot (from the sightings of the last Refresh Time): the answer is held in between, so the
+    -- aim does not follow the target, it flicks to the next spot. Until there is a first answer it is tried 12 times a second. Once the target is
+    -- within the radius of the held spot the aim goes straight onto the target (see the ragebot step).
     local ue_resolve = LPH_NO_VIRTUALIZE(function(position, now)
         local refresh_time = flags["ue_resolver_refresh"] or 3
-
-        if now - ue_resolver_refreshed >= refresh_time then
-            defensive_positions = {}
-
-            -- a refresh this short wipes the history before it can fill up: the last answer stands until a new one is found
-            if refresh_time >= 0.5 then
-                ue_resolver_result = nil
-            end
-
-            ue_resolver_checked = -1
-            ue_resolver_refreshed = now
-        end
+        -- only the sightings of the last Refresh Time count (a quarter of a second at the least, so there is something to cluster)
+        local window = refresh_time < 0.25 and 0.25 or refresh_time
+        local refresh_due = now - ue_resolver_refreshed >= refresh_time
 
         local forgiveness = flags["ue_resolver_forgiveness"] or 14.4
 
@@ -28668,22 +28662,30 @@ end
             defensive_positions = table["move"](defensive_positions, #defensive_positions - 299, #defensive_positions, 1, {})
         end
 
-        if now - ue_resolver_checked >= 0.08 then
+        if refresh_due or (ue_resolver_result == nil and now - ue_resolver_checked >= 0.08) then
             ue_resolver_checked = now
-
-            local previous = ue_resolver_result
-            ue_resolver_result = nil
 
             local history = defensive_positions
             local count = #history
-            local short_refresh = refresh_time < 0.5
-            local needed = short_refresh and 5 or 10
+            local first = 1
 
-            if short_refresh and count < needed then
-                ue_resolver_result = previous
+            while first < count and now - history[first]["time"] > window do
+                first = first + 1
             end
 
+            if first > 1 then
+                history = table["move"](history, first, count, 1, {})
+                defensive_positions = history
+                count = #history
+            end
+
+            local needed = refresh_time < 0.5 and 5 or 10
+
+            -- too few sightings: the answer held so far stands until there are enough
             if count >= needed then
+                ue_resolver_refreshed = now
+                ue_resolver_result = nil
+
                 local best_count = 0
                 local forgiveness_squared = forgiveness * forgiveness
 
@@ -28741,6 +28743,8 @@ end
 
         return ue_resolver_result
     end)
+
+    hide_manager["ue_resolve"] = ue_resolve
 
     -- >> ( weighted resolver )
     -- The other resolver (Type: weighted; the "void spam" resolver of the older builds). Every spot the target is seen at gets a weight. Spots within a
@@ -30160,14 +30164,10 @@ end
 
                     if resolved then
                         if not weighted then
-                            -- Lerp % When Close: while the target is within the cluster's radius of where the resolver put it, the aim moves that share of the
-                            -- way to where the target really is (100 = all of it, "instant"). A target that hardly moves gets three times the share, up to 60%.
-                            local lerp = clamp(tonumber(flags["ue_resolver_lerp"]) or 10, 10, 100)/100
-                            local target_speed = target_velocity and target_velocity["Magnitude"] or 0
-                            local share = lerp >= 1 and 1 or (target_speed < 5 and clamp(lerp * 3, lerp, math.max(lerp, 0.6)) or lerp)
-
+                            -- The aim does not follow the target: it stays on the spot the resolver found (a new one every Refresh Time) and flicks to the next
+                            -- one. Once the target is within the cluster's radius of that spot the aim goes straight onto the target.
                             if (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
-                                resolved = resolved:Lerp(hitbox_position, share)
+                                resolved = hitbox_position
                             end
                         end
 
@@ -30647,7 +30647,7 @@ end
             menu_references[name]:set_visible(not weighted)
         end
 
-        for _, name in {"void_spam_resolver_position_weight", "void_spam_resolver_forget_rate", "void_spam_resolver_void_weight", "void_spam_resolver_accuracy"} do
+        for _, name in {"void_spam_resolver_position_weight", "void_spam_resolver_forget_rate", "void_spam_resolver_void_weight", "void_spam_resolver_accuracy", "ue_resolver_lerp"} do
             menu_references[name]:set_visible(weighted)
         end
     end)
