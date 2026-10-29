@@ -30730,6 +30730,11 @@ end
                         local velocity = distance / (clock() - last_refresh)
                         local speed = velocity["Magnitude"]
 
+                        -- the resolver below trusts a target that moves like a player only when it has not jumped faster than anyone runs for a while
+                        if speed ~= speed or speed > 80 or torso_position["Magnitude"] >= 9e5 then
+                            hide_manager["target_jumped_at"] = clock()
+                        end
+
                         -- A void hop or a teleport is not movement. Fed into the prediction it grows every step when two followers chase
                         -- each other's predicted position, until both sit in the void for good.
                         if speed ~= speed or speed > 500 or torso_position["Magnitude"] >= 9e5 or target_last_position["Magnitude"] >= 9e5 then
@@ -30758,17 +30763,28 @@ end
 
                 local old_time = clock()
 
-                ragebot_aim_position = hitbox_position
+                -- Prediction: the lead from the target's measured velocity. It is worked out on its own, whatever the resolver does, so the two work
+                -- together: the resolver says WHERE the target really is, the prediction where it will be by the time the shot lands.
+                local lead = vector3_zero
 
                 if target_velocity then
-                    local lead = target_velocity*(prediction == 0 and 0 or prediction == 2 and local_ping/500 or prediction)
-                    local lead_length = lead["Magnitude"]
+                    local velocity = target_velocity
+
+                    -- With the resolver on, a "velocity" faster than anyone runs is the target's desync jumping about, not movement: no lead from it
+                    if flags["auto_fire_defensive"] and velocity["Magnitude"] > 80 then
+                        velocity = vector3_zero
+                    end
+
+                    local raw = velocity*(prediction == 0 and 0 or prediction == 2 and local_ping/500 or prediction)
+                    local lead_length = raw["Magnitude"]
 
                     -- The lead is capped, so a bad velocity sample can never throw the aim far away from the target.
                     if lead_length == lead_length then
-                        ragebot_aim_position+=(lead_length > 60 and lead["Unit"]*60 or lead)
+                        lead = lead_length > 60 and raw["Unit"]*60 or raw
                     end
                 end
+
+                ragebot_aim_position = hitbox_position + lead
 
                 local local_server_position = local_server_position["p"]
                 if flags["auto_fire_defensive"] then
@@ -30782,17 +30798,24 @@ end
                     end
 
                     if resolved then
-                        if not weighted then
-                            -- The aim does not follow the target: it stays on the spot the resolver found (a new one every Refresh Time) and flicks to the next
-                            -- one. Once the target is within the cluster's radius of that spot the aim goes straight onto the target.
-                            if (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
-                                resolved = hitbox_position
-                            end
+                        -- The resolved spot is the target itself (within the cluster's radius of where it shows): the aim is the target with the
+                        -- prediction's lead. A spot somewhere else (the target is faking its position): the aim stays on that spot and flicks to the next
+                        -- one every Refresh Time, with no lead (a guess of where the server has the body does not move with the faked velocity).
+                        -- The prediction's own readings (target_velocity, target_last_position) are not touched any more: they used to be zeroed and
+                        -- set to the resolved spot every frame, so the next velocity was measured from a spot the target never stood on.
+                        -- A target that moves like a player (under 80 studs/s, not in the void) is where it shows: measured against one walking back and
+                        -- forth, the resolver's spot (the middle of its recent positions, kept for the Refresh Time) put the aim 5.6 studs off the head and
+                        -- behind it. The resolver's spot is used only while the target jumps about faster than anyone runs (a desync, void spam).
+                        -- (a jump faster than that in the last 0.75 s counts too: between two jumps a faking target reads as standing still)
+                        local moves_like_a_player = hitbox_position["Magnitude"] < 9e5 and target_velocity ~= nil and target_velocity["Magnitude"] <= 80
+                            and clock() - (hide_manager["target_jumped_at"] or -1) > 0.75
+
+                        if moves_like_a_player or (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
+                            ragebot_aim_position = hitbox_position + lead
+                        else
+                            ragebot_aim_position = resolved
                         end
 
-                        ragebot_aim_position = resolved
-                        target_velocity = vector3_zero
-                        target_last_position = resolved
                         did_defensive = true
                     end
                 end
