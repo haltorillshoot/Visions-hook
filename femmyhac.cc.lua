@@ -8273,7 +8273,7 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Fast Retry", "auto_fire_fast_retry", false)
-	panelToggle(autoFire, "Salvo", "auto_fire_salvo", false)
+	panelToggle(autoFire, "Salvo", "auto_fire_salvo", true)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -15024,14 +15024,36 @@ do
                         -- server only until its SecurityTolerance runs out.
                         local shot_direction = (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir
 
-                        -- Salvo: the same shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when)
+                        local first = old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
+
+                        -- Salvo: the shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when). It is decided after the shot has
+                        -- gone: a method call made in here before old_namecall (tool:GetAttribute, say) replaces the namecall method and the shot is never
+                        -- sent (that is what turned every shot away in the first tests: 100 sends, none taken). The second goes out a frame later as a call
+                        -- of its own, which comes back through this hook and is rebuilt like any shot. Measured with two accounts: the first was taken at
+                        -- +0.03 s and the second 1.29 s later (twice), and two plain calls in a frame did the same (+0.05 s, +1.35 s).
                         local salvo_extra = hide_manager["salvo_extra"]
 
                         if salvo_extra and salvo_extra(handle) then
-                            old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
+                            local remote = self
+
+                            local salvo_delay = getgenv()["neverlose_salvo_delay"] or 0
+                            local send_held = function()
+                                -- (this call comes back through the hook: salvo_busy keeps it from asking for a held shot of its own)
+                                hide_manager["salvo_busy"] = true
+                                pcall(function()
+                                    remote:FireServer("ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
+                                end)
+                                hide_manager["salvo_busy"] = false
+                            end
+
+                            if salvo_delay > 0 then
+                                task["delay"](salvo_delay, send_held)
+                            else
+                                task["defer"](send_held)
+                            end
                         end
 
-                        return old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
+                        return first
                     end
 
                     -- bullet manipulation's hit checker: a shot that would miss the locked target is never sent
@@ -27858,7 +27880,7 @@ end
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
-        menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "salvo"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = false}})
+        menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "salvo"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -28181,12 +28203,14 @@ end
     -- over without looking at the claim again (two Rifle shots sent together were taken 0.02 s and 1.32 s later; a held one knocked a target that had gone 4,400
     -- studs off by then). So one claim that was good for a moment is worth two hits: a slow gun with a round to spare is sent its shot twice. Guns the server
     -- polices (the shotguns, which count every refused call) and the fast ones are left out. A reload cancels a held shot, so salvo_holding says when one may be
-    -- pending and the reloads wait. Not measured here: the server takes no shot at a map part, so it could only be seen on a player.
+    -- pending and the reloads wait. Measured here on two accounts (the server takes no shot at a map part, so it was done on a player): with the second call sent in
+    -- the same frame the Rifle's ammo dropped at +0.04 s and again 1.30 s later (6 of 7 tries), and the held shot did its damage (armor 130 and 42 health after it);
+    -- sent 0.016, 0.1 or 0.3 s later it was not held. The call has to go out after the shot (see the remote hook).
     hide_manager["salvo_sent"] = setmetatable({}, {["__mode"] = "k"})
     hide_manager["salvo_until"] = setmetatable({}, {["__mode"] = "k"})
 
     hide_manager["salvo_extra"] = function(handle)
-        if flags["auto_fire_salvo"] ~= true or typeof(handle) ~= "Instance" then
+        if flags["auto_fire_salvo"] ~= true or hide_manager["salvo_busy"] == true or typeof(handle) ~= "Instance" then
             return false
         end
 
