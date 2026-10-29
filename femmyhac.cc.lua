@@ -14998,6 +14998,15 @@ do
     local on_shot_at = signals["on_shot_at"]
 
     create_connection(event["OnClientEvent"], LPH_JIT_MAX(function(packet, ...)
+        -- While the ragebot has a target nothing of the shooting shows on this client: the game's hit marker and the camera kick are not passed on.
+        if (packet == "HitMarker" or packet == "ShootingRecoil") and flags["ragebot"] and ragebot_target ~= nil then
+            if packet == "ShootingRecoil" then
+                shot_count += 1
+            end
+
+            return
+        end
+
         if packet == "ShootingRecoil" then
             shot_count += 1
 
@@ -16515,57 +16524,85 @@ do
 
         menu_references["remove_flintlock_knockback"] = menu_references["utility_section"]:create_element({["name"] = "remove flintlock knockback"}, {["toggle"] = {["flag"] = "remove_flintlock_knockback"}})
         
-        local flintlock = nil
-        local connection = nil
+        -- Every Flintlock the character has (in hand or in the backpack: its Activated handler is the gun's own) gets its knockback function
+        -- (applyBlast) replaced by one that does nothing, while Remove Flintlock Knockback or the ragebot is on, and gets it back when both are off.
+        -- It used to remember one gun only and put it back on the next equip of any gun, so with every gun out at once (Auto Equip) the Flintlock
+        -- was unpatched straight away and still threw the character back.
+        local patched = setmetatable({}, {["__mode"] = "k"})
 
-        local update_flintlock = function(tool)
-            if flintlock then
-                local f = flintlock[1]
-                if f then
-                    setupvalue(f, flintlock[2], flintlock[3])
+        local knockback_wanted = function()
+            return flags["remove_flintlock_knockback"] == true or flags["ragebot"] == true
+        end
+
+        local patch_flintlock = function(tool)
+            if not tool or patched[tool] or tool["Name"] ~= "[Flintlock]" then
+                return
+            end
+
+            pcall(function()
+                for _, v in getconnections(tool["Activated"]) do
+                    local index, f, original = check_connection(v)
+
+                    if index then
+                        setupvalue(f, index, function() end)
+                        patched[tool] = {f, index, original}
+                    end
                 end
-                flintlock = nil
+            end)
+        end
+
+        local unpatch_flintlocks = function()
+            for tool, entry in patched do
+                pcall(setupvalue, entry[1], entry[2], entry[3])
+                patched[tool] = nil
+            end
+        end
+
+        local refresh_flintlocks = function()
+            if not knockback_wanted() then
+                unpatch_flintlocks()
                 return
             end
 
-            if not tool then
-                return
-            end
-
-            if tool.Name ~= "[Flintlock]" then
-                return
-            end
-    
-            for i,v in getconnections(tool["Activated"]) do
-                local index, f, original = check_connection(v)
-
-                if index then
-                    setupvalue(f, index, function()
-                        
-                    end)
-
-                    flintlock = {f, index, original}
+            for _, holder in {local_character, find_first_child(players_service["LocalPlayer"], "Backpack")} do
+                if holder then
+                    for _, tool in get_children(holder) do
+                        patch_flintlock(tool)
+                    end
                 end
             end
         end
 
-        create_connection(menu_references["remove_flintlock_knockback"]["on_toggle_change"], function(value)
-            if connection then
-                connection:Disconnect()
-                connection = nil
-            end
-
-            update_flintlock()
-
-            if value then
-                connection = create_connection(signals["on_local_tool_equipped"], update_flintlock)
-
-                -- The equip that matters may be over already: patch the gun that is in hand now, not only the next one.
-                if local_tool and local_tool["Parent"] == local_character then
-                    update_flintlock(local_tool)
-                end
+        create_connection(signals["on_local_tool_equipped"], function(tool)
+            if tool and knockback_wanted() then
+                patch_flintlock(tool)
             end
         end)
+
+        create_connection(menu_references["remove_flintlock_knockback"]["on_toggle_change"], function()
+            refresh_flintlocks()
+        end)
+
+        -- the ragebot's toggle is made further down the file
+        spawn(function()
+            wait()
+
+            if menu_references["ragebot_enabled"] then
+                create_connection(menu_references["ragebot_enabled"]["on_toggle_change"], function()
+                    refresh_flintlocks()
+                end)
+            end
+
+            refresh_flintlocks()
+        end)
+
+        do
+            local teardowns = getgenv()["neverlose_teardowns"]
+
+            if teardowns then
+                teardowns[#teardowns+1] = unpatch_flintlocks
+            end
+        end
     end
 
     -- >> ( unlock custom crosshair )
@@ -32222,6 +32259,85 @@ end
             return string.find(name, "shoot") ~= nil or (id ~= nil and shoot_ids[id] == true)
         end
 
+        -- Sounds: the guns' own (in the character or its backpack) and the ones a hit makes on the target (BloodSplatter in its head) are stopped as
+        -- they start while the ragebot has a target. The menu's own hit sound (SoundService) is left alone.
+        local watched_sounds = setmetatable({}, {["__mode"] = "k"})
+
+        local quiet_now = function()
+            return flags["ragebot"] and ragebot_target ~= nil
+        end
+
+        local watch_sound = function(sound)
+            if watched_sounds[sound] or not sound:IsA("Sound") then
+                return
+            end
+
+            watched_sounds[sound] = true
+
+            local hush = function()
+                if quiet_now() then
+                    pcall(function()
+                        sound:Stop()
+                    end)
+                end
+            end
+
+            create_connection(sound["Played"], hush)
+            -- (a sound started by setting Playing fires no Played)
+            create_connection(sound:GetPropertyChangedSignal("Playing"), function()
+                if sound["Playing"] then
+                    hush()
+                end
+            end)
+        end
+
+        local watch_tree = function(root)
+            if not root then
+                return
+            end
+
+            for _, item in root:GetDescendants() do
+                if item:IsA("Sound") then
+                    watch_sound(item)
+                end
+            end
+
+            create_connection(root["DescendantAdded"], function(item)
+                if item:IsA("Sound") then
+                    -- the guns make a new sound for every shot (the AUG's "MG" in its Handle) that is already playing when it arrives: muted at once
+                    if quiet_now() then
+                        pcall(function()
+                            item["Volume"] = 0
+                        end)
+                    end
+
+                    watch_sound(item)
+                end
+            end)
+        end
+
+        create_connection(workspace["DescendantAdded"], function(item)
+            if item:IsA("Sound") and quiet_now() then
+                local target_character = ragebot_target and ragebot_target[3]
+
+                if target_character and item:IsDescendantOf(target_character) then
+                    pcall(function()
+                        item["Volume"] = 0
+                        item:Stop()
+                    end)
+                end
+            end
+        end)
+
+        create_connection(local_player["CharacterAdded"], watch_tree)
+        watch_tree(local_player["Character"])
+        watch_tree(find_first_child(local_player, "Backpack"))
+        create_connection(local_player["ChildAdded"], function(child)
+            if child["Name"] == "Backpack" then
+                watch_tree(child)
+            end
+        end)
+
         local animator_connection = nil
 
         local watch_character = function(character)
@@ -36737,26 +36853,50 @@ local get_silent_aim_position = nil
 
     -- Whether a shot sent now would be rebuilt onto a target that can take it. The ragebot: it is aiming at a live, hittable target that is within the
     -- gun's Range of where the server has the body. The legitbot: Bullet Manipulation or Force Hit would rebuild a shot from the gun in hand right now.
+    -- Only when it would really hit: a gun in hand with a round in it and in range, a target that can be hurt (not knocked, dead, respawning, loading
+    -- or under a forcefield), and a clear way for the shot (straight, or over the wall: hide_manager.walls_route).
     hide_manager["can_manipulate"] = LPH_NO_VIRTUALIZE(function()
         local aim = ragebot_aim_position
         local target = ragebot_target
+        local route = hide_manager["walls_route"]
 
         if flags["ragebot"] and target and aim and aim["Magnitude"] < 1e9 and not target[7] and not target[18] and hide_manager["get_target_phase"](target) == nil then
             local body = local_server_position and local_server_position["p"]
+            local best = nil
 
-            if body and local_gun and (body - aim)["Magnitude"] <= local_gun then
-                return true
+            for _, gun in local_guns do
+                if gun[3] and gun[3] > 0 and gun[2] and (not best or gun[2] > best) then
+                    best = gun[2]
+                end
+            end
+
+            if body and best and (body - aim)["Magnitude"] <= best then
+                local origin = body + vector3_new(0, 3.0208, 0)
+                local ok, _, claim = pcall(route, origin, aim, best)
+
+                if ok and claim then
+                    return true
+                end
             end
         end
 
         local tool = local_character and find_first_child_of_class(local_character, "Tool")
         local handle = tool and find_first_child(tool, "Handle")
+        local ammo = tool and find_first_child(tool, "Ammo")
         local head = local_character and find_first_child(local_character, "Head")
+        local legit = legitbot_target and legitbot_target[1]
 
-        if handle and head and hide_manager["legit_rebuild"] then
+        if handle and head and ammo and ammo["Value"] > 0 and legit and hide_manager["legit_rebuild"] and not hide_manager["is_protected"](legit) then
             local ok, rebuilt = pcall(hide_manager["legit_rebuild"], {"ShootGun", handle, head["Position"]})
 
-            return ok and type(rebuilt) == "table"
+            if ok and type(rebuilt) == "table" then
+                -- Force Hit sends a shot even with no clear way; that one would not hit
+                hide_manager["walls_target"] = legit
+                local clear_ok, clear = pcall(hide_manager["walls_clear"], rebuilt[1], rebuilt[2])
+                hide_manager["walls_target"] = nil
+
+                return clear_ok and clear == true
+            end
         end
 
         return false
