@@ -31009,7 +31009,8 @@ end
 
                                 setthreadidentity(8)
                                 if shoot then getfenv(shoot)["require"] = require end
-                                if shoot and not flags["auto_fire_dont_render"] then
+                                -- (with a target the shot is not drawn either: no shooting visuals on this client while the ragebot is on someone)
+                                if shoot and not flags["auto_fire_dont_render"] and not (flags["ragebot"] and ragebot_target) then
                                     shoot({
                                         Shooter = local_character,
                                         Handle = handle,
