@@ -4418,6 +4418,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_dont_render"] = {"auto_fire_dont_render", "auto_fire_dont_render"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
+	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -8272,6 +8273,7 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Fast Retry", "auto_fire_fast_retry", false)
+	panelToggle(autoFire, "Salvo", "auto_fire_salvo", false)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -15020,7 +15022,16 @@ do
                         -- Whatever follows the direction is kept: a shotgun's shot carries the server's time, a spread number and the pellet
                         -- number (from the gun's own script, or from the auto fire), and a call cut down to five arguments is taken by the
                         -- server only until its SecurityTolerance runs out.
-                        return old_namecall(self, "ShootGun", handle, origin, pos, part, (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir, unpack(args, 7))
+                        local shot_direction = (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir
+
+                        -- Salvo: the same shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when)
+                        local salvo_extra = hide_manager["salvo_extra"]
+
+                        if salvo_extra and salvo_extra(handle) then
+                            old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
+                        end
+
+                        return old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
                     end
 
                     -- bullet manipulation's hit checker: a shot that would miss the locked target is never sent
@@ -16963,7 +16974,7 @@ do
             if do_auto_reload_rifle then
                 for gun, data in local_guns do
                     local gun = gun["Parent"]
-                    if gun and gun["Name"] == "[Rifle]" and data[3] <= 1 then
+                    if gun and gun["Name"] == "[Rifle]" and data[3] <= 1 and not hide_manager["salvo_holding"](gun) then
                         last_reload_sent = clock()
                         event:FireServer("Reload", gun)
                         return
@@ -27847,6 +27858,7 @@ end
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
+        menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "salvo"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = false}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -28163,6 +28175,50 @@ end
 
     hide_manager["pellets_of"] = function(tool)
         return pellet_guns[tool["Name"]] or (tool:GetAttribute("SecurityTolerance") ~= nil and 5 or 1)
+    end
+
+    -- Salvo (BASED Hub's Da Hood ragebot, measured there): the server holds a second shot of a gun behind the one it is firing, and fires it when the cooldown is
+    -- over without looking at the claim again (two Rifle shots sent together were taken 0.02 s and 1.32 s later; a held one knocked a target that had gone 4,400
+    -- studs off by then). So one claim that was good for a moment is worth two hits: a slow gun with a round to spare is sent its shot twice. Guns the server
+    -- polices (the shotguns, which count every refused call) and the fast ones are left out. A reload cancels a held shot, so salvo_holding says when one may be
+    -- pending and the reloads wait. Not measured here: the server takes no shot at a map part, so it could only be seen on a player.
+    hide_manager["salvo_sent"] = setmetatable({}, {["__mode"] = "k"})
+    hide_manager["salvo_until"] = setmetatable({}, {["__mode"] = "k"})
+
+    hide_manager["salvo_extra"] = function(handle)
+        if flags["auto_fire_salvo"] ~= true or typeof(handle) ~= "Instance" then
+            return false
+        end
+
+        local tool = handle["Parent"]
+
+        if not tool or tool:GetAttribute("SecurityTolerance") ~= nil or hide_manager["pellets_of"](tool) > 1 then
+            return false
+        end
+
+        local cooldown = find_first_child(tool, "ShootingCooldown")
+        local ammo = find_first_child(tool, "Ammo")
+
+        if not cooldown or cooldown["Value"] < 0.25 or not ammo or ammo["Value"] < 2 then
+            return false
+        end
+
+        local now = clock()
+
+        -- every try carries its held shot (what the server cannot hold it throws away, and a refused try costs nothing, so whichever try is taken comes with
+        -- its partner); only a call in the same frame as the last one, the other half of a shot the ragebot sent twice itself, gets none
+        if now - (hide_manager["salvo_sent"][tool] or -1e9) < 0.02 then
+            return false
+        end
+
+        hide_manager["salvo_sent"][tool] = now
+        hide_manager["salvo_until"][tool] = now + cooldown["Value"] + 0.3 + local_ping/1000
+
+        return true
+    end
+
+    hide_manager["salvo_holding"] = function(tool)
+        return clock() < (hide_manager["salvo_until"][tool] or 0)
     end
 
     hide_manager["gun_ready"] = LPH_NO_VIRTUALIZE(function(tool, ammo)
@@ -29282,6 +29338,12 @@ end
         if reload_hidden_frames >= 2 and not local_reloading and not purchasing then
             -- The script's own remove() doesn't hand back what it removed, so the first entry is read before dropping it.
             local tool = reload_queue[1]
+
+            -- a shot the server is holding (Salvo) would be cancelled by the reload: the reload waits for it
+            if tool and hide_manager["salvo_holding"](tool) then
+                return
+            end
+
             remove(reload_queue, 1)
 
             if tool then
@@ -30336,13 +30398,14 @@ end
                         -- away a shot whose hit position is farther from its origin than the gun's Range, and a shotgun's refused call is counted against its
                         -- SecurityTolerance (past it the gun is locked out for the rest of the server). Measured on a target that hides in the void most of the
                         -- time: 63% of all sends were aimed at a void position, from a body hundreds of millions of studs away, and the server took 1 of 709. The
-                        -- shot waits for the target to be within reach (a quarter more than the range, as slack). Walls: the server looks at the line from the
+                        -- shot waits for the target to be within reach (the gun's range, and the 17 studs the server forgives between the origin and its copy of
+                        -- the body; BASED Hub measured both; it used to be a quarter more than the range). Walls: the server looks at the line from the
                         -- shot's origin to the claimed hit; a shot with no clear line to the target and no open point near it to claim the hit at is only turned
                         -- away, so it is not sent either (hide_manager.walls_aim, worked out from the origin the rebuilt shot gets).
                         if chosen_gun and rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] then
                             local reach = chosen_gun[2] or 250
 
-                            if (origin - pos)["Magnitude"] > reach * 1.25 + 20 then
+                            if (origin - pos)["Magnitude"] > reach + 17 then
                                 chosen_gun = nil
                             else
                                 local walls_aim = hide_manager["walls_aim"]
