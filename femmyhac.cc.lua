@@ -4739,6 +4739,11 @@ local function menuIsOpen()
 	return true
 end
 
+-- the engine part (Hold To Fire) asks the same thing
+sharedEnv.neverlose_menu_open = function()
+	return Session.Alive and menuIsOpen()
+end
+
 -- The library places the subtitle under the title, left-aligned. Centre it under
 -- the title text instead.
 local function centerSubtitle()
@@ -11549,7 +11554,10 @@ do
 				end
 			end
 
-			if input.UserInputType == Enum.UserInputType.MouseButton1 and config["rapid fire"]["enabled"] and getrapidgun() then
+			-- a click on the open menu is not a shot
+			local menuOpen = type(sharedEnv.neverlose_menu_open) == "function" and sharedEnv.neverlose_menu_open()
+
+			if input.UserInputType == Enum.UserInputType.MouseButton1 and config["rapid fire"]["enabled"] and getrapidgun() and not menuOpen then
 				isfiring = true
 			end
 		end)
@@ -13417,7 +13425,7 @@ local FullAuto = { Held = false, Last = 0 }
 
 local function startFullAuto()
 	track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 and not gameProcessed then
+		if input.UserInputType == Enum.UserInputType.MouseButton1 and not gameProcessed and not menuIsOpen() then
 			FullAuto.Held = true
 			-- the click itself already fired the first shot
 			FullAuto.Last = os.clock()
@@ -14167,6 +14175,75 @@ if window.Signal and type(window.Signal.Connect) == "function" then
 			closeBindPopup()
 		end
 	end))
+end
+
+-- While the menu is open the gun in your hands does not shoot when you click (every click then is meant for the menu): each tool in the character
+-- gets ManualActivationOnly, which stops a click from activating it, and its own value back once the menu closes, the tool is put away or the
+-- script unloads. The script's own shots are not clicks and still go out (the ragebot's, Bullet Manipulation's pulls, Full Auto is held back below).
+do
+	local blocked = {} -- tool -> its own ManualActivationOnly
+
+	local function applyMenuClickBlock()
+		local open = Session.Alive and menuIsOpen()
+		local character = LocalPlayer.Character
+
+		for tool, original in pairs(blocked) do
+			if not open or tool.Parent ~= character then
+				pcall(function()
+					tool.ManualActivationOnly = original
+				end)
+				blocked[tool] = nil
+			end
+		end
+
+		if open and character then
+			for _, tool in ipairs(character:GetChildren()) do
+				if tool:IsA("Tool") and blocked[tool] == nil then
+					local okRead, original = pcall(function()
+						return tool.ManualActivationOnly
+					end)
+
+					if okRead and pcall(function()
+						tool.ManualActivationOnly = true
+					end) then
+						blocked[tool] = original
+					end
+				end
+			end
+		end
+	end
+
+	local characterConnections = {}
+
+	local function watchCharacter(character)
+		for _, connection in ipairs(characterConnections) do
+			connection:Disconnect()
+		end
+		table.clear(characterConnections)
+
+		if character then
+			table.insert(characterConnections, track(character.ChildAdded:Connect(applyMenuClickBlock)))
+			table.insert(characterConnections, track(character.ChildRemoved:Connect(applyMenuClickBlock)))
+		end
+
+		applyMenuClickBlock()
+	end
+
+	if window.Signal and type(window.Signal.Connect) == "function" then
+		track(window.Signal:Connect(applyMenuClickBlock))
+	end
+
+	track(LocalPlayer.CharacterAdded:Connect(watchCharacter))
+	watchCharacter(LocalPlayer.Character)
+
+	table.insert(Session.Cleanups, function()
+		for tool, original in pairs(blocked) do
+			pcall(function()
+				tool.ManualActivationOnly = original
+			end)
+		end
+		table.clear(blocked)
+	end)
 end
 
 ---------- Ping display ------------
@@ -32171,6 +32248,11 @@ end
             end
 
             if getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]() then
+                return
+            end
+
+            -- holding the button on the open menu is not holding the trigger
+            if getgenv()["neverlose_menu_open"] and getgenv()["neverlose_menu_open"]() then
                 return
             end
 
