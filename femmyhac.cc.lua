@@ -4419,6 +4419,8 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
+	["ad_strafe"] = {"ad_strafe", "ad_strafe"},
+	["ad_strafe_interval"] = {"ad_strafe_interval", "ad_strafe_interval"},
 	["auto_fire_gun_gap"] = {"auto_fire_gun_gap", "auto_fire_gun_gap"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
@@ -8270,6 +8272,9 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(rapidPanel, "Glory Patch", "rapid_fire_glory_patch", false)
 	panelToggle(rapidPanel, "Hold To Fire", "rapid_fire_hold", false)
 	panelSlider(rapidPanel, "Fire Delay", "rapid_fire_delay", 0, 1, 2, "s", 0.01)
+
+	-- A/D: how long each key is held before switching to the other
+	panelSlider(rows.adStrafe:AddOption(), "Interval", "ad_strafe_interval", 0.05, 1, 2, "s", 0.22)
 
 	-- Full auto: 0 to 100, a share of the gun's own fire rate (100 = as fast as the gun allows, 0 = the slowest)
 	panelSlider(rows.fullAuto:AddOption(), "Speed", "full_auto_speed", 0, 100, 0, "%", 100)
@@ -13627,6 +13632,14 @@ local function buildInterface()
 		Callback = onChanged("auto_equip"),
 	})
 
+	-- A/D: while the ragebot has a target the character taps A and D back and forth (Interval in the gear)
+	rows.adStrafe = Raging:AddLabel("A/D")
+	addBindableToggle(rows.adStrafe, "A/D", {
+		Default = false,
+		Flag = "ad_strafe",
+		Callback = onChanged("ad_strafe"),
+	})
+
 	rows.spamResolver = Raging:AddLabel("Resolver")
 	addBindableToggle(rows.spamResolver, "Resolver", {
 		Default = false,
@@ -13778,6 +13791,24 @@ local function buildInterface()
 		Default = false,
 		Flag = "remove_recoil",
 		Callback = onChanged("remove_recoil"),
+	})
+
+	addBindableToggle(Other:AddLabel("Remove Spread"), "Remove Spread", {
+		Default = false,
+		Flag = "removespread",
+		Callback = onChanged("removespread"),
+	})
+
+	-- How much of the shotgun spread Remove Spread takes away: 0% leaves it alone, 100% removes all of it.
+	addTextSlider(Other:AddLabel("Spread Removed"), {
+		Min = 0,
+		Max = 100,
+		Rounding = 0,
+		Type = "%",
+		Nums = { [0] = "none", [100] = "all" },
+		Default = 100,
+		Flag = "removespread_amount",
+		Callback = onChanged("removespread_amount"),
 	})
 
 	rows.fullAuto = Other:AddLabel("Full Auto")
@@ -14961,6 +14992,7 @@ do
                         local shot_direction = (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir
 
                         local first = old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
+                        hide_manager["manipulated_at"] = clock()
 
                         -- Double Tap (flag auto_fire_salvo): the shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when). It is decided after the shot has
                         -- gone: a method call made in here before old_namecall (tool:GetAttribute, say) replaces the namecall method and the shot is never
@@ -14990,6 +15022,25 @@ do
                         end
 
                         return first
+                    end
+
+                    -- Legit tab: Bullet Manipulation claims the silent aim shot on its target the way the ragebot's shots are claimed, and Force Hit
+                    -- sends it at the head whatever the hit checker says (hide_manager.legit_rebuild: nil = leave the shot alone, false = do not send it)
+                    local legit_rebuild = hide_manager["legit_rebuild"]
+
+                    if legit_rebuild then
+                        local rebuild_ok, rebuilt = pcall(legit_rebuild, args)
+
+                        if rebuild_ok and rebuilt == false then
+                            return
+                        end
+
+                        if rebuild_ok and rebuilt then
+                            local first = old_namecall(self, "ShootGun", args[2], rebuilt[1], rebuilt[2], rebuilt[3], rebuilt[4], unpack(args, 7))
+                            hide_manager["manipulated_at"] = clock()
+                            spawn(get_bullet_result, rebuilt[5], rebuilt[3])
+                            return first
+                        end
                     end
 
                     -- bullet manipulation's hit checker: a shot that would miss the locked target is never sent
@@ -27818,6 +27869,9 @@ end
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
         menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
         menu_references["auto_fire_gun_gap"] = menu_references["auto_fire_settings"]:create_element({["name"] = "gun gap"}, {["slider"] = {["flag"] = "auto_fire_gun_gap", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 140, ["min_text"] = "at once", ["decimals"] = 0}})
+        menu_references["ad_strafe"] = menu_references["general_section"]:create_element({["name"] = "a/d"}, {["toggle"] = {["flag"] = "ad_strafe", ["default"] = false}})
+        menu_references["ad_strafe_settings"] = menu_references["ad_strafe"]:create_settings()
+        menu_references["ad_strafe_interval"] = menu_references["ad_strafe_settings"]:create_element({["name"] = "interval"}, {["slider"] = {["flag"] = "ad_strafe_interval", ["min"] = 0.05, ["max"] = 1, ["default"] = 0.22, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -30466,8 +30520,20 @@ end
                     aim_valid = false
                 end
 
+                -- Follow Target has just taken the character to the target: the shot goes this tick, with no wait for the gun gap, the fire cooldown
+                -- or the shot delay.
+                local follow_burst = false
+
+                if local_following and not hide_manager["was_following"] then
+                    last_fire = -math.huge
+                    hide_manager["last_sent_at"] = nil
+                    follow_burst = true
+                end
+
+                hide_manager["was_following"] = local_following
+
                 if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= local_gun) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
-                    local delay = flags["shot_delay"]
+                    local delay = follow_burst and 0 or flags["shot_delay"]
                     local stale = false
 
                     if delay > 0 then
@@ -31857,7 +31923,61 @@ end
 
     -- >> ( target strafe )
 
-    -- (The A/D target strafe that was part of the ragebot is gone.)
+    -- >> ( a/d )
+
+    -- A/D (Rage tab, off by default): for as long as the ragebot has a target the character taps A and D back and forth, every Interval seconds, in
+    -- the void and out of it (the steps that hide the character put the body back where it was at the start of each frame, so the walking goes on
+    -- underneath them).
+    do
+        local virtual_input_manager = cloneref(game:GetService("VirtualInputManager"))
+        local send_key_event = virtual_input_manager["SendKeyEvent"]
+        local key_a = Enum["KeyCode"]["A"]
+        local key_d = Enum["KeyCode"]["D"]
+        local held_key = nil
+        local last_switch = 0
+
+        -- Lets go of whatever is held, then holds the new key; nil just lets go.
+        local press_key = LPH_NO_VIRTUALIZE(function(key)
+            if held_key == key then
+                return
+            end
+
+            if held_key then
+                pcall(send_key_event, virtual_input_manager, false, held_key, false, game)
+            end
+
+            if key then
+                pcall(send_key_event, virtual_input_manager, true, key, false, game)
+            end
+
+            held_key = key
+        end)
+
+        local do_target_strafe = LPH_NO_VIRTUALIZE(function(dt, hrp)
+            -- A/D off, no target (or the ragebot is off, or the Anti Report shutdown ran), a knocked character, or the player typing in chat: let go.
+            if flags["ad_strafe"] ~= true or not (flags["ragebot"] and ragebot_target and hrp) or local_knocked or getgenv()["neverlose_safety_shutdown"] or (getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]()) then
+                press_key(nil)
+                return
+            end
+
+            local tick = clock()
+
+            if held_key == nil or tick - last_switch >= (tonumber(flags["ad_strafe_interval"]) or 0.22) then
+                last_switch = tick
+                press_key(held_key == key_a and key_d or key_a)
+            end
+        end)
+
+        heartbeat[#heartbeat+1] = do_target_strafe
+
+        -- Unloading disconnects everything in connections, so a held key goes up with them.
+        connections[#connections+1] = {
+            Disconnect = function()
+                press_key(nil)
+            end
+        }
+    end
+
 
     -- >> ( rapid fire )
 
@@ -35160,6 +35280,7 @@ local get_silent_aim_position = nil
         menu_references["silent_aim_max_distance"] = menu_references["silent_aim_settings"]:create_element({["name"] = "max distance"}, {["slider"] = {["flag"] = "silent_aim_max_distance", ["min"] = 0, ["max"] = 2500, ["default"] = 0, ["suffix"] = " studs", ["min_text"] = "gun range", ["max_text"] = "infinite"}})
         menu_references["silent_aim_multipoint"] = menu_references["silent_aim_settings"]:create_element({["name"] = "multipoint"}, {["slider"] = {["flag"] = "silent_aim_multipoint", ["min"] = 0, ["max"] = 100, ["default"] = 90, ["suffix"] = "%"}})
         menu_references["silent_aim_field_of_view"] = menu_references["silent_aim_section"]:create_element({["name"] = "field of view"}, {["slider"] = {["flag"] = "silent_aim_field_of_view", ["min"] = 0, ["max"] = 180, ["default"] = 30, ["suffix"] = "°", ["decimals"] = 1}})
+        menu_references["silent_aim_force_hit"] = menu_references["silent_aim_settings"]:create_element({["name"] = "force hit"}, {["toggle"] = {["flag"] = "silent_aim_force_hit", ["default"] = false}})
         menu_references["silent_aim_redirect_chance"] = menu_references["silent_aim_settings"]:create_element({["name"] = "redirect chance"}, {["slider"] = {["flag"] = "silent_aim_redirect_chance", ["min"] = 1, ["max"] = 100, ["default"] = 100, ["suffix"] = "%"}})
         menu_references["silent_aim_field_of_view_settings"] = menu_references["silent_aim_field_of_view"]:create_settings()
         menu_references["silent_aim_field_of_view_show_fov"] = menu_references["silent_aim_field_of_view_settings"]:create_element({["name"] = "show fov"}, {["toggle"] = {["flag"] = "silent_aim_field_of_view_show_fov"}, ["colorpicker"] = {["color_flag"] = "silent_aim_field_of_view_color", ["default_color"] = color3_fromrgb(181, 255, 246), ["default_transparency"] = 0.8, ["transparency_flag"] = "silent_aim_field_of_view_transparency"}})
@@ -35170,6 +35291,7 @@ local get_silent_aim_position = nil
         menu_references["silent_aim_bullet_manipulation"] = menu_references["silent_aim_section"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "silent_aim_bullet_manipulation", ["default"] = false}})
         menu_references["silent_aim_bullet_manipulation_settings"] = menu_references["silent_aim_bullet_manipulation"]:create_settings()
         menu_references["silent_aim_hit_checker"] = menu_references["silent_aim_bullet_manipulation_settings"]:create_element({["name"] = "hit checker"}, {["toggle"] = {["flag"] = "silent_aim_hit_checker", ["default"] = true}})
+        menu_references["silent_aim_manipulated_indicator"] = menu_references["silent_aim_bullet_manipulation_settings"]:create_element({["name"] = "manipulated indicator"}, {["toggle"] = {["flag"] = "silent_aim_manipulated_indicator", ["default"] = true}})
 
     menu_references["triggerbot_section"] = menu["groups"]["main"]:create_section("legitbot", "trigger", 2, 0.09, 0)
         menu_references["triggerbot"] = menu_references["triggerbot_section"]:create_element({["name"] = "triggerbot"}, {["toggle"] = {["flag"] = "triggerbot"}})
@@ -36177,6 +36299,137 @@ local get_silent_aim_position = nil
         return offset["Unit"], distance
     end)
 
+    -- Bullet Manipulation (Legit tab), the ragebot's way: the shot the gun's script sends is rebuilt with its hit claimed on the silent aim target
+    -- (the part nearest to the silent aim position), from the gun's own origin, when the target is in the gun's range and (with Hit Checker) has a
+    -- clear line from that origin; otherwise it is left alone. Force Hit (silent aim's gear), like the ragebot's: the hit is claimed on the head,
+    -- with no range or line check. Called from the remote hook, so nothing in here may be a method call (a:B()): it would replace the namecall
+    -- method and the shot would never be sent.
+    local is_descendant_of = game["IsDescendantOf"]
+
+    hide_manager["legit_rebuild"] = LPH_NO_VIRTUALIZE(function(args)
+        if not flags["silent_aim"] or ragebot_aim_position then
+            return nil
+        end
+
+        local force = flags["silent_aim_force_hit"] == true
+        local manipulate = bullet_manipulation.enabled == true
+
+        if not force and not manipulate then
+            return nil
+        end
+
+        local target = legitbot_target
+        local data = target and target[1]
+        local position = silent_aim_position
+        local origin = args[3]
+        local handle = args[2]
+
+        if not (data and position and typeof(origin) == "Vector3" and typeof(handle) == "Instance") or data[7] or data[18] then
+            return nil
+        end
+
+        local character, parts = data[3], data[4]
+
+        if not character or type(parts) ~= "table" then
+            return nil
+        end
+
+        local part
+
+        if force then
+            part = parts["Head"]
+            position = part and part["Position"] or position
+        else
+            local best = math.huge
+
+            for _, candidate in parts do
+                if typeof(candidate) == "Instance" and candidate["Parent"] == character then
+                    local away = (candidate["Position"] - position)["Magnitude"]
+
+                    if away < best then
+                        best, part = away, candidate
+                    end
+                end
+            end
+        end
+
+        if not part then
+            return nil
+        end
+
+        local offset = position - origin
+        local distance = offset["Magnitude"]
+
+        if distance < 0.05 or distance ~= distance then
+            return nil
+        end
+
+        if not force then
+            local tool = handle["Parent"]
+            local range = tool and find_first_child(tool, "Range")
+
+            if range and distance > range["Value"] then
+                return nil
+            end
+
+            if flags["silent_aim_hit_checker"] then
+                local filter = {}
+
+                for _, instance in {local_character, ignored, bush, vehicles} do
+                    filter[#filter+1] = instance
+                end
+
+                hit_params["FilterDescendantsInstances"] = filter
+
+                local result = raycast(workspace, origin, offset["Unit"] * (distance + 4), hit_params)
+
+                if not (result and is_descendant_of(result["Instance"], character)) then
+                    return nil
+                end
+            end
+        end
+
+        return {origin, position, part, (origin - position)["Unit"], data[2]}
+    end)
+
+    -- Manipulated Indicator (Bullet Manipulation's gear): "manipulated" under the crosshair for a moment after every rebuilt shot (the ragebot's too)
+    do
+        local indicator = nil
+
+        pcall(function()
+            indicator = Drawing.new("Text")
+            indicator.Text = "manipulated"
+            indicator.Center = true
+            indicator.Outline = true
+            indicator.Size = 14
+            indicator.Color = color3_fromrgb(255, 194, 254)
+            indicator.Visible = false
+        end)
+
+        if indicator then
+            create_connection(render_stepped, function()
+                local shown = flags["silent_aim_manipulated_indicator"] ~= false and clock() - (hide_manager["manipulated_at"] or -1) < 0.6
+
+                if shown then
+                    local mouse = get_mouse_location(user_input_service)
+                    indicator.Position = Vector2.new(mouse.X, mouse.Y + 22)
+                end
+
+                indicator.Visible = shown
+            end)
+
+            local teardowns = getgenv()["neverlose_teardowns"]
+
+            if teardowns then
+                teardowns[#teardowns+1] = function()
+                    pcall(function()
+                        indicator:Remove()
+                    end)
+                end
+            end
+        end
+    end
+
     -- the legitbot's answer to the gun module's getAim, asked after the ragebot's (there is one hook for both, see the ragebot's)
     hide_manager["aim_chain"]["providers"]["legit"] = {
         enabled = function()
@@ -36566,14 +36819,23 @@ do
         end
 
         local wanted = clock() - lag
+        local latest = points[count]
+        local found = points[1]
 
         for i = count, 1, -1 do
             if times[i] <= wanted then
-                return points[i]
+                found = points[i]
+                break
             end
         end
 
-        return points[1]
+        -- the body has only just been taken there (follow starting, out of the void): the old place is too far from the target for any shot, so
+        -- the shot goes from where it is now
+        if (found - latest)["Magnitude"] > 17 then
+            return latest
+        end
+
+        return found
     end
 
     local update_server_position = LPH_NO_VIRTUALIZE(function(hrp)
