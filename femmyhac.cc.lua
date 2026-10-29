@@ -8119,7 +8119,7 @@ function Session.buildSettingsPanels(rows)
 		end
 	end)
 	-- 0.1 to 10 seconds; click the number to type one (0.1, 1.1 ...)
-	table.insert(clusterRows, select(2, panelSlider(resolver, "Refresh Time", "ue_resolver_refresh", 0.1, 10, 2, "s", 3)))
+	table.insert(clusterRows, select(2, panelSlider(resolver, "Refresh Time", "ue_resolver_refresh", 0.1, 10, 2, "s", 1)))
 	table.insert(clusterRows, select(2, panelSlider(resolver, "Forgiveness", "ue_resolver_forgiveness", 0, 20, 1, "", 14.4)))
 	table.insert(clusterRows, select(2, panelSlider(resolver, "Out Of Void Bonus", "ue_resolver_void_bonus", 0, 12, 1, "", 5)))
 	table.insert(weightedRows, select(2, panelSlider(resolver, "Normal Position Trust", "void_spam_resolver_position_weight", 0.1, 5, 2, "", 1.5)))
@@ -27855,7 +27855,7 @@ end
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
         menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
-        menu_references["ue_resolver_refresh"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "refresh time"}, {["slider"] = {["flag"] = "ue_resolver_refresh", ["min"] = 0.1, ["max"] = 10, ["default"] = 3, ["decimals"] = 2, ["suffix"] = "s"}})
+        menu_references["ue_resolver_refresh"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "refresh time"}, {["slider"] = {["flag"] = "ue_resolver_refresh", ["min"] = 0.1, ["max"] = 10, ["default"] = 1, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["ue_resolver_forgiveness"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "forgiveness"}, {["slider"] = {["flag"] = "ue_resolver_forgiveness", ["min"] = 0, ["max"] = 20, ["default"] = 14.4, ["decimals"] = 1}})
         menu_references["ue_resolver_void_bonus"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "out of void bonus"}, {["slider"] = {["flag"] = "ue_resolver_void_bonus", ["min"] = 0, ["max"] = 12, ["default"] = 5, ["decimals"] = 1}})
         menu_references["void_spam_resolver_position_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "normal position trust"}, {["slider"] = {["flag"] = "void_spam_resolver_position_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 1.5, ["decimals"] = 2}})
@@ -28636,7 +28636,7 @@ end
     -- aim does not follow the target, it flicks to the next spot. Until there is a first answer it is tried 12 times a second. Once the target is
     -- within the radius of the held spot the aim goes straight onto the target (see the ragebot step).
     local ue_resolve = LPH_NO_VIRTUALIZE(function(position, now)
-        local refresh_time = flags["ue_resolver_refresh"] or 3
+        local refresh_time = flags["ue_resolver_refresh"] or 1
         -- only the sightings of the last Refresh Time count (a quarter of a second at the least, so there is something to cluster)
         local window = refresh_time < 0.25 and 0.25 or refresh_time
         local refresh_due = now - ue_resolver_refreshed >= refresh_time
