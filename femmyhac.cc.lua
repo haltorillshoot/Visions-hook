@@ -4471,6 +4471,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_equip_unequip_when"] = {"auto_equip_unequip_when", "auto_equip_unequip_when", "list"},
 	["auto_equip_gun"] = {"auto_equip_gun", "auto_equip_gun", "list"},
 	["auto_equip_prioritize_db"] = {"auto_equip_prioritize_db", "auto_equip_prioritize_db"},
+	["auto_equip_distance_check"] = {"auto_equip_distance_check", "auto_equip_distance_check"},
 	["sender_rate_value_type"] = {"sender_rate_value_type", "sender_rate_value_type", "list"},
 	["sender_rate_value_rate"] = {"sender_rate_value_rate", "sender_rate_value_rate"},
 	["velocity_desync_rotate"] = {"velocity_desync_rotate", "velocity_desync_rotate"},
@@ -8306,6 +8307,8 @@ function Session.buildSettingsPanels(rows)
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
 	panelList(equip, "Guns", "auto_equip_gun", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "rifle", "double-barrel sg" })
 	panelToggle(equip, "Prioritize DB", "auto_equip_prioritize_db", false)
+	-- Distance Check: the target is past the Double-Barrel's range but within the Rifle's, so the Rifle goes instead (until the DB can reach again)
+	panelToggle(equip, "Distance Check", "auto_equip_distance_check", false)
 
 	-- Prediction --
 	local predictionPanel = rows.prediction:AddOption()
@@ -27977,6 +27980,7 @@ end
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
         menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle", "double-barrel sg"}, ["options"] = {"double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["auto_equip_prioritize_db"] = menu_references["auto_equip_settings"]:create_element({["name"] = "prioritize db"}, {["toggle"] = {["flag"] = "auto_equip_prioritize_db", ["default"] = false}})
+        menu_references["auto_equip_distance_check"] = menu_references["auto_equip_settings"]:create_element({["name"] = "distance check"}, {["toggle"] = {["flag"] = "auto_equip_distance_check", ["default"] = false}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
         menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
@@ -28286,6 +28290,78 @@ end
         end
 
         return nil, false
+    end
+
+    -- Distance Check (Auto Equip's gear): while the target is past the Double-Barrel's own Range but within the Rifle's, and the Rifle is there with a
+    -- round in it, the Double-Barrel is not sent (the server turns its shot away, and every refused shotgun call counts against its SecurityTolerance)
+    -- and the Rifle goes first. Both ranges are the guns' own Range values; with either unknown nothing changes. It switches back once the target is
+    -- 4 studs inside the DB's range again, and holds each switch for at least half a second, so a target on the edge does not flip the guns every
+    -- frame. Nothing is rewritten: the gun order, the Auto Equip list and the shot counts stay as they are. hide_manager.distance_check_active says
+    -- whether it is on now (Auto Equip brings the Rifle out for it).
+    local distance_check_state = {["active"] = false, ["since"] = 0}
+
+    local gun_range = function(tool, known)
+        local range = tool and find_first_child(tool, "Range")
+
+        return range and tonumber(range["Value"]) or tonumber(known)
+    end
+
+    hide_manager["distance_check"] = function(guns, distance)
+        local state = distance_check_state
+
+        if flags["auto_equip_distance_check"] ~= true or type(distance) ~= "number" or distance ~= distance then
+            state["active"] = false
+            hide_manager["distance_check_active"] = false
+            return false
+        end
+
+        local shell, rifle, rifle_ammo, rifle_known = nil, nil, 0, nil
+
+        for _, gun in guns do
+            local tool = gun[1]["Parent"]
+
+            if tool and tool["Name"] == "[Double-Barrel SG]" then
+                shell = {tool, gun[2]}
+            elseif tool and tool["Name"] == "[Rifle]" then
+                rifle, rifle_ammo, rifle_known = tool, gun[3], gun[2]
+            end
+        end
+
+        -- a Rifle still in the backpack counts too: Auto Equip brings it out while this is on
+        if not rifle then
+            local backpack = find_first_child(local_player, "Backpack")
+            local stored = backpack and find_first_child(backpack, "[Rifle]")
+            local ammo = stored and find_first_child(stored, "Ammo")
+
+            if stored and ammo then
+                rifle, rifle_ammo = stored, ammo["Value"]
+            end
+        end
+
+        local shell_range = shell and gun_range(shell[1], shell[2])
+        local rifle_range = rifle and gun_range(rifle, rifle_known)
+        local now = clock()
+        local wanted = state["active"]
+
+        if not (shell_range and rifle_range) or rifle_ammo <= 0 or distance > rifle_range then
+            wanted = false
+        elseif state["active"] then
+            wanted = distance > shell_range - 4
+        else
+            wanted = distance > shell_range
+        end
+
+        -- the Rifle running dry or going out of reach ends it at once; otherwise a switch is held for half a second
+        local forced_off = not (shell_range and rifle_range) or rifle_ammo <= 0 or (rifle_range and distance > rifle_range)
+
+        if wanted ~= state["active"] and (forced_off or now - state["since"] >= 0.5) then
+            state["active"] = wanted
+            state["since"] = now
+        end
+
+        hide_manager["distance_check_active"] = state["active"]
+
+        return state["active"]
     end
 
     -- Pellets in one shot: the shotguns fire five, a call each.
@@ -30632,7 +30708,19 @@ end
 
                 hide_manager["was_following"] = local_following
 
-                if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= local_gun) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
+                -- Distance Check: the target only has to be in reach of one of the guns in hand with a round in it (the Rifle while the DB cannot reach),
+                -- not of the gun equipped last; the gun choice below then sends the one that can reach.
+                local fire_reach = local_gun
+
+                if fire_reach and flags["auto_equip_distance_check"] == true then
+                    for _, held in local_guns do
+                        if held[2] and held[3] and held[3] > 0 and held[2] > fire_reach then
+                            fire_reach = held[2]
+                        end
+                    end
+                end
+
+                if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= fire_reach) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
                     local delay = follow_burst and 0 or flags["shot_delay"]
                     local stale = false
 
@@ -30708,6 +30796,26 @@ end
                             plan_tool, plan_hold = hide_manager["one_tap_plan"](target, new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
                         end
 
+                        -- Distance Check: the DB cannot reach the target but the Rifle can, so the Rifle goes and the DB waits
+                        local rifle_over_shell = hide_manager["distance_check"](new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
+
+                        if rifle_over_shell then
+                            plan_hold = false
+
+                            if plan_tool and plan_tool["Name"] == "[Double-Barrel SG]" then
+                                plan_tool = nil
+                            end
+
+                            for _, gun in new_local_guns do
+                                local tool = gun[1]["Parent"]
+
+                                if tool and tool["Name"] == "[Rifle]" then
+                                    plan_tool = tool
+                                    break
+                                end
+                            end
+                        end
+
                         table.sort(new_local_guns, function(a, b)
                             local tool_a, tool_b = a[1]["Parent"], b[1]["Parent"]
 
@@ -30742,6 +30850,10 @@ end
                             end
 
                             if plan_hold and tool and tool["Name"] == "[Double-Barrel SG]" then
+                                continue
+                            end
+
+                            if rifle_over_shell and tool and tool["Name"] == "[Double-Barrel SG]" then
                                 continue
                             end
 
@@ -34540,6 +34652,12 @@ end
                         gun["Parent"] = local_character
                         is_gun = true
                     end
+                    -- Distance Check: the Rifle comes out while the target is past the DB's range (it goes back once the check is off again)
+                    if not is_gun and name == "[Rifle]" and hide_manager["distance_check_active"] == true then
+                        setscriptable(gun, "Parent", true)
+                        gun["Parent"] = local_character
+                        is_gun = true
+                    end
                     if not is_gun and gun["Parent"] == local_character then
                         setscriptable(gun, "Parent", true)
                         gun["Parent"] = backpack
@@ -36184,6 +36302,13 @@ local get_silent_aim_position = nil
     end)
 
     create_connection(menu_references["silent_aim"]["on_toggle_change"], function(value)
+        -- the gun module hook is what aims the gun (see the legitbot's getAim answer); taken out again once nothing wants it
+        if value then
+            pcall(hide_manager["ensure_aim_hook"])
+        else
+            pcall(hide_manager["release_aim_hook"])
+        end
+
         last_target_dt = nil
         silent_aim_position = nil
 
@@ -36380,7 +36505,8 @@ local get_silent_aim_position = nil
         local data = target and target[1]
         local position = flags["silent_aim"] and silent_aim_position or nil
 
-        if not (bullet_manipulation.enabled and data and position and not ragebot_aim_position and typeof(origin) == "Vector3") then
+        -- Silent aim on its own aims the gun here too: the guns take their aim from getAim, not from mouse.Hit, so the mouse redirect alone moved no shot
+        if not ((bullet_manipulation.enabled or flags["silent_aim"] == true) and data and position and not ragebot_aim_position and typeof(origin) == "Vector3") then
             return nil
         end
 
@@ -36501,7 +36627,35 @@ local get_silent_aim_position = nil
         return {origin, position, part, (origin - position)["Unit"], data[2]}
     end)
 
-    -- Manipulated Indicator (Bullet Manipulation's gear): "manipulated" under the crosshair for a moment after every rebuilt shot (the ragebot's too)
+    -- Whether a shot sent now would be rebuilt onto a target that can take it. The ragebot: it is aiming at a live, hittable target that is within the
+    -- gun's Range of where the server has the body. The legitbot: Bullet Manipulation or Force Hit would rebuild a shot from the gun in hand right now.
+    hide_manager["can_manipulate"] = LPH_NO_VIRTUALIZE(function()
+        local aim = ragebot_aim_position
+        local target = ragebot_target
+
+        if flags["ragebot"] and target and aim and aim["Magnitude"] < 1e9 and not target[7] and not target[18] and hide_manager["get_target_phase"](target) == nil then
+            local body = local_server_position and local_server_position["p"]
+
+            if body and local_gun and (body - aim)["Magnitude"] <= local_gun then
+                return true
+            end
+        end
+
+        local tool = local_character and find_first_child_of_class(local_character, "Tool")
+        local handle = tool and find_first_child(tool, "Handle")
+        local head = local_character and find_first_child(local_character, "Head")
+
+        if handle and head and hide_manager["legit_rebuild"] then
+            local ok, rebuilt = pcall(hide_manager["legit_rebuild"], {"ShootGun", handle, head["Position"]})
+
+            return ok and type(rebuilt) == "table"
+        end
+
+        return false
+    end)
+
+    -- Manipulated Indicator (Bullet Manipulation's gear): "manipulated" under the crosshair while a shot would be manipulated onto the target (above), and
+    -- for a moment after every rebuilt shot (the ragebot's too)
     do
         local indicator = nil
 
@@ -36518,8 +36672,19 @@ local get_silent_aim_position = nil
         hide_manager["manipulated_indicator"] = indicator
 
         if indicator then
+            local can_now, checked_at = false, 0
+
             create_connection(render_stepped, function()
-                local shown = flags["silent_aim_manipulated_indicator"] ~= false and clock() - (hide_manager["manipulated_at"] or -1) < 0.6
+                local wanted = flags["silent_aim_manipulated_indicator"] ~= false
+
+                -- looked at 20 times a second (it may cast a ray)
+                if wanted and clock() - checked_at >= 0.05 then
+                    checked_at = clock()
+                    local ok, can = pcall(hide_manager["can_manipulate"])
+                    can_now = ok and can == true
+                end
+
+                local shown = wanted and (can_now or clock() - (hide_manager["manipulated_at"] or -1) < 0.6)
 
                 if shown then
                     local mouse = get_mouse_location(user_input_service)
@@ -36544,7 +36709,7 @@ local get_silent_aim_position = nil
     -- the legitbot's answer to the gun module's getAim, asked after the ragebot's (there is one hook for both, see the ragebot's)
     hide_manager["aim_chain"]["providers"]["legit"] = {
         enabled = function()
-            return bullet_manipulation.enabled == true
+            return bullet_manipulation.enabled == true or flags["silent_aim"] == true
         end,
         answer = compute_aim
     }
