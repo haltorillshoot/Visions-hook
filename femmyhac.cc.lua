@@ -9008,8 +9008,8 @@ do
 		"target_selection_target_when_shot_at", "auto_equip", "auto_loadout", "auto_ammo", "auto_armor", "auto_mask", "auto_heal", "autostomp", "dt",
 	}
 	Session.SafetyShutdownSemi = {
-		"silent aimbot enabled", "silent aimbot force fire", "camera aimbot enabled", "trigger bot enabled", "speed modifications enabled",
-		"spiderman enabled", "spread modifications enabled",
+		"silent aimbot enabled", "silent aimbot force fire", "silent aimbot force hit", "camera aimbot enabled", "trigger bot enabled", "speed modifications enabled",
+		"spiderman enabled", "spread modifications enabled", "rapid fire enabled", "super jump enabled", "hitbox expander enabled",
 	}
 	Session.SafetyShutdownSet = {}
 
@@ -9195,9 +9195,9 @@ do
 	end
 end
 
----------- Semi Rage (gloryv3beta) ------------
--- gloryv3beta folded into the menu as the Semi Rage tab: silent aim, camera lock, trigger bot,
--- shotgun spread, speed, anti fall, wall jump, name ESP, inventory sorter and weapon skins.
+---------- Semi Rage (Glory v4) ------------
+-- Glory v4 folded into the menu as the Semi Rage tab: silent aim (with Force Hit and Force Fire), camera aimbot, trigger bot, target line, shotgun spread,
+-- rapid fire, hitbox expander, speed, super jump, wall jump, name ESP, headless and weapon skins (the skins and the mod detector are kept from before).
 -- Semi.Config holds every option, the tab edits it, and nothing acts until its toggle is on.
 -- Nothing in here sends data anywhere; the only network access is the library download above.
 -- Luau allows at most 200 locals per scope, so all of it lives inside this do-block.
@@ -9214,140 +9214,126 @@ do
 		["global"] = {
 			["mod detector"] = true, -- leaves the game when a moderator joins
 		},
-		["binds"] = {
-			["select"] = "C",
-			["camera aimbot"] = "C",
-			["triggerbot"] = "C",
-			["speed"] = "X",
-			["esp"] = "P",
-			["sort"] = "B",
-		},
-		["targeting"] = {
-			["target mode"] = "Select", -- "Select" = pick by key, "Automatic" = closest to the cursor
-		},
-		["select only features"] = {
-			["force hit"] = true,
-			["force trigger"] = true,
-		},
-		["checks"] = {
-			["visible check"] = true,
+		["settings"] = {
 			["knock check"] = true,
-			["ko check"] = true,
-			["crew check"] = true,
+			["visible check"] = true,
 			["self knock check"] = true,
+			["knife check"] = true,
 			["forcefield check"] = false,
 		},
-		["esp"] = {
-			["enabled"] = false,
-			["position"] = "Bottom",
-			["size"] = 1.1,
-			["normal color"] = Color3.fromRGB(255, 255, 255),
-			["target color"] = Color3.fromRGB(0, 255, 0),
+		["targeting"] = {
+			["mode"] = "Select", -- "Select" = pick by key, "Automatic" = closest to the cursor
+		},
+		["binds"] = {
+			["silent aim"] = "C",
+			["cam lock"] = "X",
+			["triggerbot"] = "V",
+			["super jump"] = "B",
+			["esp"] = "Y",
+			["speed"] = "Z",
 		},
 		["silent aimbot"] = {
 			["enabled"] = false,
+			["mode"] = "Toggle", -- "Toggle" or "Hold"
+			["force hit"] = false, -- Select mode: the head takes the shot whatever the FOV and the walls say
 			["force fire"] = false, -- shoots the target by itself (forcehit dh)
-			["hitpart"] = "Closest Point",
-			["closest point"] = {
-				["mode"] = "Advanced",
-				["scale"] = 1,
-				["density"] = 3,
-			},
+			["hitpart"] = "Closest Part",
+			["use prediction"] = true,
+			["prediction"] = { ["x"] = 0.133, ["y"] = 0.133, ["z"] = 0.133 },
 			["fov"] = {
-				["type"] = "3D",
-				["show fov"] = true,
-				["radius"] = 75,
-				["x left"] = 4.2,
-				["x right"] = 4.2,
-				["y upper"] = 4.2,
-				["y lower"] = 4.2,
-				["z left"] = 4.2,
-				["z right"] = 4.2,
+				["enabled"] = true,
+				["visible"] = true,
+				["mode"] = "3D", -- "3D" or "2D"
+				["active color"] = Color3.fromRGB(0, 17, 255),
+				["size"] = { ["x"] = 10, ["y"] = 10, ["z"] = 10 },
 			},
+			["distance check"] = { ["enabled"] = true, ["max distance"] = 300 },
 		},
 		["camera aimbot"] = {
 			["enabled"] = false,
-			["mode"] = "Toggle",
-			["hitpart"] = "Closest Point",
-			["closest point"] = {
-				["mode"] = "Advanced",
-				["scale"] = 0.09,
-				["density"] = 3,
-			},
-			["smoothing"] = {
-				["enabled"] = true,
-				["x"] = 0.06,
-				["y"] = 0.06,
-			},
+			["mode"] = "Toggle", -- "Toggle" or "Hold"
+			["hitpart"] = "Closest Part",
+			["smoothing"] = { ["x"] = 40, ["y"] = 40, ["z"] = 40 },
+			["use prediction"] = true,
+			["prediction"] = { ["x"] = 0.133, ["y"] = 0.133, ["z"] = 0.133 },
 			["fov"] = {
-				["type"] = "2D",
-				["radius"] = 750,
-				["show fov"] = false,
+				["enabled"] = true,
+				["visible"] = true,
+				["mode"] = "3D",
+				["active color"] = Color3.fromRGB(0, 17, 255),
+				["size"] = { ["x"] = 10, ["y"] = 10, ["z"] = 10 },
 			},
+			["distance check"] = { ["enabled"] = true, ["max distance"] = 300 },
 		},
 		["trigger bot"] = {
 			["enabled"] = false,
-			["distance"] = 750,
-			["settings"] = {
-				["mode"] = "Hold", -- "Always", "Toggle" or "Hold"
-				["type"] = "FOV", -- "FOV" or "Hitbox"
-			},
-			["delay settings"] = {
-				["delay toggle"] = true,
-				["delay"] = 0,
+			["mode"] = "Hold", -- "Always", "Toggle" or "Hold"
+			["delay"] = 0.01,
+			["require target"] = true,
+			["specific weapons"] = {
+				["enabled"] = false,
+				["weapons"] = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]" },
 			},
 			["fov"] = {
-				["type"] = "2D",
-				["show fov"] = false,
-				["radius"] = 150,
-				["size"] = {
-					["x left"] = 1,
-					["x right"] = 2,
-					["y upper"] = 1,
-					["y lower"] = 1,
-					["z left"] = 2,
-					["z right"] = 1,
-				},
+				["enabled"] = true,
+				["visible"] = true,
+				["mode"] = "3D",
+				["active color"] = Color3.fromRGB(0, 17, 255),
+				["size"] = { ["x"] = 10, ["y"] = 10, ["z"] = 10 },
 			},
+			["distance check"] = { ["enabled"] = true, ["max distance"] = 300 },
+		},
+		["target line"] = {
+			["enabled"] = true,
+			["thickness"] = 2.2,
+			["transparency"] = 0.8,
+			["vulnerable"] = Color3.fromRGB(255, 85, 127),
+			["invulnerable"] = Color3.fromRGB(150, 150, 150),
 		},
 		["spread modifications"] = {
 			["enabled"] = false,
-			["mode"] = "Fixed",
-			["Double-Barrel SG"] = { ["fixed"] = 0, ["min"] = 0, ["max"] = 0 },
-			["TacticalShotgun"] = { ["fixed"] = 0, ["min"] = 0, ["max"] = 0 },
-			["Shotgun"] = { ["fixed"] = 0, ["min"] = 0, ["max"] = 0 },
-			["DrumShotgun"] = { ["fixed"] = 0, ["min"] = 0, ["max"] = 0 },
-		},
-		["speed modifications"] = {
-			["enabled"] = false,
-			["normal"] = { ["multiplier"] = 45 }, -- walk speed is 16 times this
-			["low health"] = {
-				["health threshold"] = 35,
-				["multiplier"] = 45,
+			["amount"] = 1, -- the share of the spread that is kept, in percent
+			["specific weapons"] = {
+				["enabled"] = false,
+				["weapons"] = { "[Double-Barrel SG]", "[TacticalShotgun]" },
 			},
 		},
-		["anti fall"] = {
+		["super jump"] = {
 			["enabled"] = false,
+			["jump power"] = 100,
+		},
+		["rapid fire"] = {
+			["enabled"] = false,
+			["delay"] = 0.01,
+			["specific weapons"] = {
+				["enabled"] = false,
+				["weapons"] = { "[Revolver]" },
+			},
+		},
+		["hitbox expander"] = {
+			["enabled"] = false,
+			["size"] = 5,
+			["visualize"] = false,
 		},
 		["spiderman"] = {
 			["enabled"] = false,
-			["jump power"] = 50,
-			["knife jump power"] = 65,
+			["jumppower"] = 50,
+			["knifejumppower"] = 60,
 		},
-		["inventory sorter"] = {
+		["speed modifications"] = {
 			["enabled"] = false,
-			["slots"] = {
-				[1] = "[Double-Barrel SG]",
-				[2] = "[Revolver]",
-				[3] = "[TacticalShotgun]",
-				[4] = "[Knife]",
-				[5] = "[Silencer]",
-				[6] = "",
-				[7] = "",
-				[8] = "",
-				[9] = "",
-				[10] = "",
-			},
+			["multiplier"] = 35,
+		},
+		["esp"] = {
+			["enabled"] = false,
+			["color"] = Color3.fromRGB(255, 255, 255),
+			["target color"] = Color3.fromRGB(255, 0, 0),
+			["use display name"] = false,
+			["name above"] = false,
+		},
+		["headless"] = {
+			["enabled"] = false,
+			["remove face accessories"] = true,
 		},
 		["skins"] = {
 			["[Knife]"] = "",
@@ -9560,181 +9546,7 @@ do
 			return nil
 		end
 
-		---------- ESP ----------
-		local function createespdrawings()
-			local text = Drawing.new("Text")
-
-			text.Center = true
-			text.Visible = false
-			text.Font = 2
-			text.Size = 14
-			text.Color = Color3.fromRGB(220, 220, 220)
-
-			return { name = text }
-		end
-
-		-- What each name drawing shows now (text, size, colour, outline, shown), so a value that did not change is not written again: the six
-		-- properties were written for every player on every frame, and, with the ESP off, "hidden" to every drawing on every frame.
-		local espstate = {}
-		local espdrawn = false
-
-		local function removeesp(player)
-			espstate[player] = nil
-
-			if espcache[player] then
-				for _, drawing in pairs(espcache[player]) do
-					if drawing and drawing.Remove then
-						drawing:Remove()
-					end
-				end
-				espcache[player] = nil
-			end
-		end
-
-		local function updateesp()
-			local espcfg = config["esp"]
-
-			if not espcfg["enabled"] then
-				-- Hidden once, not on every frame for ever after the ESP was on once.
-				if espdrawn then
-					espdrawn = false
-
-					for player, drawings in pairs(espcache) do
-						for _, drawing in pairs(drawings) do
-							if drawing then
-								drawing.Visible = false
-							end
-						end
-
-						if espstate[player] then
-							espstate[player].shown = false
-						end
-					end
-				end
-
-				return
-			end
-
-			espdrawn = true
-
-			for _, player in ipairs(players:GetPlayers()) do
-				if player == localplayer then
-					continue
-				end
-
-				if not espcache[player] then
-					espcache[player] = createespdrawings()
-					espstate[player] = {}
-				end
-
-				local drawings = espcache[player]
-				local state = espstate[player]
-
-				if not state then
-					state = {}
-					espstate[player] = state
-				end
-
-				local character = player.Character
-				if not character then
-					if state.shown ~= false then
-						drawings.name.Visible = false
-						state.shown = false
-					end
-					continue
-				end
-
-				local root = character:FindFirstChild("HumanoidRootPart")
-				local head = character:FindFirstChild("Head")
-				if not root or not head then
-					if state.shown ~= false then
-						drawings.name.Visible = false
-						state.shown = false
-					end
-					continue
-				end
-
-				local rootpos, onscreen = camera:WorldToViewportPoint(root.Position)
-				if not onscreen or rootpos.Z <= 0 then
-					if state.shown ~= false then
-						drawings.name.Visible = false
-						state.shown = false
-					end
-					continue
-				end
-
-				local espcolor = (player == targetplayer) and espcfg["target color"] or espcfg["normal color"]
-				local ypos
-				if espcfg["position"] == "Top" then
-					local headpos = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-					ypos = headpos.Y - (15 * espcfg["size"])
-				else
-					local feetpos = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
-					ypos = feetpos.Y + (5 * espcfg["size"])
-				end
-
-				local nametext = player.DisplayName
-				local namesize = 14 * espcfg["size"]
-
-				if state.text ~= nametext then
-					drawings.name.Text = nametext
-					state.text = nametext
-				end
-
-				if state.size ~= namesize then
-					drawings.name.Size = namesize
-					state.size = namesize
-				end
-
-				drawings.name.Position = Vector2.new(rootpos.X, ypos)
-
-				if state.color ~= espcolor then
-					drawings.name.Color = espcolor
-					state.color = espcolor
-				end
-
-				if not state.outlined then
-					drawings.name.Outline = true
-					drawings.name.OutlineColor = Color3.fromRGB(0, 0, 0)
-					state.outlined = true
-				end
-
-				if state.shown ~= true then
-					drawings.name.Visible = true
-					state.shown = true
-				end
-			end
-		end
-
-		connect(players.PlayerRemoving, function(player)
-			removeesp(player)
-			if targetplayer == player then
-				targetplayer = nil
-				camlocktarget = nil
-				camlockpart = nil
-				camlockactive = false
-				clearhitboxes()
-			end
-		end)
-
-		---------- Movement ----------
-		local function antifall()
-			if not config["anti fall"]["enabled"] then
-				return
-			end
-
-			local char = localplayer.Character
-			local hum = char and char:FindFirstChildOfClass("Humanoid")
-			if not hum then
-				return
-			end
-
-			local state = hum:GetState()
-			if state == Enum.HumanoidStateType.FallingDown or state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.PlatformStanding then
-				hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-			end
-		end
-
+		---------- Movement (Glory v4: speed, wall jump, super jump) ----------
 		local function touchingwall()
 			local char = localplayer.Character
 			local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -9760,10 +9572,10 @@ do
 			local char = localplayer.Character
 			local tool = char and char:FindFirstChildOfClass("Tool")
 			if tool and tool.Name == "[Knife]" then
-				return config["spiderman"]["knife jump power"]
+				return config["spiderman"]["knifejumppower"]
 			end
 
-			return config["spiderman"]["jump power"]
+			return config["spiderman"]["jumppower"]
 		end
 
 		-- Lets a wall jump happen again once the humanoid lands or runs. One listener per
@@ -9823,13 +9635,7 @@ do
 				return
 			end
 
-			local speed = 16
-			if hum.Health <= cfg["low health"]["health threshold"] then
-				speed = speed * cfg["low health"]["multiplier"]
-			else
-				speed = speed * cfg["normal"]["multiplier"]
-			end
-
+			local speed = 16 * (tonumber(cfg["multiplier"]) or 1)
 			if hum.WalkSpeed ~= speed then
 				hum.WalkSpeed = speed
 			end
@@ -9860,79 +9666,6 @@ do
 					applyspeed()
 				end
 			end)
-		end
-
-		---------- Inventory sorter ----------
-		local function sortinventory()
-			local cfg = config["inventory sorter"]
-			if not cfg["enabled"] or sorting then
-				return
-			end
-
-			local backpack = localplayer:FindFirstChildOfClass("Backpack")
-			if not backpack then
-				return
-			end
-
-			sorting = true
-
-			local fakefolder = Instance.new("Folder")
-			fakefolder.Name = "GlorySortFolder"
-			fakefolder.Parent = workspace
-
-			local placeholders = {}
-
-			local ok, err = pcall(function()
-				for _, tool in ipairs(backpack:GetChildren()) do
-					if tool:IsA("Tool") then
-						tool.Parent = fakefolder
-					end
-				end
-
-				for i = 1, 10 do
-					local gunname = cfg["slots"][i]
-					local gun = gunname and gunname ~= "" and fakefolder:FindFirstChild(gunname) or nil
-
-					if gun then
-						gun.Parent = backpack
-					else
-						local placeholder = Instance.new("Tool")
-						placeholder.Name = ""
-						placeholder.RequiresHandle = false
-						placeholder.Parent = backpack
-						table.insert(placeholders, placeholder)
-					end
-
-					task.wait(0.05)
-				end
-
-				for _, tool in ipairs(fakefolder:GetChildren()) do
-					if tool:IsA("Tool") then
-						tool.Parent = backpack
-						task.wait(0.05)
-					end
-				end
-			end)
-
-			-- Whatever happened, nothing may stay parked in the folder. Every step is protected (a respawn can replace the backpack in the middle
-			-- of a sort), so `sorting` is always reset.
-			for _, tool in ipairs(fakefolder:GetChildren()) do
-				if tool:IsA("Tool") then
-					pcall(function()
-						tool.Parent = backpack
-					end)
-				end
-			end
-			for _, placeholder in ipairs(placeholders) do
-				pcall(placeholder.Destroy, placeholder)
-			end
-			pcall(fakefolder.Destroy, fakefolder)
-
-			sorting = false
-
-			if not ok then
-				warn("[SemiRage] Inventory sort failed: " .. tostring(err))
-			end
 		end
 
 		---------- Skins ----------
@@ -10532,155 +10265,113 @@ do
 			end
 		end)
 
-		---------- Targeting helpers ----------
-		---Reads the FOV box sizes of a section into the six sides the hit box is built from.
-		local function getsplitfov(section)
-			local fovdata = config[section]["fov"]
-			local size = fovdata["size"] or fovdata
+		---------- Targeting (Glory v4) ----------
+		-- Glory v4's targeting, camera aimbot, trigger bot, target line, rapid fire, hitbox expander, wall jump, name ESP and headless, with Force Hit and
+		-- Force Fire kept on the silent aimbot. Its silent aim hooks mouse.Hit, which this game's guns no longer read, so the shot is redirected where the gun
+		-- sends it (the ShootGun call), as the earlier Semi Rage did.
+		local rayparams = RaycastParams.new()
+		rayparams.FilterType = Enum.RaycastFilterType.Exclude
+		rayparams.IgnoreWater = true
 
-			return {
-				xleft = size["x right"] or 12,
-				xright = size["x left"] or 12,
-				yupper = size["y upper"] or 12,
-				ylower = size["y lower"] or 12,
-				zleft = size["z right"] or 12,
-				zright = size["z left"] or 12,
-			}
+		local currenttarget = nil -- the body part the silent aimbot and the camera aimbot are on
+		local silentaimactive = false
+		local lastvisibletarget = nil
+		local lasttriggerclick = 0
+		local lasttargetscan = 0
+		local scanrate = 1 / 20
+		local superjumpenabled = false
+		local isfiring = false
+		local lastrapidfire = 0
+		local originaljumppower = nil
+		local expanded = setmetatable({}, { __mode = "k" }) -- hitbox expander: the size each root part had
+		local latched = { silent = false, cam = false, trigger = false, superjump = false, speed = false, esp = false }
+
+		local fovparts = {}
+		local fov2dboxes = {}
+
+		for _, key in ipairs({ "silent", "camlock", "trigger" }) do
+			local part = Instance.new("Part")
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.CastShadow = false
+			part.Transparency = 1
+			part.BrickColor = BrickColor.new("Grey")
+			part.Material = Enum.Material.Neon
+			part.Name = "fovoutline3d_" .. key
+			part.Parent = workspace
+			fovparts[key] = part
+
+			local lines = {}
+			for index = 1, 4 do
+				local line = Drawing.new("Line")
+				line.Thickness = 1.5
+				line.Color = Color3.fromRGB(150, 150, 150)
+				line.Visible = false
+				line.ZIndex = 5
+				lines[index] = line
+			end
+			fov2dboxes[key] = lines
 		end
 
-		local function istargetin2dfov(radius)
-			if not targetplayer or not targetplayer.Character then
-				return false
-			end
+		local targetline = Drawing.new("Line")
+		targetline.Visible = false
+		targetline.ZIndex = 999
 
-			local root = targetplayer.Character:FindFirstChild("HumanoidRootPart")
-			if not root then
-				return false
-			end
-
-			local screenpos, onscreen = camera:WorldToViewportPoint(root.Position)
-			if not onscreen or screenpos.Z <= 0 then
-				return false
-			end
-
-			local mousepos = userinputservice:GetMouseLocation()
-			return (Vector2.new(screenpos.X, screenpos.Y) - mousepos).Magnitude <= radius
-		end
-
-		---Whether the cursor ray passes through an oriented box.
-		local function rayintersectsbox(boxcf, halfsize)
-			local mousepos = userinputservice:GetMouseLocation()
-			local ray = camera:ViewportPointToRay(mousepos.X, mousepos.Y)
-			local localorigin = boxcf:PointToObjectSpace(ray.Origin)
-			local localdir = boxcf:VectorToObjectSpace(ray.Direction).Unit
-
-			local function slab(o, d, minb, maxb)
-				if math.abs(d) < 1e-6 then
-					if o < minb or o > maxb then
-						return math.huge, -math.huge
-					end
-					return -math.huge, math.huge
-				end
-
-				local t1 = (minb - o) / d
-				local t2 = (maxb - o) / d
-				return math.min(t1, t2), math.max(t1, t2)
-			end
-
-			local txmin, txmax = slab(localorigin.X, localdir.X, -halfsize.X, halfsize.X)
-			local tymin, tymax = slab(localorigin.Y, localdir.Y, -halfsize.Y, halfsize.Y)
-			local tzmin, tzmax = slab(localorigin.Z, localdir.Z, -halfsize.Z, halfsize.Z)
-
-			local tmin = math.max(txmin, tymin, tzmin)
-			local tmax = math.min(txmax, tymax, tzmax)
-
-			return tmax >= math.max(tmin, 0)
-		end
-
-		local function ismouseinboxfov(hitbox)
-			if not hitbox or not hitbox.Parent then
-				return false
-			end
-
-			return rayintersectsbox(hitbox.CFrame, hitbox.Size / 2)
-		end
-
-		local function ismouseinsilentfov()
-			local fovcfg = config["silent aimbot"]["fov"]
-
-			if (fovcfg["type"] or "3D") == "2D" then
-				return istargetin2dfov(fovcfg["radius"] or 150)
-			end
-
-			-- The part the check uses is built whether or not the box is shown ("show fov" only decides if the outline is drawn).
-			return targetcache.hitbox ~= nil and ismouseinboxfov(targetcache.hitbox)
-		end
-
-		-- Raycast settings shared by the visibility and hitbox tests below: only the filter list changes from one call to the next.
-		local visparams = RaycastParams.new()
-		visparams.FilterType = Enum.RaycastFilterType.Exclude
-		visparams.IgnoreWater = true
-		local hitparams = RaycastParams.new()
-		hitparams.FilterType = Enum.RaycastFilterType.Include
-		hitparams.IgnoreWater = true
-
-		local function isvisible(origin, targetpart, targetcharacter)
-			if not config["checks"]["visible check"] then
-				return true
-			end
-
-			if not targetpart or not targetpart:IsA("BasePart") then
-				return false
-			end
-
-			local direction = targetpart.Position - origin
-			if direction.Magnitude <= 0 then
-				return true
-			end
-
-			visparams.FilterDescendantsInstances = { localplayer.Character, targetcharacter, camera }
-
-			return workspace:Raycast(origin, direction, visparams) == nil
-		end
-
-		local function isvisibleadvanced(origin, targetcharacter)
-			if not config["checks"]["visible check"] then
-				return true
-			end
-
-			if not targetcharacter then
-				return false
-			end
-
-			for _, partname in ipairs({ "Head", "UpperTorso", "HumanoidRootPart" }) do
-				local part = targetcharacter:FindFirstChild(partname)
-				if part and part:IsA("BasePart") and isvisible(origin, part, targetcharacter) then
-					return true
+		local function filterlist(...)
+			local list = {}
+			for index = 1, select("#", ...) do
+				local instance = select(index, ...)
+				if instance then
+					table.insert(list, instance)
 				end
 			end
-
-			return false
+			return list
 		end
 
-		local function issamecrew(target)
-			if not config["checks"]["crew check"] then
+		local function holdingknife()
+			if not config["settings"]["knife check"] then
 				return false
 			end
 
-			local localcrew = localplayer:GetAttribute("CrewID")
-			local targetcrew = target:GetAttribute("CrewID")
-
-			return localcrew ~= nil and targetcrew ~= nil and localcrew == targetcrew
+			local char = localplayer.Character
+			local tool = char and char:FindFirstChildOfClass("Tool")
+			return tool ~= nil and tool.Name == "[Knife]"
 		end
 
 		local function getko(character)
-			local bodyeffects = character and character:FindFirstChild("BodyEffects")
-			local ko = bodyeffects and bodyeffects:FindFirstChild("K.O")
-			return ko and ko.Value or false
+			local effects = character and character:FindFirstChild("BodyEffects")
+			if not effects then
+				return false
+			end
+
+			local ko = effects:FindFirstChild("K.O")
+			if ko and ko.Value == true then
+				return true
+			end
+
+			local knocked = effects:FindFirstChild("Knocked")
+			return knocked ~= nil and knocked.Value == true
 		end
 
-		---True while a character is behind its spawn protection or the server has not finished loading it. The marker is a
-		---child named FORCEFIELD (or a ForceField instance), and FULLY_LOADED_CHAR is added once the spawn is complete.
+		local function playerknocked(player)
+			if not config["settings"]["knock check"] then
+				return false
+			end
+
+			return player.Character ~= nil and getko(player.Character)
+		end
+
+		local function selfknocked()
+			if not config["settings"]["self knock check"] then
+				return false
+			end
+
+			return getko(localplayer.Character)
+		end
+
+		---True while a character is behind a forcefield or still loading in (the game's own protection markers).
 		function Semi.spawnprotected(character)
 			if not character or not character.Parent then
 				return true
@@ -10697,844 +10388,597 @@ do
 			return character:GetAttribute("AdminInvisible") == true or character:GetAttribute("BatmanFlight") == true
 		end
 
-		local function isselfknocked()
-			return getko(localplayer.Character)
-		end
-
-		---True while the target should be left alone (knocked out, or behind a forcefield when that check is on).
-		local function istargetpaused()
-			if not targetplayer or not targetplayer.Character then
+		local function cansee(part)
+			if not config["settings"]["visible check"] then
 				return true
 			end
 
-			local char = targetplayer.Character
-			if config["checks"]["ko check"] and getko(char) then
+			if not part or not part.Parent then
+				return false
+			end
+
+			local char = part.Parent
+			local origin = camera.CFrame.Position
+
+			rayparams.FilterDescendantsInstances = filterlist(localplayer.Character, char, fovparts.silent, fovparts.camlock, fovparts.trigger, workspace:FindFirstChild("Ignored"))
+
+			local result = workspace:Raycast(origin, part.Position - origin, rayparams)
+			return result == nil or result.Instance:IsDescendantOf(char)
+		end
+
+		local function withindistance(part, distcfg)
+			if not distcfg or not distcfg["enabled"] then
 				return true
 			end
 
-			if config["checks"]["forcefield check"] and Semi.spawnprotected(char) then
-				return true
+			if not part or not part.Parent then
+				return false
 			end
 
-			return false
+			local hrp = localplayer.Character and localplayer.Character:FindFirstChild("HumanoidRootPart")
+			if not hrp then
+				return false
+			end
+
+			return (hrp.Position - part.Position).Magnitude <= distcfg["max distance"]
 		end
 
-		local function getdistancetotarget()
-			local targetroot = targetplayer and targetplayer.Character and targetplayer.Character:FindFirstChild("HumanoidRootPart")
-			local localroot = localplayer.Character and localplayer.Character:FindFirstChild("HumanoidRootPart")
+		local BODY_PARTS = {
+			"Head", "UpperTorso", "HumanoidRootPart", "LowerTorso", "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+			"LeftHand", "RightHand", "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg", "LeftFoot", "RightFoot",
+		}
 
-			if not targetroot or not localroot then
-				return math.huge
-			end
-
-			return (targetroot.Position - localroot.Position).Magnitude
-		end
-
-		---------- Closest point ----------
-		local function getclosestpointfast(character)
-			if not (character and character.Parent) then
-				return nil
-			end
-
+		---The body part on screen closest to the cursor.
+		local function closestbodypart(char)
+			local closestpart = nil
+			local shortest = math.huge
 			local mousepos = userinputservice:GetMouseLocation()
-			local bestdist = 1e9
-			local bestpart, bestpos
 
-			for _, name in ipairs(PRIORITY_PARTS) do
-				local part = character:FindFirstChild(name)
-				if part and part:IsA("BasePart") then
-					local s = camera:WorldToViewportPoint(part.Position)
-					if s.Z > 0 then
-						local dist = (s.X - mousepos.X) ^ 2 + (s.Y - mousepos.Y) ^ 2
-						if dist < bestdist then
-							bestdist = dist
-							bestpart = part
-							bestpos = part.Position
+			for _, name in ipairs(BODY_PARTS) do
+				local part = char:FindFirstChild(name)
+
+				if part then
+					local screenpos, onscreen = camera:WorldToViewportPoint(part.Position)
+
+					if onscreen then
+						local dist = math.sqrt((screenpos.X - mousepos.X) ^ 2 + (screenpos.Y - mousepos.Y) ^ 2)
+
+						if dist < shortest then
+							shortest = dist
+							closestpart = part
 						end
 					end
 				end
 			end
 
-			if bestpart then
-				return { part = bestpart, position = bestpos }
-			end
-
-			local root = character:FindFirstChild("HumanoidRootPart")
-			return root and { part = root, position = root.Position } or nil
+			return closestpart
 		end
 
-		-- Silent aim and camera lock keep separate caches: they scan with different settings.
-		local function getclosestpoint(character, iscamlock)
-			if not (character and character.Parent) then
-				return nil
+		---The part a section aims at: its Hit Part setting, or the closest one to the cursor.
+		local function withhitpart(part, hitpart)
+			if not part or not part.Parent or hitpart == nil or hitpart == "Closest Part" then
+				return part
 			end
 
-			local cachekey = iscamlock and "cam" or "silent"
-			local cached = closestcache[cachekey]
-			local now = tick()
-			if cached and cached.character == character and (now - cached.time) < closestcacherate then
-				return cached.result
-			end
+			return part.Parent:FindFirstChild(hitpart) or part
+		end
 
-			local mousepos = userinputservice:GetMouseLocation()
-			local cfg = iscamlock and config["camera aimbot"]["closest point"] or config["silent aimbot"]["closest point"]
-			local mode = cfg["mode"] or "Advanced"
-			local scalefactor = math.clamp(cfg["scale"] or 0.17, 0, 1)
-			local density = math.min(cfg["density"] or 4, 3)
-			local bestdist = 1e9
-			local bestpart, bestpos
+		---Whether the line from the cursor goes through a box (a CFrame and its full size).
+		local function cursorhitsbox(cf, fullsize)
+			local mpos = userinputservice:GetMouseLocation()
+			local ray = camera:ViewportPointToRay(mpos.X, mpos.Y)
+			local size = fullsize / 2
+			local localorigin = cf:PointToObjectSpace(ray.Origin)
+			local localdir = cf:VectorToObjectSpace(ray.Direction * 1000)
+			local tmin, tmax = -math.huge, math.huge
 
-			if mode == "Basic" then
-				for _, name in ipairs(PRIORITY_PARTS) do
-					local part = character:FindFirstChild(name)
-					if part and part:IsA("BasePart") then
-						local s = camera:WorldToViewportPoint(part.Position)
-						if s.Z > 0 then
-							local dist = (s.X - mousepos.X) ^ 2 + (s.Y - mousepos.Y) ^ 2
-							if dist < bestdist then
-								bestdist = dist
-								bestpart = part
-								bestpos = part.Position
-							end
-						end
+			for _, axis in ipairs({ "X", "Y", "Z" }) do
+				local o = localorigin[axis]
+				local d = localdir[axis]
+				local s = size[axis]
+
+				if math.abs(d) < 1e-8 then
+					if o < -s or o > s then
+						return false
 					end
-				end
-			else
-				local step = 1 / math.max(density - 1, 1)
-
-				for _, name in ipairs(PRIORITY_PARTS) do
-					local part = character:FindFirstChild(name)
-					if part and part:IsA("BasePart") then
-						local size = part.Size
-						local half = size * 0.5
-						local cframe = part.CFrame
-						local scaledhalf = half * (1 - scalefactor)
-
-						for z = 0, density - 1 do
-							local clampedz = math.clamp(-half.Z + z * step * size.Z, -scaledhalf.Z, scaledhalf.Z)
-							for y = 0, density - 1 do
-								local clampedy = math.clamp(-half.Y + y * step * size.Y, -scaledhalf.Y, scaledhalf.Y)
-								for x = 0, density - 1 do
-									local clampedx = math.clamp(-half.X + x * step * size.X, -scaledhalf.X, scaledhalf.X)
-									local worldpos = cframe:PointToWorldSpace(Vector3.new(clampedx, clampedy, clampedz))
-									local s = camera:WorldToViewportPoint(worldpos)
-									if s.Z > 0 then
-										local dist = (s.X - mousepos.X) ^ 2 + (s.Y - mousepos.Y) ^ 2
-										if dist < bestdist then
-											bestdist = dist
-											bestpart = part
-											bestpos = worldpos
-										end
-									end
-								end
-							end
-						end
+				else
+					local t1 = (-s - o) / d
+					local t2 = (s - o) / d
+					if t1 > t2 then
+						t1, t2 = t2, t1
+					end
+					tmin = math.max(tmin, t1)
+					tmax = math.min(tmax, t2)
+					if tmin > tmax then
+						return false
 					end
 				end
 			end
 
-			local result
-			if bestpart then
-				result = { part = bestpart, position = bestpos }
-			else
-				local root = character:FindFirstChild("HumanoidRootPart")
-				result = root and { part = root, position = root.Position } or nil
-			end
-
-			closestcache[cachekey] = { character = character, result = result, time = now }
-			return result
+			return tmax > 0
 		end
 
-		---Picks the part the silent aimbot or the camera lock aims for.
-		local function getbodypart(character, section, iscamlock)
-			if not character then
+		---The corners of the 3D FOV box round a root part, as the screen box they cover (nil when it is behind the camera).
+		local function getscreenbounds2d(hrp, fovcfg)
+			local sx = (hrp.Size.X + fovcfg["size"]["x"]) / 2
+			local sy = (hrp.Size.Y + fovcfg["size"]["y"]) / 2
+			local sz = (hrp.Size.Z + fovcfg["size"]["z"]) / 2
+			local cf = hrp.CFrame
+			local minx, miny = math.huge, math.huge
+			local maxx, maxy = -math.huge, -math.huge
+			local valid = false
+
+			for _, offset in ipairs({
+				Vector3.new(sx, sy, sz), Vector3.new(-sx, sy, sz), Vector3.new(sx, -sy, sz), Vector3.new(-sx, -sy, sz),
+				Vector3.new(sx, sy, -sz), Vector3.new(-sx, sy, -sz), Vector3.new(sx, -sy, -sz), Vector3.new(-sx, -sy, -sz),
+			}) do
+				local screen = camera:WorldToViewportPoint(cf:PointToWorldSpace(offset))
+
+				if screen.Z > 0 then
+					valid = true
+					minx, miny = math.min(minx, screen.X), math.min(miny, screen.Y)
+					maxx, maxy = math.max(maxx, screen.X), math.max(maxy, screen.Y)
+				end
+			end
+
+			if not valid then
+				return nil, nil
+			end
+
+			return Vector2.new(minx, miny), Vector2.new(maxx, maxy)
+		end
+
+		---Whether the cursor is inside a section's FOV box round the target (3D: the line from the cursor goes through it; 2D: the cursor is inside its screen box).
+		local function mouseinfovconfig(fovcfg, targetpart)
+			if not fovcfg["enabled"] then
+				return true
+			end
+
+			if not targetpart or not targetpart.Parent then
+				return false
+			end
+
+			local hrp = targetpart.Parent:FindFirstChild("HumanoidRootPart")
+			if not hrp then
+				return false
+			end
+
+			if fovcfg["mode"] == "2D" then
+				local tl, br = getscreenbounds2d(hrp, fovcfg)
+				if not tl then
+					return false
+				end
+
+				local mpos = userinputservice:GetMouseLocation()
+				return mpos.X >= tl.X and mpos.X <= br.X and mpos.Y >= tl.Y and mpos.Y <= br.Y
+			end
+
+			return cursorhitsbox(hrp.CFrame, hrp.Size + Vector3.new(fovcfg["size"]["x"], fovcfg["size"]["y"], fovcfg["size"]["z"]))
+		end
+
+		local function setbox2d(lines, tl, br, color)
+			lines[1].From = tl
+			lines[1].To = Vector2.new(br.X, tl.Y)
+			lines[2].From = Vector2.new(tl.X, br.Y)
+			lines[2].To = br
+			lines[3].From = tl
+			lines[3].To = Vector2.new(tl.X, br.Y)
+			lines[4].From = Vector2.new(br.X, tl.Y)
+			lines[4].To = br
+
+			for _, line in ipairs(lines) do
+				line.Color = color
+				line.Visible = true
+			end
+		end
+
+		local function hidebox2d(lines)
+			for _, line in ipairs(lines) do
+				line.Visible = false
+			end
+		end
+
+		---The best player for a section: on screen, inside its FOV, in the open and in range, the one closest to the cursor. Returns the part to aim at.
+		local function findtarget(fovcfg, distcfg, knifecheck)
+			if knifecheck and holdingknife() then
 				return nil
 			end
 
-			local hitpart = config[section]["hitpart"]
-			if hitpart == "Closest Point" then
-				return getclosestpoint(character, iscamlock)
-			end
-
-			local part = character:FindFirstChild(hitpart)
-			if part and part:IsA("BasePart") then
-				return { part = part, position = part.Position }
-			end
-
-			return getclosestpointfast(character)
-		end
-
-		local function getclosestbodypart(character)
-			return getbodypart(character, "silent aimbot", false)
-		end
-
-		local function getcamlockbodypart(character)
-			return getbodypart(character, "camera aimbot", true)
-		end
-
-		---The player closest to the cursor that passes every check.
-		local function getbesttarget()
-			local closestplayer, closestdist = nil, math.huge
-			local mousepos = userinputservice:GetMouseLocation()
-			local camerapos = camera.CFrame.Position
-			local checks = config["checks"]
+			local besttarget = nil
+			local bestdist = math.huge
+			local mpos = userinputservice:GetMouseLocation()
 
 			for _, player in ipairs(players:GetPlayers()) do
-				if player == localplayer then
-					continue
-				end
+				local char = player ~= localplayer and player.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-				local char = player.Character
-				local root = char and char:FindFirstChild("HumanoidRootPart")
-				if not root then
-					continue
-				end
+				if hrp and not playerknocked(player) then
+					local screenpos, onscreen = camera:WorldToViewportPoint(hrp.Position)
 
-				if checks["knock check"] and getko(char) then
-					continue
-				end
-				if checks["forcefield check"] and Semi.spawnprotected(char) then
-					continue
-				end
-				if checks["crew check"] and issamecrew(player) then
-					continue
-				end
-				-- The on-screen test and the distance come before the raycasts: a player who is off screen, or farther from the cursor than the
-				-- best one so far, can't be picked whatever the raycasts say.
-				local screenpos, onscreen = camera:WorldToViewportPoint(root.Position)
-				if not onscreen or screenpos.Z <= 0 then
-					continue
-				end
+					if onscreen
+						and not (config["settings"]["forcefield check"] and Semi.spawnprotected(char))
+						and not (fovcfg and fovcfg["enabled"] and not mouseinfovconfig(fovcfg, hrp))
+						and cansee(hrp)
+						and withindistance(hrp, distcfg)
+					then
+						local dist = math.sqrt((screenpos.X - mpos.X) ^ 2 + (screenpos.Y - mpos.Y) ^ 2)
 
-				local dist2d = (Vector2.new(screenpos.X, screenpos.Y) - mousepos).Magnitude
-				if dist2d < closestdist and not (checks["visible check"] and not isvisibleadvanced(camerapos, char)) then
-					closestdist = dist2d
-					closestplayer = player
+						if dist < bestdist then
+							bestdist = dist
+							besttarget = hrp
+						end
+					end
 				end
 			end
 
-			return closestplayer
+			if besttarget then
+				return closestbodypart(besttarget.Parent) or besttarget
+			end
+
+			return nil
 		end
 
-		---Drops the target when it has no character or root any more. Returns true when it did.
-		local function cleartargetifinvalid()
-			-- Nobody selected: just make sure nothing is left over from the last target.
-			if not targetplayer then
-				if camlockactive or camlocktarget or camlockpart or targetcache.hitbox or targetcache.trigger then
-					camlocktarget = nil
-					camlockpart = nil
-					camlockactive = false
-					clearhitboxes()
+		---Where a part will be: its position plus its velocity times the section's prediction, per axis.
+		local function predictedpos(part, section)
+			if not section["use prediction"] then
+				return part.Position
+			end
+
+			local vel = part.AssemblyLinearVelocity
+			local prediction = section["prediction"]
+
+			return part.Position + Vector3.new(
+				vel.X * (tonumber(prediction["x"]) or 0.133),
+				vel.Y * (tonumber(prediction["y"]) or 0.133),
+				vel.Z * (tonumber(prediction["z"]) or 0.133)
+			)
+		end
+
+		local function elasticout(t)
+			local p = 0.3
+			return math.pow(2, -10 * t) * math.sin((t - p / 4) * (2 * math.pi) / p) + 1
+		end
+
+		local function sineinout(t)
+			return -(math.cos(math.pi * t) - 1) / 2
+		end
+
+		local function clearcurrenttarget()
+			currenttarget = nil
+			lastvisibletarget = nil
+			targetline.Visible = false
+		end
+
+		---Puts the silent aimbot on a body part without a key press (nil lets it go).
+		function Semi.setTarget(part)
+			currenttarget = part
+			lastvisibletarget = part
+			silentaimactive = part ~= nil
+		end
+
+		-- The target of the camera aimbot: the part it is on (re-picked a few times a second when its Hit Part is Closest Part), or a new one.
+		local function getcamlocktarget()
+			local cam = config["camera aimbot"]
+
+			if camlockactive and currenttarget then
+				local player = players:GetPlayerFromCharacter(currenttarget.Parent)
+
+				if player and not playerknocked(player) then
+					local targetpart = nil
+
+					if cam["hitpart"] == "Closest Part" then
+						local now = os.clock()
+
+						if now - lasttargetscan >= scanrate then
+							lasttargetscan = now
+							targetpart = closestbodypart(currenttarget.Parent)
+
+							if targetpart then
+								currenttarget = targetpart
+							end
+						else
+							targetpart = currenttarget
+						end
+					else
+						targetpart = currenttarget.Parent:FindFirstChild(cam["hitpart"])
+					end
+
+					if targetpart then
+						if cansee(targetpart) and withindistance(targetpart, cam["distance check"]) then
+							lastvisibletarget = targetpart
+							return targetpart
+						end
+					end
+
+					return nil
 				end
-				return true
-			end
 
-			local char = targetplayer.Character
-			local root = char and char:FindFirstChild("HumanoidRootPart")
-
-			-- Knocked-out and forcefielded targets are only paused, not dropped.
-			local invalid = not root
-			if not invalid and config["checks"]["ko check"] and getko(char) then
-				return false
-			end
-			if not invalid and config["checks"]["forcefield check"] and Semi.spawnprotected(char) then
-				return false
-			end
-			if not invalid then
-				invalid = (config["checks"]["knock check"] and getko(char)) or (config["checks"]["crew check"] and issamecrew(targetplayer))
-			end
-
-			if invalid then
-				targetplayer = nil
-				camlocktarget = nil
-				camlockpart = nil
+				clearcurrenttarget()
 				camlockactive = false
-				clearhitboxes()
-				return true
+				return nil
+			end
+
+			return findtarget(cam["fov"], cam["distance check"], true)
+		end
+
+		local function applycamlock()
+			if not camlockactive then
+				return
+			end
+
+			if selfknocked() then
+				clearcurrenttarget()
+				camlockactive = false
+				return
+			end
+
+			if holdingknife() then
+				return
+			end
+
+			local cam = config["camera aimbot"]
+
+			if cam["fov"]["enabled"] and currenttarget and not mouseinfovconfig(cam["fov"], currenttarget) then
+				return
+			end
+
+			local target = getcamlocktarget()
+
+			if target then
+				local targetpos = predictedpos(target, cam)
+				local camcf = camera.CFrame
+				local targetcf = CFrame.new(camcf.Position, targetpos)
+				local smoothing = cam["smoothing"]
+
+				local bax = 1 / math.max(tonumber(smoothing["x"]) or 40, 1)
+				local bay = 1 / math.max(tonumber(smoothing["y"]) or 40, 1)
+				local baz = 1 / math.max(tonumber(smoothing["z"]) or 40, 1)
+
+				local avgea = (elasticout(math.min(bax, 1)) + elasticout(math.min(bay, 1)) + elasticout(math.min(baz, 1))) / 3
+				local avgba = (bax + bay + baz) / 3
+
+				local smoothcf = camcf:Lerp(targetcf, avgea * avgba)
+				camera.CFrame = smoothcf:Lerp(targetcf, sineinout(math.min(avgba, 1)) * avgba)
+			elseif lastvisibletarget then
+				local player = players:GetPlayerFromCharacter(lastvisibletarget.Parent)
+
+				if player and not playerknocked(player) and cansee(lastvisibletarget) and withindistance(lastvisibletarget, cam["distance check"]) then
+					currenttarget = lastvisibletarget
+				end
+			end
+		end
+
+		---Shows the FOV box round the current target for one section.
+		local function updatefovbox(fovpart, lines2d, fovcfg, isactive)
+			local hrp = isactive and fovcfg["enabled"] and currenttarget and currenttarget.Parent and currenttarget.Parent:FindFirstChild("HumanoidRootPart")
+
+			if not hrp then
+				fovpart.Transparency = 1
+				hidebox2d(lines2d)
+				return
+			end
+
+			if fovcfg["mode"] == "2D" then
+				fovpart.Transparency = 1
+
+				if fovcfg["visible"] then
+					local tl, br = getscreenbounds2d(hrp, fovcfg)
+
+					if tl and br then
+						local mpos = userinputservice:GetMouseLocation()
+						local inside = mpos.X >= tl.X and mpos.X <= br.X and mpos.Y >= tl.Y and mpos.Y <= br.Y
+						setbox2d(lines2d, tl, br, inside and fovcfg["active color"] or Color3.fromRGB(150, 150, 150))
+					else
+						hidebox2d(lines2d)
+					end
+				else
+					hidebox2d(lines2d)
+				end
+			else
+				hidebox2d(lines2d)
+				fovpart.Size = hrp.Size + Vector3.new(fovcfg["size"]["x"], fovcfg["size"]["y"], fovcfg["size"]["z"])
+				fovpart.CFrame = hrp.CFrame
+
+				if fovcfg["visible"] then
+					fovpart.Transparency = 0.85
+					fovpart.BrickColor = cursorhitsbox(fovpart.CFrame, fovpart.Size) and BrickColor.new(fovcfg["active color"]) or BrickColor.new("Grey")
+				else
+					fovpart.Transparency = 1
+				end
+			end
+		end
+
+		local function updatetargetline()
+			local line = config["target line"]
+
+			if not line["enabled"] or not currenttarget or not currenttarget.Parent or (not silentaimactive and not camlockactive) then
+				targetline.Visible = false
+				return
+			end
+
+			local hrp = currenttarget.Parent:FindFirstChild("HumanoidRootPart")
+			if not hrp then
+				targetline.Visible = false
+				return
+			end
+
+			local screenpos, onscreen = camera:WorldToViewportPoint(hrp.Position)
+
+			if onscreen and screenpos.Z > 0 then
+				local mpos = userinputservice:GetMouseLocation()
+
+				targetline.From = Vector2.new(mpos.X, mpos.Y)
+				targetline.To = Vector2.new(screenpos.X, screenpos.Y)
+				targetline.Thickness = line["thickness"]
+				targetline.Transparency = line["transparency"]
+				targetline.Color = cansee(currenttarget) and line["vulnerable"] or line["invulnerable"]
+				targetline.Visible = true
+			else
+				targetline.Visible = false
+			end
+		end
+
+		---Whether a tool is on a list of names (with or without the brackets).
+		local function toolonlist(tool, list)
+			for _, name in ipairs(list) do
+				local clean = name:gsub("%[", ""):gsub("%]", "")
+				if tool.Name == name or tool.Name:find(clean, 1, true) then
+					return true
+				end
 			end
 
 			return false
 		end
 
 		---------- Trigger bot ----------
-		local function ismouseintriggerfov2d()
-			local root = targetplayer and targetplayer.Character and targetplayer.Character:FindFirstChild("HumanoidRootPart")
-			if not root then
-				return false
-			end
-
-			local screenpos, onscreen = camera:WorldToViewportPoint(root.Position)
-			if not onscreen or screenpos.Z <= 0 then
-				return false
-			end
-
-			local mousepos = userinputservice:GetMouseLocation()
-			local radius = config["trigger bot"]["fov"]["radius"] or 150
-			return (Vector2.new(screenpos.X, screenpos.Y) - mousepos).Magnitude <= radius
+		local function triggerenabled()
+			local mode = config["trigger bot"]["mode"]
+			return mode == "Always" or (mode == "Toggle" and triggerbotactive) or (mode == "Hold" and triggerhold)
 		end
 
-		local function ismouseintriggerfovbox()
-			local char = targetplayer and targetplayer.Character
-			local root = char and char:FindFirstChild("HumanoidRootPart")
-			if not root then
-				return false
+		local function triggerbot()
+			local cfg = config["trigger bot"]
+
+			if not cfg["enabled"] or not triggerenabled() or holdingknife() then
+				return
 			end
 
-			local uppertorso = char:FindFirstChild("UpperTorso")
-			local basepos = uppertorso and uppertorso.Position or root.Position
-			local fov = getsplitfov("trigger bot")
-			local size = Vector3.new(fov.xleft + fov.xright, fov.yupper + fov.ylower, fov.zleft + fov.zright)
-			local offset = Vector3.new((fov.xright - fov.xleft) / 2, (fov.yupper - fov.ylower) / 2, (fov.zright - fov.zleft) / 2)
-			local look = root.CFrame.LookVector
-			local facing = CFrame.lookAt(Vector3.zero, Vector3.new(look.X, 0, look.Z))
-			local boxcf = CFrame.new(basepos + facing:VectorToWorldSpace(offset)) * facing
-
-			return rayintersectsbox(boxcf, size / 2)
-		end
-
-		local function ismouseonplayerhitbox()
-			local char = targetplayer and targetplayer.Character
-			if not char then
-				return false
+			if os.clock() - lasttriggerclick < cfg["delay"] then
+				return
 			end
 
-			local mousepos = userinputservice:GetMouseLocation()
-			local unitray = camera:ViewportPointToRay(mousepos.X, mousepos.Y)
-
-			hitparams.FilterDescendantsInstances = { char }
-
-			local result = workspace:Raycast(unitray.Origin, unitray.Direction * 2000, hitparams)
-			return result ~= nil and result.Instance ~= nil and result.Instance:IsDescendantOf(char)
-		end
-
-		local function gettriggerbotstate()
-			local mode = config["trigger bot"]["settings"]["mode"]
-
-			if mode == "Always" then
-				return true
-			elseif mode == "Toggle" then
-				return triggerbotactive
-			elseif mode == "Hold" then
-				return triggerhold
+			if cfg["require target"] and not currenttarget then
+				return
 			end
 
-			return false
-		end
+			if currenttarget then
+				local char = currenttarget.Parent
+				local player = char and players:GetPlayerFromCharacter(char)
 
-		local function checktriggerinrange()
-			local trigtype = config["trigger bot"]["settings"]["type"]
-
-			if trigtype == "FOV" then
-				if (config["trigger bot"]["fov"]["type"] or "3D") == "2D" then
-					return ismouseintriggerfov2d()
+				if not player or playerknocked(player) or not cansee(currenttarget) or not withindistance(currenttarget, cfg["distance check"]) then
+					return
 				end
-				return ismouseintriggerfovbox()
-			elseif trigtype == "Hitbox" then
-				return ismouseonplayerhitbox()
+
+				if cfg["fov"]["enabled"] and not mouseinfovconfig(cfg["fov"], currenttarget) then
+					return
+				end
 			end
 
-			return false
+			local tool = localplayer.Character and localplayer.Character:FindFirstChildOfClass("Tool")
+			if not tool or (cfg["specific weapons"]["enabled"] and not toolonlist(tool, cfg["specific weapons"]["weapons"])) then
+				return
+			end
+
+			tool:Activate()
+			lasttriggerclick = os.clock()
 		end
 
-		local function istargetvalid()
-			local char = targetplayer and targetplayer.Character
-			if not char or not char:FindFirstChild("HumanoidRootPart") then
-				return false
-			end
-
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			if not hum or hum.Health <= 0 then
-				return false
-			end
-
-			if config["checks"]["ko check"] and getko(char) then
-				return false
-			end
-
-			if config["checks"]["forcefield check"] and Semi.spawnprotected(char) then
-				return false
-			end
-
-			return true
-		end
-
-		local function canseepartfortrigger(part, char)
-			if not config["checks"]["visible check"] then
-				return true
-			end
-
-			if not part then
-				return false
-			end
-
-			local origin = camera.CFrame.Position
-			visparams.FilterDescendantsInstances = { localplayer.Character, char, camera }
-
-			return workspace:Raycast(origin, part.Position - origin, visparams) == nil
-		end
-
-		local function firetrigger()
+		---------- Rapid fire ----------
+		local function getrapidgun()
 			local char = localplayer.Character
-			local tool = char and char:FindFirstChildOfClass("Tool")
-			if not tool or tool.Name == "[Knife]" or not tool:FindFirstChild("Handle") then
-				return
-			end
-
-			for _ = 1, 3 do
-				task.spawn(function()
-					tool:Activate()
-				end)
-			end
-		end
-
-		task.spawn(function()
-			while Semi.Alive do
-				local cfg = config["trigger bot"]
-				local fired = false
-
-				if cfg["enabled"] and not leftctrlheld and not masterActive() and targetplayer and istargetvalid() and not (config["checks"]["self knock check"] and isselfknocked()) then
-					local isselect = config["targeting"]["target mode"] == "Select"
-					local forcetrig = isselect and config["select only features"]["force trigger"]
-					local forcehit = isselect and config["select only features"]["force hit"]
-
-					if forcetrig or gettriggerbotstate() then
-						if getdistancetotarget() <= (cfg["distance"] or 150) and (forcetrig or checktriggerinrange()) then
-							local tchar = targetplayer.Character
-							local hitpart = nil
-
-							if forcehit then
-								hitpart = tchar:FindFirstChild("Head")
-							else
-								local closest = getclosestbodypart(tchar)
-								hitpart = closest and closest.part
-							end
-
-							if hitpart and canseepartfortrigger(hitpart, tchar) then
-								firetrigger()
-								fired = true
-							end
-						end
-					end
-				end
-
-				local delcfg = cfg["delay settings"]
-				local dly = 0
-				if delcfg["delay toggle"] and delcfg["delay"] then
-					dly = delcfg["delay"]
-				end
-
-				if dly > 0 and fired then
-					task.wait(dly)
-				else
-					task.wait(0.016)
-				end
-			end
-		end)
-
-		---------- Keybinds ----------
-		-- Each bind fires once per press: the latches reset on release.
-		local latched = { select = false, cam = false, trigger = false, speed = false, esp = false, sort = false }
-
-		---Flips the ESP option through its menu toggle so the menu stays in step.
-		local function toggleesp()
-			local toggle = Semi.Toggles["esp enabled"]
-			if toggle then
-				toggle:SetValue(not config["esp"]["enabled"])
-			else
-				config["esp"]["enabled"] = not config["esp"]["enabled"]
-			end
-		end
-
-		connect(userinputservice.InputBegan, function(input, gameprocessed)
-			if gameprocessed or masterActive() or capturingEntry or (NeverLose.KeyCaptures or 0) > 0 then
-				return
-			end
-
-			local binds = config["binds"]
-
-			if input.KeyCode == Enum.KeyCode.LeftControl then
-				leftctrlheld = true
-				return
-			end
-
-			if inputMatchesKey(input, binds["select"]) and config["targeting"]["target mode"] == "Select" and not latched.select then
-				latched.select = true
-
-				if targetplayer then
-					targetplayer = nil
-					clearhitboxes()
-				else
-					targetplayer = getbesttarget()
-				end
-			end
-
-			if inputMatchesKey(input, binds["camera aimbot"]) and not latched.cam then
-				latched.cam = true
-
-				local mode = config["camera aimbot"]["mode"]
-				if mode == "Toggle" then
-					camlockactive = not camlockactive
-				elseif mode == "Hold" then
-					camlockhold = true
-					camlockactive = true
-				end
-
-				if camlockactive then
-					camlocktarget = targetplayer
-					camlockpart = camlocktarget and camlocktarget.Character and getcamlockbodypart(camlocktarget.Character) or nil
-				else
-					camlocktarget = nil
-					camlockpart = nil
-				end
-			end
-
-			if inputMatchesKey(input, binds["triggerbot"]) and not latched.trigger then
-				latched.trigger = true
-
-				local mode = config["trigger bot"]["settings"]["mode"]
-				if mode == "Toggle" then
-					triggerbotactive = not triggerbotactive
-				elseif mode == "Hold" then
-					triggerhold = true
-				end
-			end
-
-			if inputMatchesKey(input, binds["speed"]) and not latched.speed then
-				latched.speed = true
-				speedactive = not speedactive
-
-				if speedactive then
-					applyspeed()
-				else
-					resetspeed()
-				end
-			end
-
-			if inputMatchesKey(input, binds["esp"]) and not latched.esp then
-				latched.esp = true
-				toggleesp()
-			end
-
-			if inputMatchesKey(input, binds["sort"]) and not latched.sort then
-				latched.sort = true
-				task.spawn(sortinventory)
-			end
-
-			if input.KeyCode == Enum.KeyCode.Space and config["spiderman"]["enabled"] then
-				local char = localplayer.Character
-				local hum = char and char:FindFirstChild("Humanoid")
-				local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-				if hum and hrp and hum:GetState() == Enum.HumanoidStateType.Freefall and touchingwall() and not haswalljumped then
-					haswalljumped = true
-					hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, getspidermanjumppower(), hrp.AssemblyLinearVelocity.Z)
-				end
-			end
-		end)
-
-		-- Releases are always handled, so a Hold bind can never get stuck.
-		connect(userinputservice.InputEnded, function(input)
-			local binds = config["binds"]
-
-			if input.KeyCode == Enum.KeyCode.LeftControl then
-				leftctrlheld = false
-			end
-
-			if inputMatchesKey(input, binds["camera aimbot"]) then
-				latched.cam = false
-
-				if config["camera aimbot"]["mode"] == "Hold" and camlockhold then
-					camlockhold = false
-					camlockactive = false
-					camlocktarget = nil
-					camlockpart = nil
-				end
-			end
-
-			if inputMatchesKey(input, binds["triggerbot"]) then
-				latched.trigger = false
-
-				if config["trigger bot"]["settings"]["mode"] == "Hold" then
-					triggerhold = false
-				end
-			end
-
-			if inputMatchesKey(input, binds["select"]) then
-				latched.select = false
-			end
-			if inputMatchesKey(input, binds["speed"]) then
-				latched.speed = false
-			end
-			if inputMatchesKey(input, binds["esp"]) then
-				latched.esp = false
-			end
-			if inputMatchesKey(input, binds["sort"]) then
-				latched.sort = false
-			end
-		end)
-
-		-- A release that happens while the window is not focused never arrives, which would leave the holds and the latches stuck on.
-		connect(userinputservice.WindowFocusReleased, function()
-			leftctrlheld = false
-			triggerhold = false
-
-			if camlockhold then
-				camlockhold = false
-				camlockactive = false
-				camlocktarget = nil
-				camlockpart = nil
-			end
-
-			for key in pairs(latched) do
-				latched[key] = false
-			end
-		end)
-
-		-- Automatic mode keeps the closest player to the cursor selected.
-		task.spawn(function()
-			while Semi.Alive do
-				task.wait(0.1)
-
-				if config["targeting"]["target mode"] == "Automatic" and not masterActive() then
-					local best = getbesttarget()
-					if best ~= targetplayer then
-						targetplayer = best
-						currenttargetplayer = nil
-					end
-				end
-			end
-		end)
-
-		---------- Rendering: FOV circles, hit boxes, ESP ----------
-		---Keeps one FOV circle in step with its setting; returns the circle, or nil when it is off.
-		local function updatecircle(circle, shown, radius, mousepos)
-			if not shown then
-				if circle then
-					circle:Remove()
-				end
+			if not char then
 				return nil
 			end
 
-			if not circle then
-				circle = Drawing.new("Circle")
-				circle.Thickness = 1.5
-				circle.Filled = false
-				circle.Transparency = 1
-				circle.Color = Color3.new(1, 1, 1)
+			for _, tool in ipairs(char:GetChildren()) do
+				if tool:IsA("Tool") and tool:FindFirstChild("Ammo") then
+					return tool
+				end
 			end
 
-			circle.Position = Vector2.new(mousepos.X, mousepos.Y)
-			circle.Radius = radius
-			circle.Visible = true
-
-			return circle
+			return nil
 		end
 
-		---Keeps an anchored, invisible part and its outline box sized and placed for one FOV box.
-		local function updatehitbox(partkey, boxkey, name, fov, facing, basepos, showbox)
-			if not targetcache[partkey] then
-				local part = Instance.new("Part")
-				part.Name = name
-				part.Anchored = true
-				part.CanCollide = false
-				part.Transparency = 1
-				part.CanQuery = false
-				part.Parent = workspace
-				targetcache[partkey] = part
-			end
-
-			local size = Vector3.new(fov.xleft + fov.xright, fov.yupper + fov.ylower, fov.zleft + fov.zright)
-			local offset = Vector3.new((fov.xright - fov.xleft) / 2, (fov.yupper - fov.ylower) / 2, (fov.zright - fov.zleft) / 2)
-			local part = targetcache[partkey]
-			part.Size = size
-			part.CFrame = CFrame.new(basepos + facing:VectorToWorldSpace(offset)) * facing
-
-			if showbox == false then
-				if targetcache[boxkey] then
-					targetcache[boxkey]:Destroy()
-					targetcache[boxkey] = nil
+		-- Zeroes the numbers the gun's own script keeps for its delay.
+		local function patchtool(tool)
+			pcall(function()
+				for _, conn in pairs(getconnections(tool.Activated)) do
+					local info = debug.getinfo(conn.Function)
+					for index = 1, info.nups do
+						local val = debug.getupvalue(conn.Function, index)
+						if type(val) == "number" then
+							debug.setupvalue(conn.Function, index, 0)
+						end
+					end
 				end
-
-				return
-			end
-
-			if not targetcache[boxkey] then
-				local box = Instance.new("BoxHandleAdornment")
-				box.Adornee = part
-				box.AlwaysOnTop = true
-				box.ZIndex = 10
-				box.Transparency = 0.7
-				box.Parent = part
-				targetcache[boxkey] = box
-			end
-
-			targetcache[boxkey].Size = size
-			targetcache[boxkey].Color3 = Color3.new(1, 1, 1)
+			end)
 		end
 
-		connect(runservice.RenderStepped, function()
-			antifall()
-			updateesp()
-
-			local silent = config["silent aimbot"]
-			local trigger = config["trigger bot"]
-			local cam = config["camera aimbot"]
-			local mousepos = userinputservice:GetMouseLocation()
-
-			silentfov2d = updatecircle(silentfov2d, silent["enabled"] and silent["fov"]["show fov"] and silent["fov"]["type"] == "2D", silent["fov"]["radius"] or 150, mousepos)
-			triggerfov2d = updatecircle(triggerfov2d, trigger["enabled"] and trigger["fov"]["show fov"] and trigger["fov"]["type"] == "2D", trigger["fov"]["radius"] or 150, mousepos)
-			camfov2d = updatecircle(camfov2d, cam["enabled"] and cam["fov"]["show fov"] and cam["fov"]["type"] == "2D", tonumber(cam["fov"]["radius"]) or 750, mousepos)
-
-			if cleartargetifinvalid() then
-				currenttargetplayer = nil
-				return
-			end
-
-			if istargetpaused() then
-				return
-			end
-
-			if targetplayer ~= currenttargetplayer then
-				currenttargetplayer = targetplayer
-				clearhitboxes()
-			end
-
-			local char = targetplayer.Character
-			local root = char and char:FindFirstChild("HumanoidRootPart")
-			if not root then
-				return
-			end
-
-			local uppertorso = char:FindFirstChild("UpperTorso")
-			local basepos = uppertorso and uppertorso.Position or root.Position
-			local look = root.CFrame.LookVector
-			local facing = CFrame.lookAt(Vector3.zero, Vector3.new(look.X, 0, look.Z))
-
-			if silent["enabled"] and silent["fov"]["type"] == "3D" then
-				updatehitbox("hitbox", "box", "SilentHitbox", getsplitfov("silent aimbot"), facing, basepos, silent["fov"]["show fov"] == true)
-			else
-				if targetcache.hitbox then
-					targetcache.hitbox:Destroy()
-					targetcache.hitbox = nil
+		local function oncharrapidfire(char)
+			isfiring = false
+			connect(char.ChildAdded, function(tool)
+				if tool:IsA("Tool") and config["rapid fire"]["enabled"] then
+					patchtool(tool)
 				end
-				targetcache.box = nil
-			end
+			end)
+		end
 
-			if trigger["enabled"] and trigger["fov"]["show fov"] and trigger["fov"]["type"] == "3D" then
-				updatehitbox("trigger", "triggerbox", "TriggerHitbox", getsplitfov("trigger bot"), facing, basepos)
-			else
-				if targetcache.trigger then
-					targetcache.trigger:Destroy()
-					targetcache.trigger = nil
-				end
-				targetcache.triggerbox = nil
-			end
-		end)
+		local function rapidfire()
+			local cfg = config["rapid fire"]
 
-		---------- Camera lock ----------
-		connect(runservice.RenderStepped, function(dt)
-			local camcfg = config["camera aimbot"]
-			if not (camcfg["enabled"] and camlockactive) or masterActive() then
+			if not cfg["enabled"] then
+				isfiring = false
 				return
 			end
 
-			-- The lock follows the selected target, so picking another player or Automatic mode switching moves it too.
-			if camlocktarget ~= targetplayer then
-				camlocktarget = targetplayer
-				camlockpart = nil
-			end
-
-			if not (camlocktarget and camlocktarget.Character) then
+			if not isfiring or os.clock() - lastrapidfire < cfg["delay"] then
 				return
 			end
 
-			if cleartargetifinvalid() or istargetpaused() then
+			local gun = getrapidgun()
+			if not gun then
 				return
 			end
 
-			if config["checks"]["self knock check"] and isselfknocked() then
+			if cfg["specific weapons"]["enabled"] and not toolonlist(gun, cfg["specific weapons"]["weapons"]) then
+				isfiring = false
 				return
 			end
 
-			local newpart = getcamlockbodypart(camlocktarget.Character)
-			if not newpart then
-				return
-			end
-
-			local mousepos = userinputservice:GetMouseLocation()
-			local screenpos = camera:WorldToViewportPoint(newpart.position)
-			if screenpos.Z <= 0 or (Vector2.new(screenpos.X, screenpos.Y) - mousepos).Magnitude > (tonumber(camcfg["fov"]["radius"]) or 750) then
-				return
-			end
-
-			if not isvisible(camera.CFrame.Position, newpart.part, camlocktarget.Character) then
-				return
-			end
-
-			camlockpart = newpart
-
-			local current = camera.CFrame
-			local goal = CFrame.new(current.Position, newpart.position)
-
-			if not camcfg["smoothing"]["enabled"] then
-				camera.CFrame = goal
-				return
-			end
-
-			-- Horizontal and vertical smoothing are applied to yaw and pitch separately.
-			local alphax = math.clamp(camcfg["smoothing"]["x"] * dt * 60, 0, 1)
-			local alphay = math.clamp(camcfg["smoothing"]["y"] * dt * 60, 0, 1)
-			local currentpitch, currentyaw = current:ToOrientation()
-			local goalpitch, goalyaw = goal:ToOrientation()
-			local deltayaw = ((goalyaw - currentyaw + math.pi) % (2 * math.pi)) - math.pi
-
-			camera.CFrame = CFrame.new(current.Position) * CFrame.fromOrientation(currentpitch + (goalpitch - currentpitch) * alphay, currentyaw + deltayaw * alphax, 0)
-		end)
+			gun:Activate()
+			lastrapidfire = os.clock()
+		end
 
 		---------- Silent aim ----------
-		-- Built on the forcehit scripts. The gun's own ShootGun call on MainEvent is caught and sent on
-		-- aimed at the target instead (forcehit_silent), so the mouse is never touched. In Select mode with
-		-- Force Hit on, the head takes the shot whatever the FOV and walls say, and Force Fire shoots at it
-		-- by itself (forcehit dh).
+		-- The gun's own ShootGun call on MainEvent is caught and sent on aimed at the target instead (forcehit_silent), so the mouse is never touched.
+		-- In Select mode with Force Hit on, the head takes the shot whatever the FOV and the walls say, and Force Fire shoots at it by itself (forcehit dh).
 		local SHOOT_NORMAL = Vector3.new(0, 0, -1)
 		local restorenamecall = setnamecallmethod or set_namecall_method or function() end
 
 		---Where the silent aimbot wants a shot to land: { part, position }, or nil to leave the shot alone.
 		local function getsilenthit()
 			local silent = config["silent aimbot"]
-			if not silent["enabled"] or masterActive() or not targetplayer or not targetplayer.Character then
+
+			if not silent["enabled"] or masterActive() or not silentaimactive or not currenttarget or not currenttarget.Parent then
 				return nil
 			end
 
-			if istargetpaused() then
+			local char = currenttarget.Parent
+			local player = players:GetPlayerFromCharacter(char)
+
+			if not player or playerknocked(player) then
 				return nil
 			end
 
-			local isselectmode = config["targeting"]["target mode"] == "Select"
-			local forcehit = isselectmode and config["select only features"]["force hit"]
-			if not (forcehit or ismouseinsilentfov()) then
-				return nil
-			end
+			if silent["force hit"] and config["targeting"]["mode"] == "Select" then
+				local head = char:FindFirstChild("Head")
 
-			local hitdata
-			if forcehit then
-				local head = targetplayer.Character:FindFirstChild("Head")
 				if head and head:IsA("BasePart") then
-					hitdata = { part = head, position = head.Position }
+					return { part = head, position = predictedpos(head, silent) }
 				end
-			else
-				hitdata = getclosestbodypart(targetplayer.Character)
-			end
 
-			if not hitdata or not hitdata.part then
 				return nil
 			end
 
-			if not (forcehit or isvisible(camera.CFrame.Position, hitdata.part, targetplayer.Character)) then
+			if not cansee(currenttarget) or not withindistance(currenttarget, silent["distance check"]) then
 				return nil
 			end
 
-			return hitdata
+			if silent["fov"]["enabled"] and not mouseinfovconfig(silent["fov"], currenttarget) then
+				return nil
+			end
+
+			return { part = currenttarget, position = predictedpos(currenttarget, silent) }
 		end
 
 		-- The engine's ragebot answers for the game's shots while it has an aim (its hook rewrote the shot before this one sees it): this module's silent
@@ -11595,11 +11039,7 @@ do
 
 		connect(runservice.Heartbeat, function()
 			local silent = config["silent aimbot"]
-			if not (silent["enabled"] and silent["force fire"]) or masterActive() or Session.isTyping() then
-				return
-			end
-
-			if (config["checks"]["self knock check"] and isselfknocked()) or not istargetvalid() then
+			if not (silent["enabled"] and silent["force fire"]) or masterActive() or Session.isTyping() or selfknocked() then
 				return
 			end
 
@@ -11634,7 +11074,7 @@ do
 		---------- Shotgun spread ----------
 		-- The game keeps every shotgun's pellet spread in one table, { Scale = { ["[Name]"] = number }, roll = function }.
 		-- Scaling an entry there changes the spread at the source. The math.random hook below is only used for a
-		-- shotgun that has no entry in it.
+		-- shotgun that has no entry in it. Spread Amount is the share of the spread that is kept, in percent.
 		local spreadhooked = false
 		local originalrandom
 		local spreadtable
@@ -11694,18 +11134,26 @@ do
 			return spreadtable ~= nil and spreadoriginal["[" .. name .. "]"] ~= nil
 		end
 
-		---The multiplier one shotgun's spread is cut to, fixed or drawn between its minimum and maximum.
-		local function spreadmultiplier(weaponconfig)
-			if config["spread modifications"]["mode"] == "Randomized" then
-				local min = math.clamp(tonumber(weaponconfig["min"]) or 0, 0, 1)
-				local max = math.clamp(tonumber(weaponconfig["max"]) or 1, 0, 1)
-				if min > max then
-					min, max = max, min
-				end
-				return min + ((originalrandom or math.random)() * (max - min))
+		---Whether the spread settings reach a shotgun: all of them, or only the ones on the list.
+		local function spreadapplies(name)
+			local spreadmods = config["spread modifications"]
+			local specific = spreadmods["specific weapons"]
+
+			if not specific["enabled"] then
+				return true
 			end
 
-			return math.clamp(tonumber(weaponconfig["fixed"]) or 1, 0, 1)
+			for _, listed in ipairs(specific["weapons"]) do
+				if listed == "[" .. name .. "]" or listed == name then
+					return true
+				end
+			end
+
+			return false
+		end
+
+		local function spreadmultiplier()
+			return math.clamp((tonumber(config["spread modifications"]["amount"]) or 100) / 100, 0, 1)
 		end
 
 		---Puts each shotgun's entry at its multiplier while the modification is on, and at the game's value otherwise.
@@ -11719,16 +11167,14 @@ do
 				return
 			end
 
-			local spreadmods = config["spread modifications"]
-			local on = Semi.Alive and spreadmods["enabled"] and not masterActive()
+			local on = Semi.Alive and config["spread modifications"]["enabled"] and not masterActive()
 
 			for name in pairs(SHOTGUN_NAMES) do
 				local key = "[" .. name .. "]"
 				local original = spreadoriginal[key]
-				local weaponconfig = on and spreadmods[name]
 
 				if original then
-					local wanted = weaponconfig and original * spreadmultiplier(weaponconfig) or original
+					local wanted = on and spreadapplies(name) and original * spreadmultiplier() or original
 					if scale[key] ~= wanted then
 						scale[key] = wanted
 					end
@@ -11783,8 +11229,7 @@ do
 				end
 
 				local shotgun = getequippedshotgun()
-				local weaponconfig = shotgun and spreadmods[shotgun]
-				if not weaponconfig or spreadhandled(shotgun) then
+				if not shotgun or spreadhandled(shotgun) or not spreadapplies(shotgun) then
 					return originalrandom(...)
 				end
 
@@ -11805,8 +11250,432 @@ do
 					return originalrandom(...)
 				end
 
-				return originalrandom(...) * spreadmultiplier(weaponconfig)
+				return originalrandom(...) * spreadmultiplier()
 			end))
+		end
+
+		---------- Name ESP (Glory v4) ----------
+		local esplabels = {}
+
+		local function removeesp(player)
+			local esp = esplabels[player.UserId]
+			if esp then
+				pcall(function()
+					esp.nametag:Remove()
+				end)
+				esplabels[player.UserId] = nil
+			end
+		end
+
+		local function addesp(player)
+			if player == localplayer or esplabels[player.UserId] then
+				return
+			end
+
+			local nametag = Drawing.new("Text")
+			nametag.Size = 14
+			nametag.Center = true
+			nametag.Outline = true
+			nametag.OutlineColor = Color3.fromRGB(0, 0, 0)
+			nametag.Color = config["esp"]["color"]
+			nametag.Font = 2
+			nametag.Visible = false
+			nametag.ZIndex = 1000
+
+			esplabels[player.UserId] = { player = player, nametag = nametag }
+		end
+
+		local function refreshesp()
+			local cfg = config["esp"]
+
+			if not cfg["enabled"] then
+				for userid, esp in pairs(esplabels) do
+					esp.nametag.Visible = false
+				end
+				return
+			end
+
+			for _, player in ipairs(players:GetPlayers()) do
+				if player ~= localplayer and not esplabels[player.UserId] then
+					addesp(player)
+				end
+			end
+
+			for userid, esp in pairs(esplabels) do
+				local player = esp.player
+				local char = player and player.Parent and player.Character
+				local head = char and char:FindFirstChild("Head")
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+				if not (head and hrp and hum and hum.Health > 0) then
+					esp.nametag.Visible = false
+					if not (player and player.Parent) then
+						removeesp({ UserId = userid })
+					end
+				else
+					local worldpos = cfg["name above"] and head.Position + Vector3.new(0, 1.5, 0) or hrp.Position - Vector3.new(0, 2.8, 0)
+					local esppos, onscreen = camera:WorldToViewportPoint(worldpos)
+
+					if onscreen and esppos.Z > 0 then
+						esp.nametag.Position = Vector2.new(esppos.X, esppos.Y)
+						esp.nametag.Text = cfg["use display name"] and player.DisplayName or player.Name
+						esp.nametag.Color = (currenttarget and currenttarget.Parent == char) and cfg["target color"] or cfg["color"]
+						esp.nametag.Visible = true
+					else
+						esp.nametag.Visible = false
+					end
+				end
+			end
+		end
+
+		---------- Headless ----------
+		local function applyheadless(char)
+			if not config["headless"]["enabled"] or not char then
+				return
+			end
+
+			local head = char:FindFirstChild("Head")
+			if head then
+				head.Transparency = 1
+				head.CanCollide = false
+
+				local face = head:FindFirstChild("face")
+				if face then
+					face.Transparency = 1
+				end
+			end
+
+			if config["headless"]["remove face accessories"] then
+				for _, accessory in ipairs(char:GetChildren()) do
+					if accessory:IsA("Accessory") and accessory.AccessoryType == Enum.AccessoryType.Face then
+						local handle = accessory:FindFirstChild("Handle")
+						if handle then
+							handle.Transparency = 1
+							handle.CanCollide = false
+						end
+					end
+				end
+			end
+		end
+
+		---------- Hitbox expander ----------
+		local function expandhitboxes()
+			local cfg = config["hitbox expander"]
+
+			for _, player in ipairs(players:GetPlayers()) do
+				local hrp = player ~= localplayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+
+				if hrp then
+					if cfg["enabled"] then
+						if not expanded[hrp] then
+							expanded[hrp] = { size = hrp.Size, transparency = hrp.Transparency }
+						end
+
+						local size = Vector3.new(cfg["size"], cfg["size"], cfg["size"])
+						if hrp.Size ~= size then
+							hrp.Size = size
+						end
+
+						hrp.Transparency = cfg["visualize"] and 0.7 or 1
+						hrp.CanCollide = false
+					elseif expanded[hrp] then
+						hrp.Size = expanded[hrp].size
+						hrp.Transparency = expanded[hrp].transparency
+						expanded[hrp] = nil
+					end
+				end
+			end
+		end
+
+		---------- Keybinds ----------
+		connect(userinputservice.InputBegan, function(input, gameprocessed)
+			if gameprocessed or masterActive() or capturingEntry or (NeverLose.KeyCaptures or 0) > 0 then
+				return
+			end
+
+			local binds = config["binds"]
+
+			if input.KeyCode == Enum.KeyCode.Space and config["spiderman"]["enabled"] then
+				local char = localplayer.Character
+				local hum = char and char:FindFirstChild("Humanoid")
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+				if hum and hrp and hum:GetState() == Enum.HumanoidStateType.Freefall and touchingwall() and not haswalljumped then
+					haswalljumped = true
+					local power = getspidermanjumppower()
+
+					task.spawn(function()
+						local elapsed = 0
+						hum:ChangeState(Enum.HumanoidStateType.Jumping)
+
+						while elapsed < 0.1 do
+							elapsed += task.wait()
+
+							if hrp and hrp.Parent then
+								hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, power, hrp.AssemblyLinearVelocity.Z)
+							end
+						end
+					end)
+				end
+			end
+
+			if inputMatchesKey(input, binds["silent aim"]) and not latched.silent then
+				latched.silent = true
+
+				if config["targeting"]["mode"] == "Select" then
+					local silent = config["silent aimbot"]
+
+					if silent["mode"] == "Toggle" then
+						silentaimactive = not silentaimactive
+
+						if not silentaimactive then
+							if not camlockactive then
+								clearcurrenttarget()
+							end
+						else
+							local target = findtarget(silent["fov"], silent["distance check"], false)
+
+							if target then
+								currenttarget = withhitpart(target, silent["hitpart"])
+								lastvisibletarget = currenttarget
+							end
+						end
+					elseif silent["mode"] == "Hold" then
+						local target = findtarget(silent["fov"], silent["distance check"], false)
+
+						if target then
+							currenttarget = withhitpart(target, silent["hitpart"])
+							lastvisibletarget = currenttarget
+							silentaimactive = true
+						end
+					end
+				end
+			end
+
+			if inputMatchesKey(input, binds["cam lock"]) and not latched.cam then
+				latched.cam = true
+
+				local cam = config["camera aimbot"]
+
+				if cam["mode"] == "Toggle" and camlockactive then
+					camlockactive = false
+
+					if not silentaimactive and config["targeting"]["mode"] ~= "Automatic" then
+						clearcurrenttarget()
+					end
+				else
+					local target = findtarget(cam["fov"], cam["distance check"], true)
+
+					if target then
+						currenttarget = withhitpart(target, cam["hitpart"])
+						lastvisibletarget = currenttarget
+						camlockactive = true
+						camlockhold = cam["mode"] == "Hold"
+					end
+				end
+			end
+
+			if inputMatchesKey(input, binds["triggerbot"]) and not latched.trigger then
+				latched.trigger = true
+
+				local mode = config["trigger bot"]["mode"]
+				if mode == "Toggle" then
+					triggerbotactive = not triggerbotactive
+				elseif mode == "Hold" then
+					triggerhold = true
+				end
+			end
+
+			if inputMatchesKey(input, binds["super jump"]) and not latched.superjump then
+				latched.superjump = true
+
+				if config["super jump"]["enabled"] then
+					superjumpenabled = not superjumpenabled
+
+					if not superjumpenabled and originaljumppower then
+						local hum = localplayer.Character and localplayer.Character:FindFirstChildOfClass("Humanoid")
+						if hum then
+							hum.JumpPower = originaljumppower
+						end
+					end
+				end
+			end
+
+			if inputMatchesKey(input, binds["esp"]) and not latched.esp then
+				latched.esp = true
+
+				local toggle = Semi.Toggles["esp enabled"]
+				if toggle then
+					toggle:SetValue(not config["esp"]["enabled"])
+				else
+					config["esp"]["enabled"] = not config["esp"]["enabled"]
+				end
+			end
+
+			if inputMatchesKey(input, binds["speed"]) and not latched.speed then
+				latched.speed = true
+
+				if config["speed modifications"]["enabled"] then
+					speedactive = not speedactive
+
+					if speedactive then
+						applyspeed()
+					else
+						resetspeed()
+					end
+				end
+			end
+
+			if input.UserInputType == Enum.UserInputType.MouseButton1 and config["rapid fire"]["enabled"] and getrapidgun() then
+				isfiring = true
+			end
+		end)
+
+		-- Releases are always handled, so a Hold bind can never get stuck.
+		connect(userinputservice.InputEnded, function(input)
+			local binds = config["binds"]
+
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				isfiring = false
+			end
+
+			if inputMatchesKey(input, binds["silent aim"]) then
+				latched.silent = false
+
+				if config["silent aimbot"]["mode"] == "Hold" and config["targeting"]["mode"] == "Select" then
+					silentaimactive = false
+
+					if not camlockactive then
+						clearcurrenttarget()
+					end
+				end
+			end
+
+			if inputMatchesKey(input, binds["cam lock"]) then
+				latched.cam = false
+
+				if config["camera aimbot"]["mode"] == "Hold" and camlockhold then
+					camlockhold = false
+					camlockactive = false
+
+					if not silentaimactive and config["targeting"]["mode"] ~= "Automatic" then
+						clearcurrenttarget()
+					end
+				end
+			end
+
+			if inputMatchesKey(input, binds["triggerbot"]) then
+				latched.trigger = false
+
+				if config["trigger bot"]["mode"] == "Hold" then
+					triggerhold = false
+				end
+			end
+
+			if inputMatchesKey(input, binds["super jump"]) then
+				latched.superjump = false
+			end
+			if inputMatchesKey(input, binds["esp"]) then
+				latched.esp = false
+			end
+			if inputMatchesKey(input, binds["speed"]) then
+				latched.speed = false
+			end
+		end)
+
+		-- A release that happens while the window is not focused never arrives, which would leave the holds and the latches stuck on.
+		connect(userinputservice.WindowFocusReleased, function()
+			triggerhold = false
+			isfiring = false
+
+			if camlockhold then
+				camlockhold = false
+				camlockactive = false
+			end
+
+			if config["silent aimbot"]["mode"] == "Hold" then
+				silentaimactive = false
+			end
+
+			for key in pairs(latched) do
+				latched[key] = false
+			end
+		end)
+
+		---------- Per frame ----------
+		connect(runservice.RenderStepped, function()
+			local silent = config["silent aimbot"]
+
+			if config["targeting"]["mode"] == "Automatic" and silent["enabled"] and not masterActive() then
+				local now = os.clock()
+
+				if now - lasttargetscan >= scanrate then
+					lasttargetscan = now
+
+					local target = findtarget(silent["fov"], silent["distance check"], false)
+					currenttarget = target and withhitpart(target, silent["hitpart"]) or nil
+				end
+
+				silentaimactive = currenttarget ~= nil
+			end
+
+			if selfknocked() then
+				currenttarget = nil
+				silentaimactive = false
+				camlockactive = false
+				lastvisibletarget = nil
+				targetline.Visible = false
+			end
+
+			if not masterActive() then
+				triggerbot()
+				rapidfire()
+			end
+
+			if superjumpenabled and config["super jump"]["enabled"] then
+				local hum = localplayer.Character and localplayer.Character:FindFirstChildOfClass("Humanoid")
+
+				if hum then
+					originaljumppower = originaljumppower or hum.JumpPower
+
+					if hum.JumpPower ~= config["super jump"]["jump power"] then
+						hum.JumpPower = config["super jump"]["jump power"]
+					end
+				end
+			end
+
+			expandhitboxes()
+
+			updatefovbox(fovparts.silent, fov2dboxes.silent, silent["fov"], silentaimactive and silent["enabled"])
+			updatefovbox(fovparts.camlock, fov2dboxes.camlock, config["camera aimbot"]["fov"], camlockactive and config["camera aimbot"]["enabled"])
+			updatefovbox(fovparts.trigger, fov2dboxes.trigger, config["trigger bot"]["fov"], config["trigger bot"]["enabled"] and triggerenabled())
+
+			updatetargetline()
+			refreshesp()
+
+			if config["camera aimbot"]["enabled"] and not masterActive() then
+				applycamlock()
+			end
+		end)
+
+		---------- Players and characters ----------
+		connect(players.PlayerRemoving, function(player)
+			removeesp(player)
+		end)
+
+		connect(localplayer.CharacterAdded, function(char)
+			speedactive = false
+			oncharrapidfire(char)
+
+			task.defer(function()
+				applyheadless(char)
+			end)
+		end)
+
+		if localplayer.Character then
+			oncharrapidfire(localplayer.Character)
+			applyheadless(localplayer.Character)
 		end
 
 		---------- Keybind list ----------
@@ -11823,12 +11692,12 @@ do
 				end
 			end
 
-			add("Select Target", binds["select"], "Toggle", targetplayer ~= nil)
-			add("Camera Aimbot", binds["camera aimbot"], config["camera aimbot"]["mode"], config["camera aimbot"]["enabled"] and camlockactive)
-			add("Trigger Bot", binds["triggerbot"], config["trigger bot"]["settings"]["mode"], config["trigger bot"]["enabled"] and gettriggerbotstate())
+			add("Silent Aimbot", binds["silent aim"], config["silent aimbot"]["mode"], config["silent aimbot"]["enabled"] and silentaimactive)
+			add("Camera Aimbot", binds["cam lock"], config["camera aimbot"]["mode"], config["camera aimbot"]["enabled"] and camlockactive)
+			add("Trigger Bot", binds["triggerbot"], config["trigger bot"]["mode"], config["trigger bot"]["enabled"] and triggerenabled())
+			add("Super Jump", binds["super jump"], "Toggle", config["super jump"]["enabled"] and superjumpenabled)
 			add("Speed", binds["speed"], "Toggle", config["speed modifications"]["enabled"] and speedactive)
 			add("Name ESP", binds["esp"], "Toggle", config["esp"]["enabled"])
-			add("Inventory Sorter", binds["sort"], "Press", sorting)
 
 			return items
 		end
@@ -11875,21 +11744,49 @@ do
 			end
 		end)
 
+		-- A config that switched these on before Semi started could not install their hooks then: they go in now (each one only goes in once).
+		if config["silent aimbot"]["enabled"] then
+			Semi.installSilentHook()
+		end
+
+		if config["spread modifications"]["enabled"] then
+			Semi.installSpreadHook()
+		end
+
 		-- Everything this start created goes away with Semi.stop.
 		table.insert(Semi.Cleanups, function()
 			resetspeed()
-			clearhitboxes()
 
-			for player in pairs(espcache) do
-				removeesp(player)
-			end
-
-			for _, circle in ipairs({ silentfov2d, triggerfov2d, camfov2d }) do
+			for _, esp in pairs(esplabels) do
 				pcall(function()
-					circle:Remove()
+					esp.nametag:Remove()
 				end)
 			end
-			silentfov2d, triggerfov2d, camfov2d = nil, nil, nil
+			table.clear(esplabels)
+
+			for _, lines in pairs(fov2dboxes) do
+				for _, line in ipairs(lines) do
+					pcall(function()
+						line:Remove()
+					end)
+				end
+			end
+			pcall(function()
+				targetline:Remove()
+			end)
+
+			for _, part in pairs(fovparts) do
+				pcall(function()
+					part:Destroy()
+				end)
+			end
+
+			for hrp, original in pairs(expanded) do
+				if hrp.Parent then
+					hrp.Size = original.size
+					hrp.Transparency = original.transparency
+				end
+			end
 
 			for tool in pairs(knifedata) do
 				pcall(cleanknife, tool)
@@ -12083,109 +11980,103 @@ do
 			end
 		end
 
-		local hitParts = { "Head", "UpperTorso", "LowerTorso", "Closest Point" }
-		local fovTypes = { "2D", "3D" }
+		local hitParts = { "Closest Part", "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" }
+		local fovModes = { "3D", "2D" }
 
-		-- The six sides of a 3D FOV box, in studs.
-		local function boxSides(prefix)
-			local sides = {}
-			for _, side in ipairs({ "x left", "x right", "y upper", "y lower", "z left", "z right" }) do
-				local path = table.clone(prefix)
-				table.insert(path, side)
-				table.insert(sides, slider(side:sub(1, 1):upper() .. side:sub(2), path, 0, 15, 1))
-			end
-			return sides
-		end
-
-		local function closestPointRows(section)
+		-- A section's FOV box: whether it is on, whether it is drawn, 3D or 2D, and its three sizes in studs.
+		local function fovRows(section, label)
 			return {
-				dropdown("Mode", { section, "closest point", "mode" }, { "Basic", "Advanced" }),
-				slider("Scale", { section, "closest point", "scale" }, 0, 1, 2),
-				slider("Density", { section, "closest point", "density" }, 1, 3, 0),
+				toggle(label .. " FOV", { section, "fov", "enabled" }),
+				toggle(label .. " Show FOV", { section, "fov", "visible" }),
+				dropdown(label .. " FOV Mode", { section, "fov", "mode" }, fovModes),
+				color(label .. " FOV Color", { section, "fov", "active color" }),
+				slider(label .. " FOV X", { section, "fov", "size", "x" }, 0, 50, 1, " studs"),
+				slider(label .. " FOV Y", { section, "fov", "size", "y" }, 0, 50, 1, " studs"),
+				slider(label .. " FOV Z", { section, "fov", "size", "z" }, 0, 50, 1, " studs"),
 			}
 		end
 
-		local gunRows = {}
-		for _, gun in ipairs({ "Double-Barrel SG", "TacticalShotgun", "Shotgun", "DrumShotgun" }) do
-			table.insert(
-				gunRows,
-				gear(gun, {
-					slider("Fixed", { "spread modifications", gun, "fixed" }, 0, 1, 2),
-					slider("Random Min", { "spread modifications", gun, "min" }, 0, 1, 2),
-					slider("Random Max", { "spread modifications", gun, "max" }, 0, 1, 2),
-				})
-			)
+		local function distanceRows(section, label)
+			return {
+				toggle(label .. " Distance Check", { section, "distance check", "enabled" }),
+				slider(label .. " Max Distance", { section, "distance check", "max distance" }, 10, 2000, 0, " studs"),
+			}
 		end
 
-		local slotRows = {}
-		for slot = 1, 10 do
-			table.insert(slotRows, text("Slot " .. slot, { "inventory sorter", "slots", slot }, "[Revolver]"))
+		local function predictionRows(section, label)
+			return {
+				toggle(label .. " Prediction", { section, "use prediction" }),
+				slider(label .. " Prediction X", { section, "prediction", "x" }, 0, 1, 3),
+				slider(label .. " Prediction Y", { section, "prediction", "y" }, 0, 1, 3),
+				slider(label .. " Prediction Z", { section, "prediction", "z" }, 0, 1, 3),
+			}
+		end
+
+		local function join(...)
+			local out = {}
+			for index = 1, select("#", ...) do
+				for _, row in ipairs((select(index, ...))) do
+					table.insert(out, row)
+				end
+			end
+			return out
 		end
 
 		addSection("TARGETING", "left", {
-			dropdown("Target Mode", { "targeting", "target mode" }, { "Select", "Automatic" }),
-			keybind("Select Key", { "binds", "select" }),
-			toggle("Force Hit", { "select only features", "force hit" }),
-			toggle("Force Trigger", { "select only features", "force trigger" }),
+			dropdown("Target Mode", { "targeting", "mode" }, { "Select", "Automatic" }),
 			toggle("Mod Detector", { "global", "mod detector" }, function(value)
 				if value and Semi.recheckMods then
 					Semi.recheckMods()
 				end
 			end),
+			toggle("Visible Check", { "settings", "visible check" }),
+			toggle("Knock Check", { "settings", "knock check" }),
+			toggle("Self Knock Check", { "settings", "self knock check" }),
+			toggle("Knife Check", { "settings", "knife check" }),
+			toggle("Forcefield Check", { "settings", "forcefield check" }),
 		})
 
-		addSection("CHECKS", "left", {
-			toggle("Visible Check", { "checks", "visible check" }),
-			toggle("Knock Check", { "checks", "knock check" }),
-			toggle("KO Check", { "checks", "ko check" }),
-			toggle("Crew Check", { "checks", "crew check" }),
-			toggle("Self Knock Check", { "checks", "self knock check" }),
-			toggle("Forcefield Check", { "checks", "forcefield check" }),
-		})
-
-		addSection("SILENT AIMBOT", "left", {
+		addSection("SILENT AIMBOT", "left", join({
 			toggle("Silent Aimbot", { "silent aimbot", "enabled" }, function(value)
 				if value and Semi.installSilentHook then
 					Semi.installSilentHook()
 				end
 			end),
+			dropdown("Silent Mode", { "silent aimbot", "mode" }, { "Toggle", "Hold" }),
+			keybind("Silent Key", { "binds", "silent aim" }),
+			toggle("Force Hit", { "silent aimbot", "force hit" }),
 			toggle("Force Fire", { "silent aimbot", "force fire" }),
 			dropdown("Silent Hit Part", { "silent aimbot", "hitpart" }, hitParts),
-			gear("Silent Closest Point", closestPointRows("silent aimbot")),
-			dropdown("Silent FOV Type", { "silent aimbot", "fov", "type" }, fovTypes),
-			toggle("Silent Show FOV", { "silent aimbot", "fov", "show fov" }),
-			slider("Silent FOV Radius", { "silent aimbot", "fov", "radius" }, 10, 750, 0, "px"),
-			gear("Silent 3D FOV Size", boxSides({ "silent aimbot", "fov" })),
-		})
+		}, predictionRows("silent aimbot", "Silent"), fovRows("silent aimbot", "Silent"), distanceRows("silent aimbot", "Silent")))
 
-		addSection("CAMERA AIMBOT", "left", {
+		addSection("CAMERA AIMBOT", "left", join({
 			toggle("Camera Aimbot", { "camera aimbot", "enabled" }),
 			dropdown("Camera Mode", { "camera aimbot", "mode" }, { "Toggle", "Hold" }),
-			keybind("Camera Key", { "binds", "camera aimbot" }),
+			keybind("Camera Key", { "binds", "cam lock" }),
 			dropdown("Camera Hit Part", { "camera aimbot", "hitpart" }, hitParts),
-			gear("Camera Closest Point", closestPointRows("camera aimbot")),
-			toggle("Camera Smoothing", { "camera aimbot", "smoothing", "enabled" }),
-			slider("Smoothing X", { "camera aimbot", "smoothing", "x" }, 0.01, 1, 2),
-			slider("Smoothing Y", { "camera aimbot", "smoothing", "y" }, 0.01, 1, 2),
-			slider("Camera FOV Radius", { "camera aimbot", "fov", "radius" }, 10, 1000, 0, "px"),
-			toggle("Camera Show FOV", { "camera aimbot", "fov", "show fov" }),
-		})
+			slider("Smoothing X", { "camera aimbot", "smoothing", "x" }, 1, 100, 0),
+			slider("Smoothing Y", { "camera aimbot", "smoothing", "y" }, 1, 100, 0),
+			slider("Smoothing Z", { "camera aimbot", "smoothing", "z" }, 1, 100, 0),
+		}, predictionRows("camera aimbot", "Camera"), fovRows("camera aimbot", "Camera"), distanceRows("camera aimbot", "Camera")))
 
-		addSection("TRIGGER BOT", "right", {
+		addSection("TRIGGER BOT", "right", join({
 			toggle("Trigger Bot", { "trigger bot", "enabled" }),
-			dropdown("Trigger Mode", { "trigger bot", "settings", "mode" }, { "Always", "Toggle", "Hold" }),
+			dropdown("Trigger Mode", { "trigger bot", "mode" }, { "Always", "Toggle", "Hold" }),
 			keybind("Trigger Key", { "binds", "triggerbot" }),
-			dropdown("Trigger Type", { "trigger bot", "settings", "type" }, { "FOV", "Hitbox" }),
-			slider("Trigger Distance", { "trigger bot", "distance" }, 10, 2000, 0, " studs"),
-			toggle("Trigger Delay", { "trigger bot", "delay settings", "delay toggle" }),
-			slider("Trigger Delay Time", { "trigger bot", "delay settings", "delay" }, 0, 1, 2, "s"),
-			dropdown("Trigger FOV Type", { "trigger bot", "fov", "type" }, fovTypes),
-			toggle("Trigger Show FOV", { "trigger bot", "fov", "show fov" }),
-			slider("Trigger FOV Radius", { "trigger bot", "fov", "radius" }, 10, 750, 0, "px"),
-			gear("Trigger 3D FOV Size", boxSides({ "trigger bot", "fov", "size" })),
+			slider("Trigger Delay", { "trigger bot", "delay" }, 0, 1, 2, "s"),
+			toggle("Require Target", { "trigger bot", "require target" }),
+			toggle("Specific Weapons", { "trigger bot", "specific weapons", "enabled" }),
+		}, fovRows("trigger bot", "Trigger"), distanceRows("trigger bot", "Trigger")))
+
+		addSection("TARGET LINE", "right", {
+			toggle("Target Line", { "target line", "enabled" }),
+			slider("Line Thickness", { "target line", "thickness" }, 0.5, 6, 1),
+			slider("Line Transparency", { "target line", "transparency" }, 0, 1, 2),
+			color("Vulnerable Color", { "target line", "vulnerable" }),
+			color("Invulnerable Color", { "target line", "invulnerable" }),
 		})
 
-		local spreadRows = {
+		addSection("SHOTGUN SPREAD", "right", {
 			toggle("Spread Modifications", { "spread modifications", "enabled" }, function(value)
 				if value and Semi.installSpreadHook then
 					-- Switching the option on lets a search that gave up look for the game's spread table again.
@@ -12195,12 +12086,15 @@ do
 					Semi.installSpreadHook()
 				end
 			end),
-			dropdown("Spread Mode", { "spread modifications", "mode" }, { "Fixed", "Randomized" }),
-		}
-		for _, row in ipairs(gunRows) do
-			table.insert(spreadRows, row)
-		end
-		addSection("SHOTGUN SPREAD", "right", spreadRows)
+			slider("Spread Amount", { "spread modifications", "amount" }, 0, 100, 0, "%"),
+			toggle("Spread Specific Weapons", { "spread modifications", "specific weapons", "enabled" }),
+		})
+
+		addSection("RAPID FIRE", "right", {
+			toggle("Rapid Fire", { "rapid fire", "enabled" }),
+			slider("Rapid Fire Delay", { "rapid fire", "delay" }, 0, 1, 2, "s"),
+			toggle("Rapid Fire Specific Weapons", { "rapid fire", "specific weapons", "enabled" }),
+		})
 
 		addSection("MOVEMENT", "right", {
 			toggle("Speed", { "speed modifications", "enabled" }, function(value)
@@ -12209,28 +12103,33 @@ do
 				end
 			end),
 			keybind("Speed Key", { "binds", "speed" }),
-			slider("Speed Multiplier", { "speed modifications", "normal", "multiplier" }, 1, 100, 0, "x"),
-			slider("Low Health Below", { "speed modifications", "low health", "health threshold" }, 1, 100, 0),
-			slider("Low Health Multiplier", { "speed modifications", "low health", "multiplier" }, 1, 100, 0, "x"),
-			toggle("Anti Fall", { "anti fall", "enabled" }),
+			slider("Speed Multiplier", { "speed modifications", "multiplier" }, 1, 100, 0, "x"),
+			toggle("Super Jump", { "super jump", "enabled" }),
+			keybind("Super Jump Key", { "binds", "super jump" }),
+			slider("Super Jump Power", { "super jump", "jump power" }, 50, 500, 0),
 			toggle("Spiderman", { "spiderman", "enabled" }),
-			slider("Wall Jump Power", { "spiderman", "jump power" }, 10, 150, 0),
-			slider("Knife Wall Jump Power", { "spiderman", "knife jump power" }, 10, 150, 0),
+			slider("Wall Jump Power", { "spiderman", "jumppower" }, 10, 150, 0),
+			slider("Knife Wall Jump Power", { "spiderman", "knifejumppower" }, 10, 150, 0),
+		})
+
+		addSection("HITBOX", "right", {
+			toggle("Hitbox Expander", { "hitbox expander", "enabled" }),
+			slider("Hitbox Size", { "hitbox expander", "size" }, 2, 30, 0),
+			toggle("Show Hitboxes", { "hitbox expander", "visualize" }),
 		})
 
 		addSection("ESP", "right", {
 			toggle("Name ESP", { "esp", "enabled" }),
 			keybind("ESP Key", { "binds", "esp" }),
-			dropdown("ESP Position", { "esp", "position" }, { "Top", "Bottom" }),
-			slider("ESP Size", { "esp", "size" }, 0.5, 3, 1),
-			color("ESP Color", { "esp", "normal color" }),
+			toggle("Use Display Name", { "esp", "use display name" }),
+			toggle("Name Above", { "esp", "name above" }),
+			color("ESP Color", { "esp", "color" }),
 			color("ESP Target Color", { "esp", "target color" }),
 		})
 
-		addSection("INVENTORY", "right", {
-			toggle("Inventory Sorter", { "inventory sorter", "enabled" }),
-			keybind("Sort Key", { "binds", "sort" }),
-			gear("Sorter Slots", slotRows),
+		addSection("HEADLESS", "right", {
+			toggle("Headless", { "headless", "enabled" }),
+			toggle("Remove Face Accessories", { "headless", "remove face accessories" }),
 		})
 	end
 end
@@ -13999,7 +13898,7 @@ local function buildInterface()
 		warn("[femmyhac.cc] Full Auto failed to start: " .. tostring(fullAutoError))
 	end
 
-	-- Semi Rage: the gloryv3beta features, with the menu's only master switch.
+	-- Semi Rage: the Glory v4 features, with the menu's only master switch.
 	local SemiMaster = SemiRage:AddSection({
 		Name = "MASTER",
 		Position = "left",
