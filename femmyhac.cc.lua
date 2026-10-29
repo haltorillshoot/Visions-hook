@@ -4419,6 +4419,8 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
+	["auto_fire_all_guns"] = {"auto_fire_all_guns", "auto_fire_all_guns"},
+	["auto_fire_gun_gap"] = {"auto_fire_gun_gap", "auto_fire_gun_gap"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -8273,7 +8275,10 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Fast Retry", "auto_fire_fast_retry", false)
-	panelToggle(autoFire, "Salvo", "auto_fire_salvo", true)
+	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
+	panelToggle(autoFire, "Fire All Guns", "auto_fire_all_guns", true)
+	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
+	panelSlider(autoFire, "Gun Gap", "auto_fire_gun_gap", 0, 300, 0, "ms", 140, { [0] = "at once" })
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -15026,7 +15031,7 @@ do
 
                         local first = old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
 
-                        -- Salvo: the shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when). It is decided after the shot has
+                        -- Double Tap (flag auto_fire_salvo): the shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when). It is decided after the shot has
                         -- gone: a method call made in here before old_namecall (tool:GetAttribute, say) replaces the namecall method and the shot is never
                         -- sent (that is what turned every shot away in the first tests: 100 sends, none taken). The second goes out a frame later as a call
                         -- of its own, which comes back through this hook and is rebuilt like any shot. Measured with two accounts: the first was taken at
@@ -27880,7 +27885,9 @@ end
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
-        menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "salvo"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
+        menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
+        menu_references["auto_fire_all_guns"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fire all guns"}, {["toggle"] = {["flag"] = "auto_fire_all_guns", ["default"] = true}})
+        menu_references["auto_fire_gun_gap"] = menu_references["auto_fire_settings"]:create_element({["name"] = "gun gap"}, {["slider"] = {["flag"] = "auto_fire_gun_gap", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 140, ["min_text"] = "at once", ["decimals"] = 0}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
@@ -28199,7 +28206,7 @@ end
         return pellet_guns[tool["Name"]] or (tool:GetAttribute("SecurityTolerance") ~= nil and 5 or 1)
     end
 
-    -- Salvo (BASED Hub's Da Hood ragebot, measured there): the server holds a second shot of a gun behind the one it is firing, and fires it when the cooldown is
+    -- Double Tap (flag auto_fire_salvo; it was called Salvo; BASED Hub's Da Hood ragebot, measured there): the server holds a second shot of a gun behind the one it is firing, and fires it when the cooldown is
     -- over without looking at the claim again (two Rifle shots sent together were taken 0.02 s and 1.32 s later; a held one knocked a target that had gone 4,400
     -- studs off by then). So one claim that was good for a moment is worth two hits: a slow gun with a round to spare is sent its shot twice. Guns the server
     -- polices (the shotguns, which count every refused call) and the fast ones are left out. A reload cancels a held shot, so salvo_holding says when one may be
@@ -29363,7 +29370,7 @@ end
             -- The script's own remove() doesn't hand back what it removed, so the first entry is read before dropping it.
             local tool = reload_queue[1]
 
-            -- a shot the server is holding (Salvo) would be cancelled by the reload: the reload waits for it
+            -- a shot the server is holding (Double Tap) would be cancelled by the reload: the reload waits for it
             if tool and hide_manager["salvo_holding"](tool) then
                 return
             end
@@ -30336,7 +30343,13 @@ end
                         -- 0.125 s not always; inside a tenth of a second one of the two is lost), and the game's SwitchCooldown keeps any two of the
                         -- Deagle, Rifle, Glock and Silencer 0.5 s apart (0.52 here). A gun repeats on its cooldown plus 0.015 s (the AUG sent every
                         -- 0.065 s had all of its shots counted).
-                        local volley_gap = getgenv()["neverlose_gun_gap"] or 0.15
+                        --
+                        -- Fire All Guns (on by default): every gun takes its turn, with no One Tap choice of one gun out of the Rifle and the Double-Barrel, and the
+                        -- turns follow each other at the Gun Gap (140 ms, the smallest gap that was taken every time; 0 sends them in consecutive frames, the
+                        -- nearest to "at once": the server is said to keep the first and drop the others sent inside a tenth of a second, and a dropped gun is only
+                        -- asked again after its own wait, so the gap is there to be tried).
+                        local all_guns = flags["auto_fire_all_guns"] == true
+                        local volley_gap = getgenv()["neverlose_gun_gap"] or (all_guns and (tonumber(flags["auto_fire_gun_gap"]) or 140)/1000 or 0.15)
                         local switch_slow = {["[Deagle]"] = true, ["[Rifle]"] = true, ["[Glock]"] = true, ["[Silencer]"] = true}
                         local gap_between = function(from_name, to_name)
                             if switch_slow[from_name] and switch_slow[to_name] then
@@ -30357,7 +30370,11 @@ end
 
                         -- One Tap (see hide_manager.one_tap_plan): with the Rifle and the Double-Barrel in hand the gun that knocks this target soonest goes first,
                         -- and the other waits its turn
-                        local plan_tool, plan_hold = hide_manager["one_tap_plan"](target, new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
+                        local plan_tool, plan_hold = nil, false
+
+                        if not all_guns then
+                            plan_tool, plan_hold = hide_manager["one_tap_plan"](target, new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
+                        end
 
                         table.sort(new_local_guns, function(a, b)
                             local tool_a, tool_b = a[1]["Parent"], b[1]["Parent"]
