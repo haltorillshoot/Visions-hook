@@ -14342,8 +14342,15 @@ local destroy = game["Destroy"]
 local ragebot_targets = {}
 local target_list = { ["players"] = {}, ["count"] = 0, ["refresh"] = false } -- players picked in the menu's Target List; when any are picked the ragebot only goes for them
 local player_data = {}
+-- getgenv().neverlose_debug_state = true before loading also hands the player records out for debugging
+if getgenv()["neverlose_debug_state"] then
+    getgenv()["neverlose_debug_player_data"] = player_data
+end
 local local_guns = {}
 local anti_aim = {}
+if getgenv()["neverlose_debug_state"] then
+    getgenv()["neverlose_debug_anti_aim"] = anti_aim
+end
 
 
 -- > ( cheat functions )
@@ -30887,27 +30894,30 @@ end
             target_velocity = nil
 
             if ragebot_player_loaded_connection then
-                ragebot_player_loaded_connection:Disconnect()
+                pcall(ragebot_player_loaded_connection["Disconnect"], ragebot_player_loaded_connection)
                 ragebot_player_loaded_connection = nil
             end
 
             if ragebot_player_status_changed_connection then
-                ragebot_player_status_changed_connection:Disconnect()
+                pcall(ragebot_player_status_changed_connection["Disconnect"], ragebot_player_status_changed_connection)
                 ragebot_player_status_changed_connection = nil
             end
 
             if ragebot_local_tool_equipped_connection then
-                ragebot_local_tool_equipped_connection:Disconnect()
+                pcall(ragebot_local_tool_equipped_connection["Disconnect"], ragebot_local_tool_equipped_connection)
                 ragebot_local_tool_equipped_connection = nil
             end
 
             if ragebot_ammo_connection then
-                ragebot_ammo_connection:Disconnect()
+                pcall(ragebot_ammo_connection["Disconnect"], ragebot_ammo_connection)
                 ragebot_ammo_connection = nil
             end
 
+            -- These can throw (a camera that was replaced, on a respawn or when something else takes the camera, leaves a connection that will not
+            -- disconnect): the throw stopped this handler before it added or removed the ragebot step, so the ragebot could not be switched on any
+            -- more (no target, no aim, no follow, no shots) until the script was run again. Each one is let go on its own now.
             if ragebot_camera_connection then
-                ragebot_camera_connection:Disconnect()
+                pcall(ragebot_camera_connection["Disconnect"], ragebot_camera_connection)
                 ragebot_camera_connection = nil
             end
 
@@ -35817,7 +35827,7 @@ local get_silent_aim_position = nil
         end
 
         if aim_assist_camera_connection then
-            aim_assist_camera_connection:Disconnect()
+            pcall(aim_assist_camera_connection["Disconnect"], aim_assist_camera_connection)
             aim_assist_camera_connection = nil
         end
 
@@ -36131,7 +36141,7 @@ local get_silent_aim_position = nil
         end
 
         if silent_aim_camera_connection then
-            silent_aim_camera_connection:Disconnect()
+            pcall(silent_aim_camera_connection["Disconnect"], silent_aim_camera_connection)
             silent_aim_camera_connection = nil
         end
 
