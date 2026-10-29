@@ -8565,9 +8565,25 @@ Session.installEngineTabs = function()
 			silent = false
 		end)
 
+		-- The starting value goes to the engine's flag as well as its listener: after a re-execute the engine's flags still hold the off
+		-- values the last unload left in them, so an option on by default (Hit Checker, Follow Into Void) ran while its flag said off.
 		if default then
 			table.insert(togglePushes, function()
-				fire(stub, "on_toggle_change", true)
+				local value = true
+
+				if toggle and type(toggle.GetValue) == "function" then
+					local okValue, current = pcall(toggle.GetValue, toggle)
+
+					if okValue and type(current) == "boolean" then
+						value = current
+					end
+				end
+
+				if config.flag ~= nil then
+					neverlose[config.flag] = value
+				end
+
+				fire(stub, "on_toggle_change", value)
 			end)
 		end
 	end
@@ -36305,6 +36321,7 @@ local get_silent_aim_position = nil
     -- with no range or line check. Called from the remote hook, so nothing in here may be a method call (a:B()): it would replace the namecall
     -- method and the shot would never be sent.
     local is_descendant_of = game["IsDescendantOf"]
+    local is_a = game["IsA"]
 
     hide_manager["legit_rebuild"] = LPH_NO_VIRTUALIZE(function(args)
         if not flags["silent_aim"] or ragebot_aim_position then
@@ -36343,7 +36360,7 @@ local get_silent_aim_position = nil
             local best = math.huge
 
             for _, candidate in parts do
-                if typeof(candidate) == "Instance" and candidate["Parent"] == character then
+                if typeof(candidate) == "Instance" and is_a(candidate, "BasePart") and candidate["Parent"] == character then
                     local away = (candidate["Position"] - position)["Magnitude"]
 
                     if away < best then
@@ -36405,6 +36422,8 @@ local get_silent_aim_position = nil
             indicator.Color = color3_fromrgb(255, 194, 254)
             indicator.Visible = false
         end)
+
+        hide_manager["manipulated_indicator"] = indicator
 
         if indicator then
             create_connection(render_stepped, function()
