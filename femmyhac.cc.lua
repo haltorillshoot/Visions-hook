@@ -15057,10 +15057,13 @@ do
                         local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](getgenv()["neverlose_origin_lag"] or 0.09)
                         local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
 
-                        -- Walls: the server looks at the line from this origin to this hit position, so a hit claimed behind a wall is moved to the nearest
-                        -- open point beside the target's part (hide_manager.walls_aim), and a shot with no way to a clear line is not sent at all.
-                        -- Force Hit (always on): the shot goes at the head whatever the walls say, so the claim is not moved
-                        local walls_aim = nil
+                        -- Walls: the server takes a shot only when nothing blocks the line from this origin to where the hit is claimed (a Rifle sent at a
+                        -- target behind a house from 160 studs, and a DB from 60, were refused every time; from 20 studs with a clear line both were taken).
+                        -- Force Hit still always names the head as the part hit; only the claimed point is moved, to the nearest open point beside the target
+                        -- that has a clear line (hide_manager.walls_aim, 4 to 16 studs, within the gun's Range). With no such point the shot goes as it is,
+                        -- except a shotgun's: every refused shotgun call counts against its SecurityTolerance, and past it the gun is locked for the server.
+                        -- (No method calls in here: one before old_namecall replaces the namecall method and the shot is never sent.)
+                        local walls_aim = hide_manager["walls_aim"]
 
                         if walls_aim then
                             local walls_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
@@ -15068,11 +15071,11 @@ do
                             local walls_ok, claimed = pcall(walls_aim, origin, pos, walls_range and walls_range["Value"] or nil)
 
                             if walls_ok then
-                                if claimed == nil then
+                                if claimed then
+                                    pos = claimed
+                                elseif walls_tool and string.find(walls_tool["Name"], "Shotgun") or (walls_tool and walls_tool["Name"] == "[Double-Barrel SG]") then
                                     return
                                 end
-
-                                pos = claimed
                             end
                         end
                 
