@@ -3347,30 +3347,44 @@ local function createJujuLib()
 		toastCount += 1
 		local index = toastCount
 
+		-- drawn like the menu that is picked: the classic one (square, the gradient line on top) or the Visions one (rounded, dark, a red
+		-- line down the left, Gotham)
+		local visionsLook = Lib.GetMenuStyle and Lib:GetMenuStyle() == "visions"
+
 		local frame = new("Frame", {
 			Name = randomName(),
 			AnchorPoint = Vector2.new(1, 1),
 			AutomaticSize = Enum.AutomaticSize.XY,
-			BackgroundColor3 = MENU_COLOR,
+			BackgroundColor3 = visionsLook and Color3.fromRGB(24, 24, 24) or MENU_COLOR,
 			BorderColor3 = LINE_COLOR,
-			BorderSizePixel = 1,
+			BorderSizePixel = visionsLook and 0 or 1,
 			Position = UDim2.new(1, 260, 1, -14),
 			Size = UDim2.fromOffset(200, 24),
 			ZIndex = 4000,
 		}, gui)
-		new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5) }, frame)
 		new("UISizeConstraint", { MaxSize = Vector2.new(340, math.huge) }, frame)
-		local bar = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), Position = UDim2.fromOffset(0, -1), ZIndex = 4001 }, frame)
-		new("UIGradient", { Color = GRADIENT }, bar)
+
+		if visionsLook then
+			new("UICorner", { CornerRadius = UDim.new(0, 5) }, frame)
+			new("UIStroke", { Color = Color3.fromRGB(44, 44, 44), Thickness = 1 }, frame)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 7) }, frame)
+			local bar = new("Frame", { BackgroundColor3 = Lib:Accent(), BorderSizePixel = 0, Position = UDim2.new(0, -9, 0, 1), Size = UDim2.new(0, 2, 1, -2), ZIndex = 4001 }, frame)
+			new("UICorner", { CornerRadius = UDim.new(0, 1) }, bar)
+		else
+			new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5) }, frame)
+			local bar = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), Position = UDim2.fromOffset(0, -1), ZIndex = 4001 }, frame)
+			new("UIGradient", { Color = GRADIENT }, bar)
+		end
+
 		new("TextLabel", {
 			BackgroundTransparency = 1,
 			AutomaticSize = Enum.AutomaticSize.XY,
-			Font = FONT,
+			Font = visionsLook and Enum.Font.Gotham or FONT,
 			RichText = false,
 			Size = UDim2.fromOffset(10, 14),
 			Text = (title and title ~= "" and (title .. "  ") or "") .. tostring(content or ""),
-			TextColor3 = TEXT_COLOR,
-			TextSize = 16,
+			TextColor3 = visionsLook and Color3.fromRGB(235, 235, 235) or TEXT_COLOR,
+			TextSize = visionsLook and 13 or 16,
 			TextWrapped = true,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			ZIndex = 4001,
@@ -32575,6 +32589,30 @@ end
                     end
                 end
 
+                -- Shot Lock. Measured with Distance 26 and Reposition Every 0.02 s: the body was put somewhere new on a 30 stud circle round the target
+                -- every frame, the server had it at one place and the shot was claimed from another (the follow's reach is past the 17 studs it forgives),
+                -- so 9 shots of 11 did nothing (the DB none of 6). With a follow that can put the body more than 15 studs out, the place is now held still
+                -- (hide_manager.shot_lock, as an offset from the target) once a shot is wanted, the shots wait until the server has had the body there
+                -- for a round trip and a little (ping + 0.06 s, at least 0.1 s), and the follow goes back to moving 0.25 s after the last shot.
+                if aim_valid and local_following and flags["auto_fire"] then
+                    local reach = hide_manager["follow_reach"] and hide_manager["follow_reach"]()
+                    local now = clock()
+                    local lock = hide_manager["shot_lock"]
+
+                    if reach == nil or reach > 15 then
+                        if not lock or now >= lock[1] then
+                            local offset = local_server_position - ragebot_aim_position
+
+                            if offset["Magnitude"] == offset["Magnitude"] and offset["Magnitude"] < 200 then
+                                hide_manager["shot_lock"] = {now + 0.6, offset, now}
+                                aim_valid = false
+                            end
+                        elseif now - lock[3] < math.max(local_ping / 1000 + 0.06, 0.1) then
+                            aim_valid = false
+                        end
+                    end
+                end
+
                 -- Distance Check: the target only has to be in reach of one of the guns in hand with a round in it (the Rifle while the DB cannot reach),
                 -- not of the gun equipped last; the gun choice below then sends the one that can reach.
                 local fire_reach = local_gun
@@ -32801,6 +32839,12 @@ end
                                 hide_manager["gun_ammo_sent"][handle["Parent"]] = ammo
                                 hide_manager["last_sent_gun"] = handle["Parent"]
                                 hide_manager["last_sent_at"] = last_fire
+
+                                -- the held place stays until a moment after the last shot (Shot Lock above)
+                                local lock = hide_manager["shot_lock"]
+                                if lock and clock() < lock[1] then
+                                    lock[1] = math.max(lock[1], clock() + 0.25)
+                                end
 
                                 -- bullet manipulation: the gun shoots by itself, aimed by the hook above
                                 if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and hide_manager["bm_try_pull"](handle["Parent"], ammo, pulled) then
@@ -33557,6 +33601,13 @@ end
         end
 
         hide_manager["follow_cframe"] = function(aim, window, quiet)
+            -- Shot Lock (do_ragebot): the place is held still, as an offset from the target, while shots go out
+            local lock = hide_manager["shot_lock"]
+
+            if lock and clock() < lock[1] then
+                return cframe_new(aim + lock[2], aim)
+            end
+
             local new_cframe
             local reposition = tonumber(flags["follow_target_reposition"]) or 0.15
             local reuse = reposition > 0 and held["style"] == follow_target_style and held["offset"] and clock() - held["at"] < reposition
