@@ -4462,6 +4462,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	-- gear-menu settings; the optional third field says how the menu value is shaped for the engine
 	["auto_equip_unequip_when"] = {"auto_equip_unequip_when", "auto_equip_unequip_when", "list"},
 	["auto_equip_gun"] = {"auto_equip_gun", "auto_equip_gun", "list"},
+	["auto_equip_prioritize_db"] = {"auto_equip_prioritize_db", "auto_equip_prioritize_db"},
 	["sender_rate_value_type"] = {"sender_rate_value_type", "sender_rate_value_type", "list"},
 	["sender_rate_value_rate"] = {"sender_rate_value_rate", "sender_rate_value_rate"},
 	["velocity_desync_rotate"] = {"velocity_desync_rotate", "velocity_desync_rotate"},
@@ -8275,10 +8276,14 @@ function Session.buildSettingsPanels(rows)
 	local equip = rows.autoEquip:AddOption()
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
 	panelList(equip, "Gun", "auto_equip_gun", { "double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug" }, { "rifle", "double-barrel sg" })
+	panelToggle(equip, "Prioritize DB", "auto_equip_prioritize_db", false)
 
 	-- Prediction --
 	local predictionPanel = rows.prediction:AddOption()
-	panelSlider(predictionPanel, "Resolver Rate", "resolver_rate", 0, 0.1, 4, "s", 0.043)
+	-- Resolver Rate only shows with the weighted resolver (the resolver's type switch shows and hides it with the weighted rows)
+	local resolverRateRow = select(2, panelSlider(predictionPanel, "Resolver Rate", "resolver_rate", 0, 0.1, 4, "s", 0.043))
+	table.insert(weightedRows, resolverRateRow)
+	resolverRateRow:SetVisible(false)
 	-- Where the target's velocity comes from: its position change between two reads (delta), the way its humanoid is walking or the way its body faces
 	-- (both times its walk speed), or nothing at all (no lead).
 	panelList(predictionPanel, "Velocity Source", "velocity_source", { "delta", "move direction", "look vector", "none" }, "delta")
@@ -27845,6 +27850,7 @@ end
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
         menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle", "double-barrel sg"}, ["options"] = {"double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug"}, ["requires_one"] = true, ["multi"] = true}})
+        menu_references["auto_equip_prioritize_db"] = menu_references["auto_equip_settings"]:create_element({["name"] = "prioritize db"}, {["toggle"] = {["flag"] = "auto_equip_prioritize_db", ["default"] = false}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
         menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
@@ -28110,6 +28116,11 @@ end
 
         local rifle_ready = rifle and distance <= 230 and hide_manager["gun_ready"](rifle[1], rifle[2][3])
         local shell_ready = shell and distance <= 110 and hide_manager["gun_ready"](shell[1], shell[2][3])
+
+        -- Auto Equip's Prioritize DB: the shell goes whenever it can (in reach and ready), the Rifle only when it cannot
+        if shell_ready and flags["auto_equip_prioritize_db"] == true then
+            return shell[1], false
+        end
 
         if shell_ready then
             local damage_value = find_first_child(shell[1], "Damage")
@@ -29686,6 +29697,26 @@ end
         end)
 
         -- True when nothing that counts as a wall lies on the straight line between two points (the same filter as above). Follow Target's Adjust uses it.
+        -- True when the point is inside something solid (a wall, a floor, a roof): any collidable part that is not the shooter, the target, Bush or Ignored.
+        -- Follow Target's Adjust uses it.
+        local inside_params = OverlapParams["new"]()
+        inside_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+        inside_params["RespectCanCollide"] = true
+        inside_params["MaxParts"] = 1
+
+        hide_manager["walls_inside"] = LPH_NO_VIRTUALIZE(function(point)
+            local filter = {}
+            local target = ragebot_target
+
+            for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")} do
+                filter[#filter+1] = instance
+            end
+
+            inside_params["FilterDescendantsInstances"] = filter
+
+            return #workspace:GetPartBoundsInRadius(point, 0.4, inside_params) > 0
+        end)
+
         hide_manager["walls_clear"] = LPH_NO_VIRTUALIZE(function(origin, point)
             local offset = point - origin
             local distance = offset["Magnitude"]
@@ -30986,7 +31017,11 @@ end
             local range = type(local_gun) == "number" and local_gun or 200
             local lift = vector3_new(0, 3.0208, 0)
 
-            if (position - aim)["Magnitude"] <= range and clear(position + lift, aim) then
+            -- The style's place is kept unless it is inside a wall or roof, has a wall between it and the target, or is out of the gun's range; then the character
+            -- goes right next to the target (2 studs, farther only if the target cannot be seen from there)
+            local inside = hide_manager["walls_inside"]
+
+            if (position - aim)["Magnitude"] <= range and clear(position + lift, aim) and not (inside and inside(position)) then
                 adjust_state["offset"] = nil
 
                 return cf
@@ -31003,16 +31038,21 @@ end
                 local candidates = {}
 
                 for _, way in adjust_ways do
-                    for _, radius in {2, 4, 7, 11, 16, 24, 34} do
+                    for _, radius in {2, 3, 4, 6, 9, 14, 22, 34} do
                         if radius <= range then
                             local offset = way * radius
 
-                            candidates[#candidates+1] = {offset, (offset - wanted)["Magnitude"]}
+                            candidates[#candidates+1] = {offset, (offset - wanted)["Magnitude"], radius}
                         end
                     end
                 end
 
+                -- the nearest to the target first; among the same distance the one on the style's side
                 table.sort(candidates, function(a, b)
+                    if a[3] ~= b[3] then
+                        return a[3] < b[3]
+                    end
+
                     return a[2] < b[2]
                 end)
 
@@ -33298,6 +33338,43 @@ end
         local STOMP_PRIORITY_MAX = 4
         local stomp_priority_since = nil
 
+        -- Stomp Due: a target can be stomped right now (no setting asked: Auto Stomp on is enough). The void hide steps aside for as long as this is true (and the
+        -- reload / spam hides with it), so the stomp is tried before the character goes out of reach. The same cap as above applies to a target that stays
+        -- stompable without anything to stomp (a dead one waiting for the respawn), and the answer is kept for a hundredth of a second: it is asked every frame.
+        local stomp_due_since, stomp_due_at, stomp_due_value = nil, -1, false
+
+        hide_manager["stomp_due"] = LPH_NO_VIRTUALIZE(function()
+            local now = clock()
+
+            if now - stomp_due_at < 0.01 then
+                return stomp_due_value
+            end
+
+            stomp_due_at = now
+            stomp_due_value = false
+
+            if flags["auto_stomp"] ~= true or local_knocked then
+                stomp_due_since = nil
+                return false
+            end
+
+            local targets = gather_stomp_targets()
+            local waiting = auto_stomp_wait_for_all and any_target_standing(targets)
+
+            for _, target in targets do
+                if stompable(target, waiting) then
+                    stomp_due_since = stomp_due_since or now
+                    stomp_due_value = now - stomp_due_since < STOMP_PRIORITY_MAX
+
+                    return stomp_due_value
+                end
+            end
+
+            stomp_due_since = nil
+
+            return false
+        end)
+
         hide_manager["stomp_priority"] = LPH_NO_VIRTUALIZE(function()
             if flags["auto_stomp"] ~= true or (flags["auto_stomp_prioritize_over_reload"] ~= true and flags["auto_reload_wait_for_stomp"] ~= true) or local_knocked then
                 stomp_priority_since = nil
@@ -33329,7 +33406,7 @@ end
 
         local do_auto_stomp = LPH_JIT_MAX(function(dt, hrp, bypass)
             -- A knocked out character can't stomp, and the Stomp requests would only fight Anti Stomp for the character.
-            if hrp and not purchasing and (not local_reloading or flags["auto_stomp_prioritize_over_reload"] == true or flags["auto_reload_wait_for_stomp"] == true) and (not in_void or bypass) and not local_knocked then
+            if hrp and not purchasing and (not local_reloading or flags["auto_stomp_prioritize_over_reload"] == true or flags["auto_reload_wait_for_stomp"] == true or hide_manager["stomp_due"]()) and (not in_void or bypass) and not local_knocked then
                 local tick = clock()
 
                 local targets = gather_stomp_targets()
@@ -33520,6 +33597,14 @@ end
             local purchase_holds_void = hide_manager["purchase_holds_void"]
 
             if purchase_holds_void and purchase_holds_void() then
+                in_void = false
+                return
+            end
+
+            -- Auto Stomp first: while a target can be stomped the character stays out of the void (the hide, the Spam cycle and the reload hide all wait)
+            local stomp_due = hide_manager["stomp_due"]
+
+            if stomp_due and stomp_due() then
                 in_void = false
                 return
             end
@@ -33823,6 +33908,12 @@ end
                             gun["Parent"] = local_character
                             is_gun = true
                         end
+                    end
+                    -- Prioritize DB: the Double-Barrel comes out whether or not it is in the list
+                    if not is_gun and name == "[Double-Barrel SG]" and flags["auto_equip_prioritize_db"] == true then
+                        setscriptable(gun, "Parent", true)
+                        gun["Parent"] = local_character
+                        is_gun = true
                     end
                     if not is_gun and gun["Parent"] == local_character then
                         setscriptable(gun, "Parent", true)
