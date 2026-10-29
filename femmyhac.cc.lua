@@ -14232,7 +14232,17 @@ local find_first_child = workspace["FindFirstChild"]
 local wait_for_child = workspace["WaitForChild"]
 local get_children = workspace["GetChildren"]
 local render_stepped = run_service["RenderStepped"]
-local render_stepped_wait = render_stepped["Wait"]
+-- Waits for the next drawn frame, or, while no frame is being drawn (the game minimized or hidden behind other windows), for the next physics
+-- step (Stepped keeps running then, and still comes before the next Heartbeat). The steps that move the character and put it back used to park
+-- on a RenderStepped that never came, so nothing moved, followed or shot while the game was tabbed out.
+local render_stepped_wait = function(signal)
+    if signal == render_stepped and clock() - (getgenv()["neverlose_rendered_at"] or 0) > 0.1 then
+        local stepped = run_service["Stepped"]
+        return stepped["Wait"](stepped)
+    end
+
+    return signal["Wait"](signal)
+end
 local vector3_new = Vector3["new"]
 local cframe_new = CFrame["new"]
 local vector3_zero = Vector3["zero"]
@@ -31823,58 +31833,7 @@ end
 
     -- >> ( target strafe )
 
-    -- Part of the ragebot, with no switch of its own: for as long as it has a target the character taps A and D back and forth, in the void and out of it
-    -- (the steps that hide the character put the body back where it was at the start of each frame, so the walking goes on underneath them).
-    do
-        local strafe_interval = 0.22
-        local virtual_input_manager = cloneref(game:GetService("VirtualInputManager"))
-        local send_key_event = virtual_input_manager["SendKeyEvent"]
-        local key_a = Enum["KeyCode"]["A"]
-        local key_d = Enum["KeyCode"]["D"]
-        local held_key = nil
-        local last_switch = 0
-
-        -- Lets go of whatever is held, then holds the new key; nil just lets go.
-        local press_key = LPH_NO_VIRTUALIZE(function(key)
-            if held_key == key then
-                return
-            end
-
-            if held_key then
-                pcall(send_key_event, virtual_input_manager, false, held_key, false, game)
-            end
-
-            if key then
-                pcall(send_key_event, virtual_input_manager, true, key, false, game)
-            end
-
-            held_key = key
-        end)
-
-        local do_target_strafe = LPH_NO_VIRTUALIZE(function(dt, hrp)
-            -- No target (or the ragebot is off, or the Anti Report shutdown ran), a knocked character, or the player typing in chat: let go of the key.
-            if not (flags["ragebot"] and ragebot_target and hrp) or local_knocked or getgenv()["neverlose_safety_shutdown"] or (getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]()) then
-                press_key(nil)
-                return
-            end
-
-            local tick = clock()
-
-            if held_key == nil or tick - last_switch >= strafe_interval then
-                last_switch = tick
-                press_key(held_key == key_a and key_d or key_a)
-            end
-        end)
-
-        heartbeat[#heartbeat+1] = do_target_strafe
-
-        -- Unloading disconnects everything in connections, so a held key goes up with them.
-        connections[#connections+1] = {
-            Disconnect = function()
-                press_key(nil)
-            end
-        }
-    end
+    -- (The A/D target strafe that was part of the ragebot is gone.)
 
     -- >> ( rapid fire )
 
@@ -32700,11 +32659,16 @@ end
         local idle_connection = nil
         local pulse_token = nil
 
-        -- the way a player touching the mouse would answer the idle kick
+        -- the way a player touching the mouse would answer the idle kick (a right click and a key tap, both sent to the game itself, so they work
+        -- with the window in the background)
         local answer_idle = LPH_NO_VIRTUALIZE(function()
             pcall(function()
                 virtual_user:CaptureController()
                 virtual_user:ClickButton2(Vector2.new())
+            end)
+            pcall(function()
+                virtual_user:Button2Down(Vector2.new(), workspace.CurrentCamera.CFrame)
+                virtual_user:Button2Up(Vector2.new(), workspace.CurrentCamera.CFrame)
             end)
         end)
 
@@ -32724,7 +32688,7 @@ end
 
                 spawn(function()
                     while pulse_token == token do
-                        wait(240)
+                        wait(60)
 
                         if pulse_token == token then
                             answer_idle()
@@ -36506,6 +36470,7 @@ do
     -- When the last frame was drawn (the anti aim steps in the Heartbeat below wait for it).
     create_connection(game:GetService("RunService")["RenderStepped"], function()
         hide_manager["rendered_at"] = clock()
+        getgenv()["neverlose_rendered_at"] = hide_manager["rendered_at"]
     end)
 
     create_connection(game:GetService("RunService")["Heartbeat"], LPH_NO_VIRTUALIZE(function(dt)
@@ -36547,10 +36512,9 @@ do
             spawn(steps[i], dt, hrp)
         end
 
-        -- No frame has been drawn for half a second (the window is minimized): the anti aim steps park on the next RenderStepped, which does not
-        -- come, so a new set every Heartbeat piled up behind it, and the position saved here was one a parked step had already moved the character
-        -- to. They wait until frames are drawn again; the parked ones put the real position back when they resume.
-        local rendering = clock() - (hide_manager["rendered_at"] or clock()) < 0.5
+        -- The anti aim steps run whether or not frames are drawn: with none drawn (tabbed out, minimized) their wait for the next frame falls back to
+        -- the next physics step (render_stepped_wait), so they no longer park and pile up, and the ragebot keeps following and shooting.
+        local rendering = true
 
         if hrp and rendering then
             local_client_position = hrp["CFrame"]
