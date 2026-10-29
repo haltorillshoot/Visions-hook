@@ -15066,6 +15066,21 @@ do
                         local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](getgenv()["neverlose_origin_lag"] or 0.09)
                         local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
 
+                        -- Following the target closely: the body is somewhere within the follow's reach of the target (hide_manager.follow_reach; a strafe at
+                        -- Speed 75 is all round the circle every frame), and the server has it there about 0.1 s late, so a shot claimed from where the body
+                        -- is now was refused about half the time. Claimed from 1.5 studs off the target instead (towards the body), the origin is within
+                        -- reach + 1.5 of wherever on that circle the server has the body, inside the 17 studs it forgives, whichever point that is.
+                        local follow_reach = local_following and hide_manager["follow_reach"] and hide_manager["follow_reach"]()
+
+                        if follow_reach and follow_reach <= 15 then
+                            local away = (lag_origin or local_server_position["p"]) - ragebot_aim_position
+                            local away_length = away["Magnitude"]
+
+                            if away_length == away_length and away_length > 0.1 and away_length < 40 then
+                                origin = ragebot_aim_position + away["Unit"] * 1.5
+                            end
+                        end
+
                         -- Walls: the server takes a shot only when nothing blocks the line from this origin to where the hit is claimed (a Rifle sent at a
                         -- target behind a house from 160 studs, and a DB from 60, were refused every time; from 20 studs with a clear line both were taken).
                         -- Force Hit still always names the head as the part hit; only the claimed point is moved, to the nearest open point beside the target
@@ -28478,7 +28493,18 @@ end
 
             local elapsed = clock() - sent_at
 
-            -- the server took the last one (the ammo moved): a whole cooldown. Otherwise one round trip, then ask again. (Force Fire: always a cooldown.)
+            -- The server took the last one (the ammo moved since that send): a whole cooldown. A send it refused (the ammo is still what it was a
+            -- round trip later) is asked again after that round trip instead of after the whole cooldown: a refused Rifle shot used to cost 1.3 s.
+            -- Never faster than every 0.25 s, so a target out of reach is not asked dozens of times a second.
+            local sent_with = hide_manager["gun_ammo_sent"][tool]
+            local ammo_value = find_first_child(tool, "Ammo")
+            local refused = sent_with ~= nil and ammo_value ~= nil and ammo_value["Value"] >= sent_with and not (hide_manager["salvo_holding"] and hide_manager["salvo_holding"](tool))
+            local round_trip = math.max(local_ping / 1000 + 0.08, 0.25)
+
+            if refused and elapsed >= round_trip then
+                return true
+            end
+
             if true then
                 return elapsed >= wait_time + 0.0095
             end
@@ -30800,17 +30826,32 @@ end
                     aim_valid = false
                 end
 
-                -- Follow Target has just taken the character to the target: the shot goes this tick, with no wait for the gun gap, the fire cooldown
+                -- Follow Target has just taken the character to the target. The server has the body about 0.1 s late, so a shot sent at once is claimed
+                -- from a place where the server does not have it yet and is refused (measured: the first Rifle, Flintlock and DB shots all refused, and
+                -- the refused Rifle then sat out its whole 1.3 s cooldown before the shot that hit). The shots wait until the server has had the body
+                -- there for a round trip and a little more (ping + 0.06 s, at most 0.25 s), and then go with no wait for the gun gap, the fire cooldown
                 -- or the shot delay.
                 local follow_burst = false
 
                 if local_following and not hide_manager["was_following"] then
-                    last_fire = -math.huge
-                    hide_manager["last_sent_at"] = nil
-                    follow_burst = true
+                    hide_manager["follow_started_at"] = clock()
+                    hide_manager["follow_burst_due"] = true
                 end
 
                 hide_manager["was_following"] = local_following
+
+                if local_following and hide_manager["follow_started_at"] then
+                    local settle = math.min(local_ping / 1000 + 0.06, 0.25)
+
+                    if clock() - hide_manager["follow_started_at"] < settle then
+                        aim_valid = false
+                    elseif hide_manager["follow_burst_due"] then
+                        hide_manager["follow_burst_due"] = false
+                        last_fire = -math.huge
+                        hide_manager["last_sent_at"] = nil
+                        follow_burst = true
+                    end
+                end
 
                 -- Distance Check: the target only has to be in reach of one of the guns in hand with a round in it (the Rifle while the DB cannot reach),
                 -- not of the gun equipped last; the gun choice below then sends the one that can reach.
@@ -31188,30 +31229,30 @@ end
             target_velocity = nil
 
             if ragebot_player_loaded_connection then
-                pcall(ragebot_player_loaded_connection["Disconnect"], ragebot_player_loaded_connection)
+                pcall(function() ragebot_player_loaded_connection:Disconnect() end)
                 ragebot_player_loaded_connection = nil
             end
 
             if ragebot_player_status_changed_connection then
-                pcall(ragebot_player_status_changed_connection["Disconnect"], ragebot_player_status_changed_connection)
+                pcall(function() ragebot_player_status_changed_connection:Disconnect() end)
                 ragebot_player_status_changed_connection = nil
             end
 
             if ragebot_local_tool_equipped_connection then
-                pcall(ragebot_local_tool_equipped_connection["Disconnect"], ragebot_local_tool_equipped_connection)
+                pcall(function() ragebot_local_tool_equipped_connection:Disconnect() end)
                 ragebot_local_tool_equipped_connection = nil
             end
 
             if ragebot_ammo_connection then
-                pcall(ragebot_ammo_connection["Disconnect"], ragebot_ammo_connection)
+                pcall(function() ragebot_ammo_connection:Disconnect() end)
                 ragebot_ammo_connection = nil
             end
 
-            -- These can throw (a camera that was replaced, on a respawn or when something else takes the camera, leaves a connection that will not
-            -- disconnect): the throw stopped this handler before it added or removed the ragebot step, so the ragebot could not be switched on any
+            -- These can throw, even on reading Disconnect off them (a camera that was replaced, on a respawn or when something else takes the camera,
+            -- leaves a connection that is no longer one): the throw stopped this handler before it added or removed the ragebot step, so the ragebot could not be switched on any
             -- more (no target, no aim, no follow, no shots) until the script was run again. Each one is let go on its own now.
             if ragebot_camera_connection then
-                pcall(ragebot_camera_connection["Disconnect"], ragebot_camera_connection)
+                pcall(function() ragebot_camera_connection:Disconnect() end)
                 ragebot_camera_connection = nil
             end
 
@@ -31768,6 +31809,29 @@ end
             held["style"], held["offset"], held["turn"], held["at"] = "hold", offset or fallback, nil, now
 
             return held["offset"]
+        end
+
+        -- How far from the target the current follow style can put the body (nil when it can go farther than the follow's own reach: Random Spam's
+        -- void jumps, or Adjust having moved the body somewhere else). The remote hook uses it to claim shots from next to the target.
+        hide_manager["follow_reach"] = function()
+            if flags["follow_target_adjust"] == true and adjust_state["offset"] then
+                return nil
+            end
+
+            if follow_target_style == "strafe" then
+                return math.sqrt(distance * distance + height["Y"] * height["Y"])
+            elseif follow_target_style == "hold" then
+                return distance
+            elseif follow_target_style == "randomize" then
+                local high = math.max(flags["follow_target_teleport_max"] or 17, flags["follow_target_teleport_min"] or 2)
+                return math.sqrt(high * high + 25)
+            elseif follow_target_style == "above" then
+                return math.max(flags["follow_target_sky_max"] or 20, flags["follow_target_sky_min"] or 10)
+            elseif follow_target_style == "random" then
+                return distance * math.sqrt(3)
+            end
+
+            return nil
         end
 
         hide_manager["follow_cframe"] = function(aim, window, quiet)
@@ -36253,7 +36317,7 @@ local get_silent_aim_position = nil
         end
 
         if aim_assist_camera_connection then
-            pcall(aim_assist_camera_connection["Disconnect"], aim_assist_camera_connection)
+            pcall(function() aim_assist_camera_connection:Disconnect() end)
             aim_assist_camera_connection = nil
         end
 
@@ -36574,7 +36638,7 @@ local get_silent_aim_position = nil
         end
 
         if silent_aim_camera_connection then
-            pcall(silent_aim_camera_connection["Disconnect"], silent_aim_camera_connection)
+            pcall(function() silent_aim_camera_connection:Disconnect() end)
             silent_aim_camera_connection = nil
         end
 
@@ -37424,20 +37488,25 @@ do
             spawn(steps[i], dt, hrp)
         end
 
-        -- The anti aim steps run whether or not frames are drawn: with none drawn (tabbed out, minimized) their wait for the next frame falls back to
-        -- the next physics step (render_stepped_wait), so they no longer park and pile up, and the ragebot keeps following and shooting.
-        local rendering = true
+    end))
 
-        if hrp and rendering then
+    -- The anti aim steps (follow, void hide and the rest: they move the body for the server and put it back on the next drawn frame) run at Stepped,
+    -- before the physics step, not at Heartbeat after it. The server is sent the body as it is at the physics step: a body moved at Heartbeat and put
+    -- back at the next RenderStepped was never seen there at all (measured from another player's client: 0 of 530 samples), so Follow Target moved the
+    -- body only on this screen and every shot claimed from next to the target was refused until chance put the real body in reach. Moved at Stepped
+    -- and put back at the next RenderStepped, the server had it there in 409 of 505 samples. They run whether or not frames are drawn: with none drawn
+    -- their wait for the next frame falls back to the next physics step (render_stepped_wait).
+    create_connection(game:GetService("RunService")["Stepped"], LPH_NO_VIRTUALIZE(function(_, dt)
+        local hrp = vehicle or local_parts["HumanoidRootPart"]
+
+        if hrp then
             local_client_position = hrp["CFrame"]
         end
 
-        if rendering then
-            local anti_aim_steps = table.move(anti_aim, 1, #anti_aim, 1, {})
+        local anti_aim_steps = table.move(anti_aim, 1, #anti_aim, 1, {})
 
-            for i = 1, #anti_aim_steps do
-                spawn(anti_aim_steps[i], dt, hrp)
-            end
+        for i = 1, #anti_aim_steps do
+            spawn(anti_aim_steps[i], dt, hrp)
         end
 
         if hrp then
