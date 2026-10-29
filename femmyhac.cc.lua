@@ -15164,6 +15164,14 @@ do
                             end
                         end
                 
+                        -- An origin thousands of studs from the claim (the body was in the void when it was taken, or the claim is the target's void spot):
+                        -- the server refuses it whatever the gun, so it is not sent (measured: a third of a fight's shots went out from 1e9 studs).
+                        local reach_gap = (origin - pos)["Magnitude"]
+
+                        if reach_gap ~= reach_gap or reach_gap > 2000 then
+                            return
+                        end
+
                         local dir = (origin-pos)["Unit"]
                         local Magnitude = dir["Magnitude"]
                         local part = ragebot_target[4]["Head"] or ragebot_target[4][flags["ragebot_hitbox"][1] == "head" and "Head" or "UpperTorso"]
@@ -30822,6 +30830,23 @@ end
             if hitbox then
                 local hitbox_position = hitbox["Position"]
 
+                -- A target in the void whose spot there jumps about (a new random place far out on every update, as one opponent's script does) can
+                -- not be hit or followed: the server has it somewhere else by the time a shot or the body gets there, and out there a position is only
+                -- kept to tens of studs anyway. Marked here (hide_manager.target_void_jitter_at) for the fire gate below, the follow and the shot hook.
+                do
+                    local last_void = hide_manager["target_void_last"]
+
+                    if hitbox_position["Magnitude"] >= 9e5 then
+                        if last_void and last_void[1] == target and (hitbox_position - last_void[2])["Magnitude"] > 5000 then
+                            hide_manager["target_void_jitter_at"] = clock()
+                        end
+
+                        hide_manager["target_void_last"] = {target, hitbox_position}
+                    else
+                        hide_manager["target_void_last"] = nil
+                    end
+                end
+
                 local current_time = clock()
 
                 local old_time = clock()
@@ -30904,6 +30929,12 @@ end
                     if in_void == true or clock() - (hide_manager["spam_cycle_start"] or 0) < settle then
                         aim_valid = false
                     end
+                end
+
+                -- The target sits in the void at a spot that keeps jumping (above): nothing sent at it can land, and every refused shotgun call costs
+                -- SecurityTolerance, so nothing is sent until it comes back out.
+                if aim_valid and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](target, hitbox_position) then
+                    aim_valid = false
                 end
 
                 -- Hidden in the void for a reload (the one hide that runs while the target can be hit): a shot sent from there is thrown away by the
@@ -32046,6 +32077,12 @@ end
             -- spawn protection is over (the phase check above). With it off a target in the void is left alone, as it used to be. Positions that are
             -- not numbers or absurdly far out are never followed.
             local void_limit = flags["follow_target_into_void"] ~= false and 1e10 or 9e5
+
+            -- ...except a spot that keeps jumping (hide_manager.is_void_jittering): the body would land where the target was, never where it is.
+            if not bypass and ragebot_aim_position and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position) then
+                local_following = false
+                return
+            end
 
             if ragebot_target and hrp and ((not in_void and not stomping and not purchasing) or bypass) and ragebot_aim_position and ragebot_aim_position["Magnitude"] < void_limit and not ragebot_target[7] then
                 if follow_target_stop_if_reloading and local_reloading then -- theres a reason for not using else ifs i think? i forget but im not risking it
@@ -37545,6 +37582,11 @@ do
     -- claimed from where the body is now is often refused. hide_manager.lagged_position(lag) is where the body was `lag` seconds ago.
     hide_manager["trail_times"] = {}
     hide_manager["trail_points"] = {}
+
+    -- The ragebot's target is in the void and its spot there has jumped in the last half second (do_ragebot marks it).
+    hide_manager["is_void_jittering"] = function(target, position)
+        return target ~= nil and position ~= nil and position["Magnitude"] >= 9e5 and clock() - (hide_manager["target_void_jitter_at"] or -1) < 0.5
+    end
 
     hide_manager["lagged_position"] = function(lag)
         local times, points = hide_manager["trail_times"], hide_manager["trail_points"]
