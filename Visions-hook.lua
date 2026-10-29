@@ -5054,10 +5054,12 @@ local function createJujuLib()
 				gear.Text = "..."
 				gear.TextColor3 = T.TextDim
 
-				local holder = new("Frame", { BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 50, Size = UDim2.new(1, 0, 0, 0), Visible = false }, under)
+				-- (a plain box: a child sized by the box's own height made an AutomaticSize box grow without end)
+				local holder = new("Frame", { BackgroundColor3 = T.Body, BorderSizePixel = 0, AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 50, Size = UDim2.new(1, 0, 0, 0), Visible = false }, under)
+				corner(holder, 4)
+				new("UIStroke", { Color = T.Line, Thickness = 1 }, holder)
 				new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2) }, holder)
-				new("UIPadding", { PaddingLeft = UDim.new(0, 10) }, holder)
-				new("Frame", { BackgroundColor3 = T.Accent, BorderSizePixel = 0, Size = UDim2.new(0, 2, 1, 0), Position = UDim2.fromOffset(-8, 0) }, holder)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 6) }, holder)
 
 				local built = false
 				bind(gear.MouseButton1Click, function()
@@ -5329,6 +5331,29 @@ local function createJujuLib()
 		end)
 
 		return V
+	end
+
+	-- The menu window on the screen while it is open (whichever look is shown): x0, y0, x1, y1 in screen pixels, or nil when it is closed.
+	-- Drawings (ESP, the center panel) are always drawn over every GUI, so they keep out of this rectangle instead.
+	function Lib:MenuRect()
+		local window = Lib.Window
+		if not window or not window.Signal:GetValue() or Lib.MenuHeld then
+			return nil
+		end
+
+		local frame = nil
+		if window.Panel and window.Panel.Visible then
+			frame = window.Panel
+		elseif visions and visions.Frame.Parent and visions.Frame.Visible then
+			frame = visions.Frame
+		end
+
+		if not frame then
+			return nil
+		end
+
+		local position, size = frame.AbsolutePosition, frame.AbsoluteSize
+		return position.X, position.Y, position.X + size.X, position.Y + size.Y
 	end
 
 	-- tabs + sections + rows written down so far (a change means the Visions look is out of date)
@@ -6024,6 +6049,14 @@ end
 -- the engine part (Hold To Fire) asks the same thing
 sharedEnv.neverlose_menu_open = function()
 	return Session.Alive and menuIsOpen()
+end
+
+-- where the open menu is on the screen (nil when closed): the ESP keeps out of it
+sharedEnv.neverlose_menu_rect = function()
+	if Session.Alive and NeverLose and NeverLose.MenuRect then
+		return NeverLose:MenuRect()
+	end
+	return nil
 end
 
 -- The library places the subtitle under the title, left-aligned. Centre it under
@@ -20811,6 +20844,27 @@ do
         end)
 
         local do_center_panel = LPH_JIT_MAX(function(dt)
+            -- Nothing of it while the menu is open (a drawing shows through any menu)
+            local menu_open_check = getgenv()["neverlose_menu_open"]
+
+            if menu_open_check and menu_open_check() then
+                if text["Visible"] or text3["Visible"] then
+                    text["Visible"] = false
+                    text3["Visible"] = false
+                end
+
+                local target_line = hide_manager["cp_target"]
+
+                if target_line and target_line["Visible"] then
+                    target_line["Visible"] = false
+                end
+
+                return
+            elseif not text["Visible"] then
+                text["Visible"] = true
+                text3["Visible"] = flags["center_panel_show_state"] ~= false
+            end
+
             hide_manager["cp_target_update"](text)
 
             local old = text3["Text"]
@@ -25652,6 +25706,19 @@ end
     -- >> ( esp core )
 
     local do_esp = LPH_NO_VIRTUALIZE(function()
+        -- The open menu's rectangle (with a margin for the box and the text round a player): drawings are drawn over every GUI, so a player
+        -- that would be drawn on the menu is not drawn until it closes or moves away.
+        local menu_rect = getgenv()["neverlose_menu_rect"]
+        local mx0, my0, mx1, my1 = nil, nil, nil, nil
+
+        if menu_rect then
+            local ok, a, b, c, d = pcall(menu_rect)
+
+            if ok and a then
+                mx0, my0, mx1, my1 = a - 60, b - 60, c + 60, d + 60
+            end
+        end
+
         for player, data in player_data do
             local parts = data[4]
             local upper_torso = parts["UpperTorso"]
@@ -25662,6 +25729,10 @@ end
 
             local position = upper_torso["Position"]
             local screen_pos, on_screen = world_to_viewport_point(camera, position + offset)
+
+            if on_screen and mx0 and screen_pos["X"] >= mx0 and screen_pos["X"] <= mx1 and screen_pos["Y"] >= my0 and screen_pos["Y"] <= my1 then
+                on_screen = false
+            end
 
             if on_screen then
                 local drawings = data[5]
