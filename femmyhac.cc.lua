@@ -28914,7 +28914,8 @@ end
         ["respawning"] = "ragebot target is respawning, void hiding",
         ["loading"] = "ragebot target is still loading, void hiding",
         ["reload"] = "reloading, void hiding",
-        ["healing"] = "healing, void hiding"
+        ["healing"] = "healing, void hiding",
+        ["guns"] = "waiting for every gun to be ready, void hiding"
     }
 
     -- Schedules or removes the void runner depending on whether any reason is left.
@@ -29330,6 +29331,8 @@ end
     local release_all_hide_reasons = LPH_NO_VIRTUALIZE(function()
         release_target_hide_reasons()
         set_hide_reason("reload", false, true)
+        set_hide_reason("guns", false, true)
+        hide_manager["guns_out_since"] = nil
         reset_reloads()
     end)
 
@@ -29407,6 +29410,46 @@ end
                 set_invulnerable_void(false, changed)
             end
         end
+
+        -- Follow waits for the guns: with Follow Target on, the character stays in the void (where it can't be hit) until every gun that has a round
+        -- is ready to shoot (off its cooldown, no reload under way); then it comes out and follows. It stays out until every gun has had its shot
+        -- (none is ready any more) or a second has gone by, and goes back into the void to wait for the next round.
+        local guns_wait = false
+
+        if flags["follow_target"] and target_player and target_player["Parent"] and not target[7] and not target[18] and get_target_phase(target) == nil then
+            local now = clock()
+            local loaded, ready = 0, 0
+
+            for handle, data in local_guns do
+                local tool = handle["Parent"]
+
+                if tool and (data[3] or 0) > 0 then
+                    loaded += 1
+
+                    local cooldown = find_first_child(tool, "ShootingCooldown")
+                    local fired = hide_manager["gun_fired_at"][tool]
+
+                    if not local_reloading and (not fired or now - fired >= (cooldown and cooldown["Value"] or 0) + 0.0095) then
+                        ready += 1
+                    end
+                end
+            end
+
+            if hide_manager["guns_out_since"] then
+                if ready == 0 or now - hide_manager["guns_out_since"] > 1 then
+                    hide_manager["guns_out_since"] = nil
+                    guns_wait = true
+                end
+            elseif loaded > 0 and ready == loaded then
+                hide_manager["guns_out_since"] = now
+            else
+                guns_wait = true
+            end
+        else
+            hide_manager["guns_out_since"] = nil
+        end
+
+        set_hide_reason("guns", guns_wait, true)
 
         reload_step(hrp)
     end)
