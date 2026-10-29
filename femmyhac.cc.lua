@@ -4421,6 +4421,10 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
 	["auto_fire_all_guns"] = {"auto_fire_all_guns", "auto_fire_all_guns"},
 	["auto_fire_gun_gap"] = {"auto_fire_gun_gap", "auto_fire_gun_gap"},
+	["auto_fire_force_hit"] = {"auto_fire_force_hit", "auto_fire_force_hit"},
+	["auto_fire_force_fire"] = {"auto_fire_force_fire", "auto_fire_force_fire"},
+	["auto_fire_trigger_bot"] = {"auto_fire_trigger_bot", "auto_fire_trigger_bot"},
+	["auto_fire_trigger_radius"] = {"auto_fire_trigger_radius", "auto_fire_trigger_radius"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -4446,6 +4450,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_mask"] = {"auto_mask", "auto_mask"},
 	["auto_heal"] = {"auto_heal", "auto_heal"},
 	["anti_taser"] = {"anti_taser", "anti_taser"},
+	["anti_afk"] = {"anti_afk", "anti_afk"},
 	-- visualization, fake pos and main-section additions
 	["auto_equip"] = {"auto_equip", "auto_equip"},
 	["prediction_level"] = {"prediction", "prediction"},
@@ -8279,6 +8284,11 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Fire All Guns", "auto_fire_all_guns", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
 	panelSlider(autoFire, "Gun Gap", "auto_fire_gun_gap", 0, 300, 0, "ms", 140, { [0] = "at once" })
+	-- The three Semi Rage shooting aids, for the ragebot's own auto fire (they stay in the Semi Rage tab too)
+	panelToggle(autoFire, "Force Hit", "auto_fire_force_hit", false)
+	panelToggle(autoFire, "Force Fire", "auto_fire_force_fire", false)
+	panelToggle(autoFire, "Trigger Bot", "auto_fire_trigger_bot", false)
+	panelSlider(autoFire, "Trigger Radius", "auto_fire_trigger_radius", 10, 750, 0, "px", 150)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
@@ -8294,7 +8304,7 @@ function Session.buildSettingsPanels(rows)
 	resolverRateRow:SetVisible(false)
 	-- Where the target's velocity comes from: its position change between two reads (delta), the way its humanoid is walking or the way its body faces
 	-- (both times its walk speed), or nothing at all (no lead).
-	panelList(predictionPanel, "Velocity Source", "velocity_source", { "delta", "move direction", "look vector", "none" }, "delta")
+	panelList(predictionPanel, "Velocity Source", "velocity_source", { "delta", "estimator", "move direction", "look vector", "none" }, "delta")
 
 	-- Void hide --
 	local voidHide = rows.voidHide:AddOption()
@@ -13963,6 +13973,14 @@ local function buildInterface()
 		Callback = onChanged("anti_taser"),
 	})
 
+	-- The bypass block at the top answers the idle kick on its own and cannot be switched off; this one is the visible switch for a second answer
+	-- (on the idle signal, and every four minutes in case that signal never comes)
+	addBindableToggle(Other:AddLabel("Anti AFK"), "Anti AFK", {
+		Default = true,
+		Flag = "anti_afk",
+		Callback = onChanged("anti_afk"),
+	})
+
 	-- Sender rate, network and velocity desync and the fake position are not in the menu any more: Void is the only row here.
 	rows.voidHide = FakePos:AddLabel("Void")
 	addBindableToggle(rows.voidHide, "Void", {
@@ -14995,7 +15013,8 @@ do
 
                         -- Walls: the server looks at the line from this origin to this hit position, so a hit claimed behind a wall is moved to the nearest
                         -- open point beside the target's part (hide_manager.walls_aim), and a shot with no way to a clear line is not sent at all.
-                        local walls_aim = hide_manager["bm_active"] and hide_manager["walls_aim"] or nil
+                        -- (Force Hit sends the shot at the head whatever the walls say)
+                        local walls_aim = hide_manager["bm_active"] and flags["auto_fire_force_hit"] ~= true and hide_manager["walls_aim"] or nil
 
                         if walls_aim then
                             local walls_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
@@ -15013,7 +15032,7 @@ do
                 
                         local dir = (origin-pos)["Unit"]
                         local Magnitude = dir["Magnitude"]
-                        local part = ragebot_target[4][flags["ragebot_hitbox"][1] == "head" and "Head" or "UpperTorso"]
+                        local part = ragebot_target[4][(flags["auto_fire_force_hit"] == true or flags["ragebot_hitbox"][1] == "head") and "Head" or "UpperTorso"]
                         
                         spawn(get_bullet_result, ragebot_target[2], part)
 
@@ -27887,6 +27906,10 @@ end
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
         menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
         menu_references["auto_fire_all_guns"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fire all guns"}, {["toggle"] = {["flag"] = "auto_fire_all_guns", ["default"] = true}})
+        menu_references["auto_fire_force_hit"] = menu_references["auto_fire_settings"]:create_element({["name"] = "force hit"}, {["toggle"] = {["flag"] = "auto_fire_force_hit", ["default"] = false}})
+        menu_references["auto_fire_force_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "force fire"}, {["toggle"] = {["flag"] = "auto_fire_force_fire", ["default"] = false}})
+        menu_references["auto_fire_trigger_bot"] = menu_references["auto_fire_settings"]:create_element({["name"] = "trigger bot"}, {["toggle"] = {["flag"] = "auto_fire_trigger_bot", ["default"] = false}})
+        menu_references["auto_fire_trigger_radius"] = menu_references["auto_fire_settings"]:create_element({["name"] = "trigger radius"}, {["slider"] = {["flag"] = "auto_fire_trigger_radius", ["min"] = 10, ["max"] = 750, ["suffix"] = "px", ["default"] = 150, ["decimals"] = 0}})
         menu_references["auto_fire_gun_gap"] = menu_references["auto_fire_settings"]:create_element({["name"] = "gun gap"}, {["slider"] = {["flag"] = "auto_fire_gun_gap", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 140, ["min_text"] = "at once", ["decimals"] = 0}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
@@ -27909,7 +27932,7 @@ end
         menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 2000, ["min_text"] = "off", ["max_text"] = "auto", ["suffix"] = "%", ["decimals"] = 2}})
         menu_references["prediction_settings"] = menu_references["prediction"]:create_settings()
         menu_references["resolver_rate"] = menu_references["prediction_settings"]:create_element({["name"] = "resolver rate"}, {["slider"] = {["flag"] = "resolver_rate", ["min"] = 0, ["suffix"] = "s", ["max"] = 0.1, ["default"] = 0.043, ["decimals"] = 4}})
-        menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "estimator", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["shot_delay"] = menu_references["general_section"]:create_element({["name"] = "shot delay"}, {["slider"] = {["flag"] = "shot_delay", ["min"] = 0, ["max"] = 1000, ["suffix"] = "ms", ["default"] = 0, ["min_text"] = "none"}})
         menu_references["ragebot_field_of_view"] = menu_references["general_section"]:create_element({["name"] = "field of view"}, {["slider"] = {["flag"] = "ragebot_field_of_view", ["min"] = 5, ["max"] = 180, ["suffix"] = "°", ["default"] = 180, ["max_text"] = "full"}})
         menu_references["fire_cooldown"] = menu_references["general_section"]:create_element({["name"] = "fire cooldown"}, {["slider"] = {["flag"] = "fire_cooldown", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 5, ["min_text"] = "none"}})
@@ -28060,6 +28083,7 @@ end
         menu_references["auto_heal_try_cooldown"] = menu_references["auto_heal_settings"]:create_element({["name"] = "try cooldown"}, {["slider"] = {["flag"] = "auto_heal_try_cooldown", ["min"] = 0, ["max"] = 2, ["default"] = 0.05, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["auto_heal_stop_following"] = menu_references["auto_heal_settings"]:create_element({["name"] = "stop following while healing"}, {["toggle"] = {["flag"] = "auto_heal_stop_following", ["default"] = false}})
         menu_references["anti_taser"] = menu_references["utility_section"]:create_element({["name"] = "anti taser"}, {["toggle"] = {["flag"] = "anti_taser"}})
+        menu_references["anti_afk"] = menu_references["utility_section"]:create_element({["name"] = "anti afk"}, {["toggle"] = {["flag"] = "anti_afk", ["default"] = true}})
         menu_references["rapid_fire"] = menu_references["utility_section"]:create_element({["name"] = "rapid fire"}, {["toggle"] = {["flag"] = "rapid_fire", ["default"] = false}})
         menu_references["rapid_fire_settings"] = menu_references["rapid_fire"]:create_settings()
         menu_references["rapid_fire_speed"] = menu_references["rapid_fire_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "rapid_fire_speed", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["suffix"] = "%"}})
@@ -28257,7 +28281,8 @@ end
         local cooldown = find_first_child(tool, "ShootingCooldown")
         local wait_time = cooldown and cooldown["Value"] or 0
 
-        if (hide_manager["gun_refused"][tool] or 0) >= (policed and 10 or 12) then
+        -- Force Fire: a gun is sent every cooldown whether or not the server took the last one, so the back-off after a run of refusals does not apply
+        if flags["auto_fire_force_fire"] ~= true and (hide_manager["gun_refused"][tool] or 0) >= (policed and 10 or 12) then
             local tried_at = hide_manager["gun_fired_at"][tool]
 
             if tried_at and clock() - tried_at < (policed and 15 or 1.2) then
@@ -28278,8 +28303,8 @@ end
 
             local elapsed = clock() - sent_at
 
-            -- the server took the last one (the ammo moved): a whole cooldown. Otherwise one round trip, then ask again.
-            if hide_manager["gun_ammo_sent"][tool] ~= ammo then
+            -- the server took the last one (the ammo moved): a whole cooldown. Otherwise one round trip, then ask again. (Force Fire: always a cooldown.)
+            if hide_manager["gun_ammo_sent"][tool] ~= ammo or flags["auto_fire_force_fire"] == true then
                 return elapsed >= wait_time + 0.0095
             end
 
@@ -30080,9 +30105,225 @@ end
     -- body's LookVector (each times the walk speed) are what the velocity resolvers of other Da Hood cheats use against targets that fake their velocity.
     hide_manager["velocity_source"] = type(flags["velocity_source"]) == "table" and flags["velocity_source"][1] or "delta"
 
+    -- Estimator (the movement estimator of Entry, a recency weighted straight line fit through the last few positions, with a confidence): it knows when
+    -- the target is standing still (jitter in the replicated position is not movement), throws the history away at a reversal or a jump (a void hop) and
+    -- says how consistent the last positions are. Measured on made-up paths (0.15 s ahead, 23 samples a second, mean error in studs, delta -> this):
+    -- standing 0.40 -> 0.08, straight run 0.40 -> 0.13, stop and go 0.72 -> 0.70, zig-zag 0.93 -> 0.78, fast run with turns 1.35 -> 1.19, but a circle
+    -- 0.58 -> 0.93. So it is used as a hybrid: standing still gives no lead, a consistent fit gives its velocity, anything else falls back to the delta.
+    do
+        local function finite(n)
+            return type(n) == "number" and n == n and math["abs"](n) < math["huge"]
+        end
+
+        local function is_vector(p)
+            return typeof(p) == "Vector3" and finite(p["X"]) and finite(p["Y"]) and finite(p["Z"])
+        end
+
+        hide_manager["new_estimator"] = function()
+            local config = {["memory"] = 0.4, ["decay"] = 0.12, ["turnHold"] = 0.1, ["stale"] = 0.15, ["turnAngle"] = math["deg"](math["acos"](0.25))}
+            local samples, cursor, count = table["create"](24), 0, 0
+            local velocity, confidence, reason = vector3_zero, 0, "warming"
+            local last, segment, hold_until = nil, nil, 0
+            local self = {}
+
+            local function clear()
+                table["clear"](samples)
+                cursor, count = 0, 0
+                velocity, confidence, reason = vector3_zero, 0, "warming"
+                last, segment, hold_until = nil, nil, 0
+            end
+
+            self["reset"] = clear
+
+            function self:push(position, now, window)
+                if not is_vector(position) or not finite(now) then
+                    return false
+                end
+
+                window = finite(window) and math["clamp"](math["floor"](window), 3, 24) or 8
+
+                local dt = last and now - last["time"]
+
+                -- positions come in at most 30 times a second, and never twice at one moment
+                if dt and dt < 1/30 then
+                    return false
+                end
+
+                local newest_segment
+
+                if last then
+                    local delta = position - last["position"]
+
+                    if dt > 0.35 then
+                        clear()
+                        reason, hold_until = "gap", now + config["turnHold"]
+                    elseif delta["Magnitude"] > math["max"](24, 600 * dt) then
+                        clear()
+                        reason, hold_until = "discontinuity", now + config["turnHold"]
+                    else
+                        newest_segment = delta / dt
+
+                        if segment and segment["Magnitude"] > 1 and newest_segment["Magnitude"] > 1 and segment["Unit"]:Dot(newest_segment["Unit"]) < math["cos"](math["rad"](config["turnAngle"])) then
+                            -- the old direction is dropped at a turn instead of being blended across it
+                            local previous = last
+
+                            clear()
+                            reason, hold_until = "reversal", now + config["turnHold"]
+                            cursor, count = 1, 1
+                            samples[1] = previous
+                        end
+                    end
+                end
+
+                cursor = cursor % 24 + 1
+                count = math["min"](24, count + 1)
+                last = {["position"] = position, ["time"] = now}
+                samples[cursor] = last
+                segment = newest_segment
+
+                if count < 3 then
+                    confidence, velocity = 0, vector3_zero
+
+                    return true
+                end
+
+                -- fitted around the newest position (large coordinates lose precision), recent samples weigh more
+                local weight_sum, time_sum, position_sum, used, span = 0, 0, vector3_zero, 0, 0
+
+                for offset = 0, math["min"](count, window) - 1 do
+                    local sample = samples[(cursor - 1 - offset) % 24 + 1]
+                    local age = now - sample["time"]
+
+                    if age <= config["memory"] then
+                        local weight = math["exp"](-age / config["decay"])
+
+                        weight_sum += weight
+                        time_sum += weight * (sample["time"] - now)
+                        position_sum += (sample["position"] - position) * weight
+                        used += 1
+                        span = math["max"](span, age)
+                    end
+                end
+
+                if used < 3 then
+                    confidence, velocity, reason = 0, vector3_zero, "warming"
+
+                    return true
+                end
+
+                local mean_time, mean_position = time_sum / weight_sum, position_sum / weight_sum
+                local denominator, numerator = 0, vector3_zero
+
+                for offset = 0, math["min"](count, window) - 1 do
+                    local sample = samples[(cursor - 1 - offset) % 24 + 1]
+                    local age = now - sample["time"]
+
+                    if age <= config["memory"] then
+                        local weight = math["exp"](-age / config["decay"])
+                        local t = sample["time"] - now - mean_time
+
+                        denominator += weight * t * t
+                        numerator += (sample["position"] - position - mean_position) * (weight * t)
+                    end
+                end
+
+                velocity = denominator > 1e-8 and numerator / denominator or vector3_zero
+
+                -- jitter in the replicated position is not movement
+                local oldest = samples[(cursor - 1 - math["min"](count - 1, 4)) % 24 + 1]
+
+                if oldest and now - oldest["time"] >= 0.10 then
+                    local stable = true
+
+                    for offset = 0, math["min"](count - 1, 4) do
+                        if (samples[(cursor - 1 - offset) % 24 + 1]["position"] - position)["Magnitude"] > 0.28 then
+                            stable = false
+
+                            break
+                        end
+                    end
+
+                    if stable then
+                        velocity, confidence, reason = vector3_zero, 1, "stationary"
+
+                        return true
+                    end
+                end
+
+                if newest_segment and newest_segment["Magnitude"] < 0.5 then
+                    velocity, confidence, reason = vector3_zero, 1, "stationary"
+
+                    return true
+                end
+
+                local squared_error = 0
+
+                for offset = 0, math["min"](count, window) - 1 do
+                    local sample = samples[(cursor - 1 - offset) % 24 + 1]
+                    local age = now - sample["time"]
+
+                    if age <= config["memory"] then
+                        local residual = sample["position"] - position - mean_position - velocity * (sample["time"] - now - mean_time)
+
+                        squared_error += math["exp"](-age / config["decay"]) * residual:Dot(residual)
+                    end
+                end
+
+                local rms = math["sqrt"](squared_error / weight_sum)
+                local travel = velocity["Magnitude"] * span
+                local alignment = 1
+
+                if newest_segment and newest_segment["Magnitude"] > 1 and velocity["Magnitude"] > 1 then
+                    alignment = math["clamp"](newest_segment["Unit"]:Dot(velocity["Unit"]), 0, 1)
+                end
+
+                confidence = math["clamp"](1 - rms / math["max"](0.1, travel * 0.4), 0, 1) * alignment * math["min"](1, (used - 2) / 3)
+
+                if now < hold_until then
+                    confidence, reason = 0, "turn hold"
+                else
+                    reason = confidence > 0.6 and "consistent" or "inconsistent"
+                end
+
+                return true
+            end
+
+            function self:status()
+                return {["confidence"] = confidence, ["velocity"] = velocity, ["reason"] = reason}
+            end
+
+            return self
+        end
+
+        hide_manager["estimator"] = hide_manager["new_estimator"]()
+    end
+
     hide_manager["source_velocity"] = function(source, target, torso)
         if source == "none" then
             return vector3_zero
+        end
+
+        if source == "estimator" then
+            local estimator = hide_manager["estimator"]
+
+            -- a new target starts a new history
+            if hide_manager["estimator_part"] ~= torso then
+                estimator:reset()
+                hide_manager["estimator_part"] = torso
+            end
+
+            estimator:push(torso["Position"], clock(), 8)
+
+            local status = estimator:status()
+
+            if status["reason"] == "stationary" then
+                return vector3_zero
+            elseif status["reason"] == "consistent" then
+                return status["velocity"]
+            end
+
+            -- not sure enough: the plain delta read stands
+            return nil
         end
 
         local humanoid = find_first_child(target[3], "Humanoid")
@@ -30164,7 +30405,8 @@ end
 
         if target and hrp then
             local parts = target[4]
-            local hitbox = parts[ragebot_hitbox]
+            -- Force Hit: the head takes the shot whatever the Target Hitbox says
+            local hitbox = parts[flags["auto_fire_force_hit"] == true and parts["Head"] and "Head" or ragebot_hitbox]
 
             if flags["auto_fire_at_target_vehicle"] then
                 hitbox = target[19] or hitbox
@@ -30298,6 +30540,13 @@ end
                 -- server, as in the spam cycle above, so it is held until the character is back instead of being sent from the void.
                 if aim_valid and invulnerable_void_active and in_void == true then
                     aim_valid = false
+                end
+
+                -- Trigger Bot: the shot only goes while the aim point is within Trigger Radius pixels of the cursor
+                if aim_valid and flags["auto_fire_trigger_bot"] == true then
+                    local screen, on_screen = world_to_viewport_point(camera, ragebot_aim_position)
+
+                    aim_valid = on_screen and (vector2_new(screen["X"], screen["Y"]) - mouse_position)["Magnitude"] <= (tonumber(flags["auto_fire_trigger_radius"]) or 150)
                 end
 
                 if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= local_gun) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
@@ -30443,7 +30692,8 @@ end
                         -- the body; BASED Hub measured both; it used to be a quarter more than the range). Walls: the server looks at the line from the
                         -- shot's origin to the claimed hit; a shot with no clear line to the target and no open point near it to claim the hit at is only turned
                         -- away, so it is not sent either (hide_manager.walls_aim, worked out from the origin the rebuilt shot gets).
-                        if chosen_gun and rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] then
+                        -- (Force Hit skips both checks: the shot is sent at the head however far it is and whatever stands in the way)
+                        if chosen_gun and rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and flags["auto_fire_force_hit"] ~= true then
                             local reach = chosen_gun[2] or 250
 
                             if (origin - pos)["Magnitude"] > reach + 17 then
@@ -32509,6 +32759,63 @@ end
                 anti_stomp_connection2 = create_connection(signals["on_local_character_added"], teleport_back)
             end
         end)
+    end
+
+    -- >> ( anti afk )
+
+    do
+        local virtual_user = cloneref(game:GetService("VirtualUser"))
+        local idle_connection = nil
+        local pulse_token = nil
+
+        -- the way a player touching the mouse would answer the idle kick
+        local answer_idle = LPH_NO_VIRTUALIZE(function()
+            pcall(function()
+                virtual_user:CaptureController()
+                virtual_user:ClickButton2(Vector2.new())
+            end)
+        end)
+
+        local set_anti_afk = function(value)
+            if idle_connection then
+                idle_connection:Disconnect()
+                idle_connection = nil
+            end
+
+            pulse_token = nil
+
+            if value == true then
+                local token = {}
+
+                pulse_token = token
+                idle_connection = create_connection(local_player["Idled"], answer_idle)
+
+                spawn(function()
+                    while pulse_token == token do
+                        wait(240)
+
+                        if pulse_token == token then
+                            answer_idle()
+                        end
+                    end
+                end)
+            end
+        end
+
+        create_connection(menu_references["anti_afk"]["on_toggle_change"], set_anti_afk)
+
+        if flags["anti_afk"] == true then
+            set_anti_afk(true)
+        end
+
+        -- an unload (or a reload) stops the four minute loop
+        local teardowns = getgenv()["neverlose_teardowns"]
+
+        if teardowns then
+            teardowns[#teardowns+1] = function()
+                set_anti_afk(false)
+            end
+        end
     end
 
     -- >> ( anti taser )
