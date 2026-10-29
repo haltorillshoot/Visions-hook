@@ -15063,16 +15063,17 @@ do
                         -- that has a clear line (hide_manager.walls_aim, 4 to 16 studs, within the gun's Range). With no such point the shot goes as it is,
                         -- except a shotgun's: every refused shotgun call counts against its SecurityTolerance, and past it the gun is locked for the server.
                         -- (No method calls in here: one before old_namecall replaces the namecall method and the shot is never sent.)
-                        local walls_aim = hide_manager["walls_aim"]
+                        -- Over the wall (hide_manager.walls_route): the shot may also start from a point above or beside the body that clears the wall.
+                        local walls_route = hide_manager["walls_route"]
 
-                        if walls_aim then
+                        if walls_route then
                             local walls_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
                             local walls_range = walls_tool and find_first_child(walls_tool, "Range")
-                            local walls_ok, claimed = pcall(walls_aim, origin, pos, walls_range and walls_range["Value"] or nil)
+                            local walls_ok, routed_origin, claimed = pcall(walls_route, origin, pos, walls_range and walls_range["Value"] or nil)
 
                             if walls_ok then
                                 if claimed then
-                                    pos = claimed
+                                    origin, pos = routed_origin, claimed
                                 elseif walls_tool and string.find(walls_tool["Name"], "Shotgun") or (walls_tool and walls_tool["Name"] == "[Double-Barrel SG]") then
                                     return
                                 end
@@ -29922,7 +29923,7 @@ end
             end
 
             local filter = {}
-            local target = ragebot_target
+            local target = hide_manager["walls_target"] or ragebot_target
             local extras = {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")}
 
             for _, instance in extras do
@@ -29985,7 +29986,7 @@ end
 
         hide_manager["walls_inside"] = LPH_NO_VIRTUALIZE(function(point)
             local filter = {}
-            local target = ragebot_target
+            local target = hide_manager["walls_target"] or ragebot_target
 
             for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")} do
                 filter[#filter+1] = instance
@@ -30005,7 +30006,7 @@ end
             end
 
             local filter = {}
-            local target = ragebot_target
+            local target = hide_manager["walls_target"] or ragebot_target
 
             for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")} do
                 filter[#filter+1] = instance
@@ -30014,6 +30015,69 @@ end
             wall_params["FilterDescendantsInstances"] = filter
 
             return wall_raycast(workspace, origin, offset, wall_params) == nil
+        end)
+
+        -- Over the wall: the server takes a shot from anywhere within about 17 studs of where it has the body (BASED Hub's figure) as long as the line
+        -- from there to the claimed hit is clear. So a shot that is blocked from the body is sent from a point above it or beside it (at most 12 studs
+        -- past the usual origin, which is 3 over the body: 15 from it) that clears the wall, with its claim moved to an open point by the target if it
+        -- has to be (walls_aim). Returns the origin and the claim, or nothing when no such pair was found. One answer serves every shot (and every
+        -- pellet) of the next tenth of a second while neither end has moved two studs. Nothing truly goes through a wall: the server casts its own ray.
+        local ROUTE_LIFTS = {
+            vector3_new(0, 5, 0), vector3_new(0, 9, 0), vector3_new(0, 12, 0),
+            vector3_new(7, 8, 0), vector3_new(-7, 8, 0), vector3_new(0, 8, 7), vector3_new(0, 8, -7),
+        }
+        local route_cache = {["at"] = -1}
+
+        hide_manager["walls_route"] = LPH_NO_VIRTUALIZE(function(origin, position, range)
+            local now = clock()
+            local cache = route_cache
+
+            if now - cache["at"] < 0.1 and cache["origin"] and (cache["origin"] - origin)["Magnitude"] < 2 and (cache["position"] - position)["Magnitude"] < 2 and cache["range"] == range then
+                return cache["out_origin"], cache["out_claim"]
+            end
+
+            local out_origin, out_claim = nil, nil
+            local clear = hide_manager["walls_clear"]
+            local aim = hide_manager["walls_aim"]
+
+            if clear(origin, position) then
+                out_origin, out_claim = origin, position
+            else
+                -- first a point the head itself can be seen from, then an open point by the target from the body, then from the lifted points
+                for _, lift in ROUTE_LIFTS do
+                    local from = origin + lift
+
+                    if (not range or (position - from)["Magnitude"] <= range) and clear(from, position) then
+                        out_origin, out_claim = from, position
+                        break
+                    end
+                end
+
+                if not out_claim then
+                    local claimed = aim(origin, position, range)
+
+                    if claimed then
+                        out_origin, out_claim = origin, claimed
+                    end
+                end
+
+                if not out_claim then
+                    for index = 1, 3 do
+                        local from = origin + ROUTE_LIFTS[index]
+                        local claimed = aim(from, position, range)
+
+                        if claimed then
+                            out_origin, out_claim = from, claimed
+                            break
+                        end
+                    end
+                end
+            end
+
+            cache["at"], cache["origin"], cache["position"], cache["range"] = now, origin, position, range
+            cache["out_origin"], cache["out_claim"] = out_origin, out_claim
+
+            return out_origin, out_claim
         end)
     end
 
@@ -32140,6 +32204,48 @@ end
     end
 
     -- >> ( target strafe )
+
+    -- >> ( no shoot animations )
+
+    -- While the ragebot has a target the gun's shooting animations are not played (the AimShoot and Shoot tracks the gun scripts start for every shot
+    -- they fire: a click, or a Bullet Manipulation pull; the ragebot's own sends play none). They are stopped the moment they start, so the other players
+    -- do not see them either (the character's animations replicate from this client).
+    do
+        local shoot_ids = {["2809413000"] = true, ["2809419094"] = true, ["2877910736"] = true}
+
+        local is_shoot_track = function(track)
+            local animation = track and track["Animation"]
+            local name = string.lower(tostring(track["Name"]) .. " " .. tostring(animation and animation["Name"]))
+            local id = animation and string.match(tostring(animation["AnimationId"]), "(%d+)$")
+
+            return string.find(name, "shoot") ~= nil or (id ~= nil and shoot_ids[id] == true)
+        end
+
+        local animator_connection = nil
+
+        local watch_character = function(character)
+            if animator_connection then
+                animator_connection:Disconnect()
+                animator_connection = nil
+            end
+
+            local humanoid = character and character:WaitForChild("Humanoid", 10)
+            local animator = humanoid and humanoid:WaitForChild("Animator", 10)
+
+            if animator then
+                animator_connection = create_connection(animator["AnimationPlayed"], function(track)
+                    if flags["ragebot"] and ragebot_target ~= nil and is_shoot_track(track) then
+                        pcall(function()
+                            track:Stop(0)
+                        end)
+                    end
+                end)
+            end
+        end
+
+        create_connection(local_player["CharacterAdded"], watch_character)
+        spawn(watch_character, local_player["Character"])
+    end
 
     -- >> ( a/d )
 
@@ -36541,7 +36647,6 @@ local get_silent_aim_position = nil
     -- clear line from that origin; otherwise it is left alone. Force Hit (silent aim's gear), like the ragebot's: the hit is claimed on the head,
     -- with no range or line check. Called from the remote hook, so nothing in here may be a method call (a:B()): it would replace the namecall
     -- method and the shot would never be sent.
-    local is_descendant_of = game["IsDescendantOf"]
     local is_a = game["IsA"]
 
     hide_manager["legit_rebuild"] = LPH_NO_VIRTUALIZE(function(args)
@@ -36602,28 +36707,27 @@ local get_silent_aim_position = nil
             return nil
         end
 
-        if not force then
-            local tool = handle["Parent"]
-            local range = tool and find_first_child(tool, "Range")
+        local tool = handle["Parent"]
+        local range = tool and find_first_child(tool, "Range")
 
-            if range and distance > range["Value"] then
+        if not force and range and distance > range["Value"] then
+            return nil
+        end
+
+        -- Over the wall (hide_manager.walls_route, the ragebot's): a line the wall blocks is sent from a point above or beside the body that clears it,
+        -- with its claim moved to an open point by the target when it has to be. Hit Checker: a shot with no such way at all is left alone (and the gate
+        -- drops it); Force Hit sends it anyway.
+        local walls_route = hide_manager["walls_route"]
+
+        if walls_route then
+            hide_manager["walls_target"] = data
+            local route_ok, routed_origin, claimed = pcall(walls_route, origin, position, range and range["Value"] or nil)
+            hide_manager["walls_target"] = nil
+
+            if route_ok and claimed then
+                origin, position = routed_origin, claimed
+            elseif not force and flags["silent_aim_hit_checker"] then
                 return nil
-            end
-
-            if flags["silent_aim_hit_checker"] then
-                local filter = {}
-
-                for _, instance in {local_character, ignored, bush, vehicles} do
-                    filter[#filter+1] = instance
-                end
-
-                hit_params["FilterDescendantsInstances"] = filter
-
-                local result = raycast(workspace, origin, offset["Unit"] * (distance + 4), hit_params)
-
-                if not (result and is_descendant_of(result["Instance"], character)) then
-                    return nil
-                end
             end
         end
 
