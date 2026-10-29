@@ -4419,12 +4419,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
-	["auto_fire_all_guns"] = {"auto_fire_all_guns", "auto_fire_all_guns"},
 	["auto_fire_gun_gap"] = {"auto_fire_gun_gap", "auto_fire_gun_gap"},
-	["auto_fire_force_hit"] = {"auto_fire_force_hit", "auto_fire_force_hit"},
-	["auto_fire_force_fire"] = {"auto_fire_force_fire", "auto_fire_force_fire"},
-	["auto_fire_trigger_bot"] = {"auto_fire_trigger_bot", "auto_fire_trigger_bot"},
-	["auto_fire_trigger_radius"] = {"auto_fire_trigger_radius", "auto_fire_trigger_radius"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
@@ -8281,19 +8276,13 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Fast Retry", "auto_fire_fast_retry", false)
 	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
-	panelToggle(autoFire, "Fire All Guns", "auto_fire_all_guns", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
 	panelSlider(autoFire, "Gun Gap", "auto_fire_gun_gap", 0, 300, 0, "ms", 140, { [0] = "at once" })
-	-- The three Semi Rage shooting aids, for the ragebot's own auto fire (they stay in the Semi Rage tab too)
-	panelToggle(autoFire, "Force Hit", "auto_fire_force_hit", false)
-	panelToggle(autoFire, "Force Fire", "auto_fire_force_fire", false)
-	panelToggle(autoFire, "Trigger Bot", "auto_fire_trigger_bot", false)
-	panelSlider(autoFire, "Trigger Radius", "auto_fire_trigger_radius", 10, 750, 0, "px", 150)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
-	panelList(equip, "Gun", "auto_equip_gun", { "double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug" }, { "rifle", "double-barrel sg" })
+	panelList(equip, "Guns", "auto_equip_gun", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "rifle", "double-barrel sg" })
 	panelToggle(equip, "Prioritize DB", "auto_equip_prioritize_db", false)
 
 	-- Prediction --
@@ -14912,8 +14901,8 @@ do
 
                         -- Walls: the server looks at the line from this origin to this hit position, so a hit claimed behind a wall is moved to the nearest
                         -- open point beside the target's part (hide_manager.walls_aim), and a shot with no way to a clear line is not sent at all.
-                        -- (Force Hit sends the shot at the head whatever the walls say)
-                        local walls_aim = hide_manager["bm_active"] and flags["auto_fire_force_hit"] ~= true and hide_manager["walls_aim"] or nil
+                        -- Force Hit (always on): the shot goes at the head whatever the walls say, so the claim is not moved
+                        local walls_aim = nil
 
                         if walls_aim then
                             local walls_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
@@ -14931,7 +14920,7 @@ do
                 
                         local dir = (origin-pos)["Unit"]
                         local Magnitude = dir["Magnitude"]
-                        local part = ragebot_target[4][(flags["auto_fire_force_hit"] == true or flags["ragebot_hitbox"][1] == "head") and "Head" or "UpperTorso"]
+                        local part = ragebot_target[4]["Head"] or ragebot_target[4][flags["ragebot_hitbox"][1] == "head" and "Head" or "UpperTorso"]
                         
                         spawn(get_bullet_result, ragebot_target[2], part)
 
@@ -27804,16 +27793,11 @@ end
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
         menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
-        menu_references["auto_fire_all_guns"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fire all guns"}, {["toggle"] = {["flag"] = "auto_fire_all_guns", ["default"] = true}})
-        menu_references["auto_fire_force_hit"] = menu_references["auto_fire_settings"]:create_element({["name"] = "force hit"}, {["toggle"] = {["flag"] = "auto_fire_force_hit", ["default"] = false}})
-        menu_references["auto_fire_force_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "force fire"}, {["toggle"] = {["flag"] = "auto_fire_force_fire", ["default"] = false}})
-        menu_references["auto_fire_trigger_bot"] = menu_references["auto_fire_settings"]:create_element({["name"] = "trigger bot"}, {["toggle"] = {["flag"] = "auto_fire_trigger_bot", ["default"] = false}})
-        menu_references["auto_fire_trigger_radius"] = menu_references["auto_fire_settings"]:create_element({["name"] = "trigger radius"}, {["slider"] = {["flag"] = "auto_fire_trigger_radius", ["min"] = 10, ["max"] = 750, ["suffix"] = "px", ["default"] = 150, ["decimals"] = 0}})
         menu_references["auto_fire_gun_gap"] = menu_references["auto_fire_settings"]:create_element({["name"] = "gun gap"}, {["slider"] = {["flag"] = "auto_fire_gun_gap", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 140, ["min_text"] = "at once", ["decimals"] = 0}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
-        menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle", "double-barrel sg"}, ["options"] = {"double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug"}, ["requires_one"] = true, ["multi"] = true}})
+        menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle", "double-barrel sg"}, ["options"] = {"double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["auto_equip_prioritize_db"] = menu_references["auto_equip_settings"]:create_element({["name"] = "prioritize db"}, {["toggle"] = {["flag"] = "auto_equip_prioritize_db", ["default"] = false}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
@@ -28180,14 +28164,7 @@ end
         local cooldown = find_first_child(tool, "ShootingCooldown")
         local wait_time = cooldown and cooldown["Value"] or 0
 
-        -- Force Fire: a gun is sent every cooldown whether or not the server took the last one, so the back-off after a run of refusals does not apply
-        if flags["auto_fire_force_fire"] ~= true and (hide_manager["gun_refused"][tool] or 0) >= (policed and 10 or 12) then
-            local tried_at = hide_manager["gun_fired_at"][tool]
-
-            if tried_at and clock() - tried_at < (policed and 15 or 1.2) then
-                return false
-            end
-        end
+        -- Force Fire (always on): a gun is sent every cooldown whether or not the server took the last one, so there is no back-off after refusals.
 
         if not policed then
             if not hide_manager["pace_slow_guns"] or wait_time < 0.25 then
@@ -28203,7 +28180,7 @@ end
             local elapsed = clock() - sent_at
 
             -- the server took the last one (the ammo moved): a whole cooldown. Otherwise one round trip, then ask again. (Force Fire: always a cooldown.)
-            if hide_manager["gun_ammo_sent"][tool] ~= ammo or flags["auto_fire_force_fire"] == true then
+            if true then
                 return elapsed >= wait_time + 0.0095
             end
 
@@ -28646,6 +28623,17 @@ end
     -- Refresh Time is how often the resolver picks a new spot (from the sightings of the last Refresh Time): the answer is held in between, so the
     -- aim does not follow the target, it flicks to the next spot. Until there is a first answer it is tried 12 times a second. Once the target is
     -- within the radius of the held spot the aim goes straight onto the target (see the ragebot step).
+    -- The position step a 32-bit float has at a target deep in the void (nil while it is on or near the map: under 900,000 studs out).
+    hide_manager["void_step"] = function(position)
+        local far = math["max"](math["abs"](position["X"]), math["abs"](position["Y"]), math["abs"](position["Z"]))
+
+        if far ~= far or far < 9e5 then
+            return nil
+        end
+
+        return 2 ^ (math["floor"](math["log"](far, 2)) - 23)
+    end
+
     local ue_resolve = LPH_NO_VIRTUALIZE(function(position, now)
         local refresh_time = flags["ue_resolver_refresh"] or 1
         -- only the sightings of the last Refresh Time count (a quarter of a second at the least, so there is something to cluster)
@@ -28659,8 +28647,14 @@ end
         end
 
         local root = local_parts["HumanoidRootPart"]
+        local void_step = hide_manager["void_step"](position)
 
-        if root then
+        if void_step then
+            -- Deep in the void the distance penalty took the radius down to 1 stud (the target is millions of studs from this body), and a
+            -- position out there is only kept to a few studs (32-bit floats: 8 studs at 1e8, 64 at 1e9), so no cluster ever formed. Out there
+            -- the radius is the setting, and never less than four of those steps.
+            forgiveness = math["max"](forgiveness, void_step * 4)
+        elseif root then
             local distance = (position - root["Position"])["Magnitude"]
             forgiveness = clamp(forgiveness - (distance/100) * (flags["ue_resolver_dist_penalty"] or 2), 1, 100)
         end
@@ -28769,12 +28763,15 @@ end
         local positions = hide_manager["weighted_positions"]
         local dist_to_target = (local_server_position["p"] - hitbox_position)["Magnitude"]
         local penalty = tonumber(flags["ue_resolver_dist_penalty"]) or 2
-        local dist_penalty_factor = clamp(1 - (dist_to_target / 100) * (penalty * 0.01), 0.25, 1)
+        local void_step = hide_manager["void_step"](hitbox_position)
+        -- Deep in the void the distance penalty cut every sighting to a quarter (0.05 a frame against a fade of 4 a second, so no spot ever passed
+        -- Accuracy): out there it does not apply, and spots merge within the float step of those coordinates.
+        local dist_penalty_factor = void_step and 1 or clamp(1 - (dist_to_target / 100) * (penalty * 0.01), 0.25, 1)
         local lerp = clamp(tonumber(flags["ue_resolver_lerp"]) or 10, 10, 100)/100
         local target_speed = target_velocity and target_velocity["Magnitude"] or 0
         -- A target that hardly moves gets three times the share, up to 60% (the cap may not fall below the share itself).
         local adaptive_lerp = lerp >= 1 and 1 or (target_speed < 5 and clamp(lerp * 3, lerp, math["max"](lerp, 0.6)) or lerp)
-        local merge_radius = clamp(200 - dist_to_target * 0.4, 80, 200)
+        local merge_radius = void_step and math["max"](200, void_step * 4) or clamp(200 - dist_to_target * 0.4, 80, 200)
         local target_in_void = hitbox_position["Magnitude"] >= 9e5
         local forget = (tonumber(flags["void_spam_resolver_forget_rate"]) or 80)/20
         local accuracy = 1 + (0.6525 * ((-50 + (tonumber(flags["void_spam_resolver_accuracy"]) or 76.82))/50))
@@ -30304,8 +30301,8 @@ end
 
         if target and hrp then
             local parts = target[4]
-            -- Force Hit: the head takes the shot whatever the Target Hitbox says
-            local hitbox = parts[flags["auto_fire_force_hit"] == true and parts["Head"] and "Head" or ragebot_hitbox]
+            -- Force Hit (always on): the head takes the shot whatever the Target Hitbox says
+            local hitbox = parts["Head"] or parts[ragebot_hitbox]
 
             if flags["auto_fire_at_target_vehicle"] then
                 hitbox = target[19] or hitbox
@@ -30441,13 +30438,6 @@ end
                     aim_valid = false
                 end
 
-                -- Trigger Bot: the shot only goes while the aim point is within Trigger Radius pixels of the cursor
-                if aim_valid and flags["auto_fire_trigger_bot"] == true then
-                    local screen, on_screen = world_to_viewport_point(camera, ragebot_aim_position)
-
-                    aim_valid = on_screen and (vector2_new(screen["X"], screen["Y"]) - mouse_position)["Magnitude"] <= (tonumber(flags["auto_fire_trigger_radius"]) or 150)
-                end
-
                 if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= local_gun) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
                     local delay = flags["shot_delay"]
                     local stale = false
@@ -30496,7 +30486,7 @@ end
                         -- turns follow each other at the Gun Gap (140 ms, the smallest gap that was taken every time; 0 sends them in consecutive frames, the
                         -- nearest to "at once": the server is said to keep the first and drop the others sent inside a tenth of a second, and a dropped gun is only
                         -- asked again after its own wait, so the gap is there to be tried).
-                        local all_guns = flags["auto_fire_all_guns"] == true
+                        local all_guns = auto_fire_always_fire == true -- Fire All Guns is part of Always Fire
                         local volley_gap = getgenv()["neverlose_gun_gap"] or (all_guns and (tonumber(flags["auto_fire_gun_gap"]) or 140)/1000 or 0.15)
                         local switch_slow = {["[Deagle]"] = true, ["[Rifle]"] = true, ["[Glock]"] = true, ["[Silencer]"] = true}
                         local gap_between = function(from_name, to_name)
@@ -30591,8 +30581,8 @@ end
                         -- the body; BASED Hub measured both; it used to be a quarter more than the range). Walls: the server looks at the line from the
                         -- shot's origin to the claimed hit; a shot with no clear line to the target and no open point near it to claim the hit at is only turned
                         -- away, so it is not sent either (hide_manager.walls_aim, worked out from the origin the rebuilt shot gets).
-                        -- (Force Hit skips both checks: the shot is sent at the head however far it is and whatever stands in the way)
-                        if chosen_gun and rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and flags["auto_fire_force_hit"] ~= true then
+                        -- Force Hit is always on now, so neither check runs: the shot is sent at the head however far it is and whatever stands in the way.
+                        if false and chosen_gun and rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] then
                             local reach = chosen_gun[2] or 250
 
                             if (origin - pos)["Magnitude"] > reach + 17 then
@@ -34360,26 +34350,33 @@ end
             end
         end)
 
+        -- BASED Hub's guns: every chosen one is held at once (the fists and the wallet are put away first, above)
+        local gun_tools = {
+                ["double-barrel sg"] = "[Double-Barrel SG]",
+                ["shotgun"] = "[Shotgun]",
+                ["tacticalshotgun"] = "[TacticalShotgun]",
+                ["drum-shotgun"] = "[Drum-Shotgun]",
+                ["rifle"] = "[Rifle]",
+                ["flintlock"] = "[Flintlock]",
+                ["aug"] = "[AUG]",
+                ["lmg"] = "[LMG]",
+                ["smg"] = "[SMG]",
+                ["p90"] = "[P90]",
+                ["silencerar"] = "[SilencerAR]",
+                ["ak47"] = "[AK47]",
+                ["ar"] = "[AR]",
+                ["drumgun"] = "[DrumGun]",
+                ["revolver"] = "[Revolver]",
+                ["glock"] = "[Glock]",
+                ["silencer"] = "[Silencer]",
+        }
+
         create_connection(menu_references["auto_equip_gun"]["on_dropdown_change"], function(value)
             auto_equip_guns = {}
             for i = 1, #value do
-                local value = value[i]
-                if value == "revolver" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[Revolver]"
-                elseif value == "rifle" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[Rifle]"
-                elseif value == "lmg" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[LMG]"
-                elseif value == "aug" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[AUG]"
-                elseif value == "ak47" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[AK47]"
-                elseif value == "p90" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[P90]"
-                elseif value == "flintlock" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[Flintlock]"
-                elseif value == "double-barrel sg" then
-                    auto_equip_guns[#auto_equip_guns+1] = "[Double-Barrel SG]"
+                local tool_name = gun_tools[value[i]]
+                if tool_name then
+                    auto_equip_guns[#auto_equip_guns+1] = tool_name
                 end
             end
         end)
