@@ -4427,6 +4427,9 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["remove_recoil"] = {"remove_recoil", "remove_recoil"},
 	["dt"] = {"rapid_fire", "rapid_fire"},
 	["rapid_fire_speed"] = {"rapid_fire_speed", "rapid_fire_speed"},
+	["rapid_fire_glory_patch"] = {"rapid_fire_glory_patch", "rapid_fire_glory_patch"},
+	["rapid_fire_hold"] = {"rapid_fire_hold", "rapid_fire_hold"},
+	["rapid_fire_delay"] = {"rapid_fire_delay", "rapid_fire_delay"},
 	["aa"] = {"fake_position", "fake_position"},
 	["resolver"] = {"auto_fire_defensive", "auto_fire_defensive"},
 	["target_key"] = {"target_selection_target_bind", "target_selection_target_bind"},
@@ -4510,6 +4513,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["follow_target_visualize"] = {"follow_target_visualize", "follow_target_visualize"},
 	["follow_target_visualize_color"] = {"follow_target_visualize_color", "follow_target_visualize_color", "color"},
 	["follow_target_adjust"] = {"follow_target_adjust", "follow_target_adjust"},
+	["follow_target_reposition"] = {"follow_target_reposition", "follow_target_reposition"},
 	["velocity_source"] = {"velocity_source", "velocity_source", "list"},
 	["auto_stomp_stop_when_dead"] = {"auto_stomp_stop_when_dead", "auto_stomp_stop_when_dead"},
 	["auto_stomp_target_statuses"] = {"auto_stomp_target_statuses", "auto_stomp_target_statuses", "list"},
@@ -8189,7 +8193,7 @@ function Session.buildSettingsPanels(rows)
 
 	local follow = rows.followTarget:AddOption()
 	local strafeRows, randomizeRows, skyRows = {}, {}, {}
-	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above" }, "random", function(value)
+	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above", "hold" }, "random", function(value)
 		for _, row in ipairs(strafeRows) do
 			row:SetVisible(isPicked(value, "strafe"))
 		end
@@ -8206,6 +8210,9 @@ function Session.buildSettingsPanels(rows)
 	panelSlider(follow, "Distance", "follow_target_distance", 2, 200, 0, " studs", 15)
 	panelToggle(follow, "Follow Into Void", "follow_target_into_void", true)
 	panelToggle(follow, "Adjust", "follow_target_adjust", false)
+	-- Random, Randomize, Above and Hold keep one place this long before taking a new one (0 = a new place every frame). The server has the body
+	-- about 0.1 s late and takes a shot only from near where it has it, so a place that changes every frame gets many shots refused.
+	panelSlider(follow, "Reposition Every", "follow_target_reposition", 0, 2, 2, "s", 0.15)
 	table.insert(strafeRows, select(2, panelSlider(follow, "Height", "follow_target_height", -200, 200, 0, " studs", 0)))
 	table.insert(strafeRows, select(2, panelSlider(follow, "Speed", "follow_target_speed", 1, 100, 0, "%", 75)))
 	-- Orbit Shape (strafe): the path round the target. Randomize: a random place 'Teleport Min' to 'Teleport Max' studs out. Above: a random height over the target.
@@ -8257,7 +8264,12 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(heal, "Stop Following While Healing", "auto_heal_stop_following", false)
 
 	-- Rapid fire: how much of each gun's own cooldown is taken away (100 = all of it, 0 = none)
-	panelSlider(rows.rapidFire:AddOption(), "Speed", "rapid_fire_speed", 0, 100, 0, "%", 100)
+	local rapidPanel = rows.rapidFire:AddOption()
+	panelSlider(rapidPanel, "Speed", "rapid_fire_speed", 0, 100, 0, "%", 100)
+	-- Semi Rage's rapid fire (Glory v4), here as well (it stays in the Semi Rage tab)
+	panelToggle(rapidPanel, "Glory Patch", "rapid_fire_glory_patch", false)
+	panelToggle(rapidPanel, "Hold To Fire", "rapid_fire_hold", false)
+	panelSlider(rapidPanel, "Fire Delay", "rapid_fire_delay", 0, 1, 2, "s", 0.01)
 
 	-- Full auto: 0 to 100, a share of the gun's own fire rate (100 = as fast as the gun allows, 0 = the slowest)
 	panelSlider(rows.fullAuto:AddOption(), "Speed", "full_auto_speed", 0, 100, 0, "%", 100)
@@ -14907,7 +14919,9 @@ do
                         local handle = args[2]
 
                         local pos = ragebot_aim_position + vector3_new(math_random(101,105)/100,0.008,-0.008)
-                        local origin = local_server_position["p"] + vector3_new(0.004,3.0208,-0.048)
+                        -- claimed from where the server most likely has the body (Origin Lag, getgenv().neverlose_origin_lag, seconds; 0 = where it is now)
+                        local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](getgenv()["neverlose_origin_lag"] or 0.09)
+                        local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
 
                         -- Walls: the server looks at the line from this origin to this hit position, so a hit claimed behind a wall is moved to the nearest
                         -- open point beside the target's part (hide_manager.walls_aim), and a shot with no way to a clear line is not sent at all.
@@ -27923,11 +27937,12 @@ end
         menu_references["auto_loadout_ammo"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "ammo"}, {["slider"] = {["flag"] = "auto_loadout_ammo", ["min"] = 0, ["max"] = 50, ["default"] = 5, ["suffix"] = "x"}})
         menu_references["follow_target"] = menu_references["utility_section"]:create_element({["name"] = "follow target"}, {["toggle"] = {["flag"] = "follow_target"}})
         menu_references["follow_target_settings"] = menu_references["follow_target"]:create_settings()
-        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "hold"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["follow_target_stop_if"] = menu_references["follow_target_settings"]:create_element({["name"] = "stop if"}, {["dropdown"] = {["flag"] = "follow_target_stop_if", ["options"] = {"no gun equipped", "target knocked", "reloading"}, ["default"] = {"no gun equipped", "target knocked", "reloading"}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
         menu_references["follow_target_into_void"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow into void"}, {["toggle"] = {["flag"] = "follow_target_into_void", ["default"] = true}})
         menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
+        menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.15, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["follow_target_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "height"}, {["slider"] = {["flag"] = "follow_target_height", ["min"] = -200, ["max"] = 200, ["default"] = 0, ["suffix"] = " studs"}})
         menu_references["follow_target_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "follow_target_speed", ["min"] = 1, ["max"] = 100, ["default"] = 75, ["suffix"] = "%"}})
         menu_references["follow_target_orbit_shape"] = menu_references["follow_target_settings"]:create_element({["name"] = "orbit shape"}, {["dropdown"] = {["flag"] = "follow_target_orbit_shape", ["options"] = {"circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart"}, ["default"] = {"circle"}, ["multi"] = false, ["requires_one"] = true}})
@@ -27979,6 +27994,9 @@ end
         menu_references["anti_afk"] = menu_references["utility_section"]:create_element({["name"] = "anti afk"}, {["toggle"] = {["flag"] = "anti_afk", ["default"] = true}})
         menu_references["rapid_fire"] = menu_references["utility_section"]:create_element({["name"] = "rapid fire"}, {["toggle"] = {["flag"] = "rapid_fire", ["default"] = false}})
         menu_references["rapid_fire_settings"] = menu_references["rapid_fire"]:create_settings()
+        menu_references["rapid_fire_glory_patch"] = menu_references["rapid_fire_settings"]:create_element({["name"] = "glory patch"}, {["toggle"] = {["flag"] = "rapid_fire_glory_patch", ["default"] = false}})
+        menu_references["rapid_fire_hold"] = menu_references["rapid_fire_settings"]:create_element({["name"] = "hold to fire"}, {["toggle"] = {["flag"] = "rapid_fire_hold", ["default"] = false}})
+        menu_references["rapid_fire_delay"] = menu_references["rapid_fire_settings"]:create_element({["name"] = "fire delay"}, {["slider"] = {["flag"] = "rapid_fire_delay", ["min"] = 0, ["max"] = 1, ["default"] = 0.01, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["rapid_fire_speed"] = menu_references["rapid_fire_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "rapid_fire_speed", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["suffix"] = "%"}})
         --[[
         menu_references["control"] = menu_references["utility_section"]:create_element({["name"] = "control"}, {["toggle"] = {["flag"] = "control", ["default"] = false}})
@@ -28924,8 +28942,7 @@ end
         ["respawning"] = "ragebot target is respawning, void hiding",
         ["loading"] = "ragebot target is still loading, void hiding",
         ["reload"] = "reloading, void hiding",
-        ["healing"] = "healing, void hiding",
-        ["guns"] = "waiting for every gun to be ready, void hiding"
+        ["healing"] = "healing, void hiding"
     }
 
     -- Schedules or removes the void runner depending on whether any reason is left.
@@ -29341,8 +29358,6 @@ end
     local release_all_hide_reasons = LPH_NO_VIRTUALIZE(function()
         release_target_hide_reasons()
         set_hide_reason("reload", false, true)
-        set_hide_reason("guns", false, true)
-        hide_manager["guns_out_since"] = nil
         reset_reloads()
     end)
 
@@ -29420,46 +29435,6 @@ end
                 set_invulnerable_void(false, changed)
             end
         end
-
-        -- Follow waits for the guns: with Follow Target on, the character stays in the void (where it can't be hit) until every gun that has a round
-        -- is ready to shoot (off its cooldown, no reload under way); then it comes out and follows. It stays out until every gun has had its shot
-        -- (none is ready any more) or a second has gone by, and goes back into the void to wait for the next round.
-        local guns_wait = false
-
-        if flags["follow_target"] and target_player and target_player["Parent"] and not target[7] and not target[18] and get_target_phase(target) == nil then
-            local now = clock()
-            local loaded, ready = 0, 0
-
-            for handle, data in local_guns do
-                local tool = handle["Parent"]
-
-                if tool and (data[3] or 0) > 0 then
-                    loaded += 1
-
-                    local cooldown = find_first_child(tool, "ShootingCooldown")
-                    local fired = hide_manager["gun_fired_at"][tool]
-
-                    if not local_reloading and (not fired or now - fired >= (cooldown and cooldown["Value"] or 0) + 0.0095) then
-                        ready += 1
-                    end
-                end
-            end
-
-            if hide_manager["guns_out_since"] then
-                if ready == 0 or now - hide_manager["guns_out_since"] > 1 then
-                    hide_manager["guns_out_since"] = nil
-                    guns_wait = true
-                end
-            elseif loaded > 0 and ready == loaded then
-                hide_manager["guns_out_since"] = now
-            else
-                guns_wait = true
-            end
-        else
-            hide_manager["guns_out_since"] = nil
-        end
-
-        set_hide_reason("guns", guns_wait, true)
 
         reload_step(hrp)
     end)
@@ -31372,10 +31347,54 @@ end
         -- Where the character stands for the Follow Target settings (style, Distance, Height and Speed, Orbit Shape, Teleport Min / Max, Height Min / Max).
         -- The follow step uses it every frame, and so does the Void Hide Spam for the windows it spends out of the void on the target: `window` is that, and
         -- Random Spam then leaves out its jumps into the void (the cycle has the void already). `quiet` keeps Visualize from drawing.
+        -- Reposition Every: the place Random, Randomize and Above last took (as an offset from the target, and its turn), kept until it is that old.
+        -- Hold: one place Distance studs out and above the target with a clear line to it, kept until it is blocked or Reposition Every (at least
+        -- half a second) has gone by.
+        local held = {["style"] = nil, ["offset"] = nil, ["turn"] = nil, ["at"] = -1}
+
+        local hold_place = function(aim)
+            local clear = hide_manager["walls_clear"]
+            local lift = vector3_new(0, 3.0208, 0)
+            local now = clock()
+            local offset = held["style"] == "hold" and held["offset"]
+            local keep = math.max(tonumber(flags["follow_target_reposition"]) or 0.15, 0.5)
+
+            if offset and now - held["at"] < keep and (not clear or clear(aim + offset + lift, aim)) then
+                return offset
+            end
+
+            local fallback
+
+            for _ = 1, 10 do
+                local angle = math_random() * 2 * math["pi"]
+                local up = 0.25 + math_random() * 0.6
+                local flat = math["sqrt"](1 - up * up)
+                local candidate = vector3_new(math["cos"](angle) * flat, up, math["sin"](angle) * flat) * distance
+
+                fallback = fallback or candidate
+
+                if not clear or clear(aim + candidate + lift, aim) then
+                    offset = candidate
+                    break
+                end
+            end
+
+            held["style"], held["offset"], held["turn"], held["at"] = "hold", offset or fallback, nil, now
+
+            return held["offset"]
+        end
+
         hide_manager["follow_cframe"] = function(aim, window, quiet)
             local new_cframe
+            local reposition = tonumber(flags["follow_target_reposition"]) or 0.15
+            local reuse = reposition > 0 and held["style"] == follow_target_style and held["offset"] and clock() - held["at"] < reposition
 
-            if follow_target_style == "random" then
+            if follow_target_style == "hold" then
+                local offset = hold_place(aim)
+                new_cframe = cframe_new(aim + offset, aim)
+            elseif reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above") then
+                new_cframe = cframe_new(aim + held["offset"]) * held["turn"]
+            elseif follow_target_style == "random" then
                 new_cframe = cframe_new(aim + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
                 new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
             elseif follow_target_style == "random spam" then
@@ -31413,6 +31432,11 @@ end
                 new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (aim + height)
             end
 
+            if not reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above") then
+                local position = new_cframe["Position"]
+                held["style"], held["offset"], held["turn"], held["at"] = follow_target_style, position - aim, new_cframe - position, clock()
+            end
+
             if flags["follow_target_adjust"] == true and aim["Magnitude"] < 9e5 then
                 local adjust_ok, adjusted = pcall(hide_manager["follow_adjust"], new_cframe, aim)
 
@@ -31425,7 +31449,7 @@ end
             hide_manager["follow_aim"] = aim
 
             if not quiet and flags["follow_target_visualize"] == true and aim["Magnitude"] < 9e5 then
-                local strafing = follow_target_style ~= "random" and follow_target_style ~= "random spam" and follow_target_style ~= "randomize" and follow_target_style ~= "above"
+                local strafing = follow_target_style == "strafe"
                 local new_position = new_cframe["Position"]
 
                 if strafing then
@@ -31966,8 +31990,73 @@ end
             patched = {}
         end)
 
+        -- Semi Rage's rapid fire (Glory v4), in here as well. Glory Patch zeroes every number the gun's Activated handlers keep (their delays; it is
+        -- not put back until the gun is replaced, on the next respawn). Hold To Fire pulls the trigger of the gun in hand every Fire Delay seconds for
+        -- as long as the left mouse button is held.
+        local glory_patched = setmetatable({}, {["__mode"] = "k"})
+
+        local glory_patch = function(tool)
+            if not tool or flags["rapid_fire_glory_patch"] ~= true or glory_patched[tool] then
+                return
+            end
+
+            glory_patched[tool] = true
+
+            pcall(function()
+                for _, activated in getconnections(tool["Activated"]) do
+                    local func = activated["Function"]
+
+                    if func then
+                        for i, value in getupvalues(func) do
+                            if type(value) == "number" then
+                                setupvalue(func, i, 0)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+
+        local last_hold_fire = 0
+
+        local hold_to_fire = LPH_NO_VIRTUALIZE(function()
+            if flags["rapid_fire"] ~= true or flags["rapid_fire_hold"] ~= true or not user_input_service:IsMouseButtonPressed(Enum["UserInputType"]["MouseButton1"]) then
+                return
+            end
+
+            if getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]() then
+                return
+            end
+
+            local now = clock()
+
+            if now - last_hold_fire < (tonumber(flags["rapid_fire_delay"]) or 0.01) then
+                return
+            end
+
+            local tool = local_character and find_first_child_of_class(local_character, "Tool")
+
+            if tool and find_first_child(tool, "Ammo") then
+                last_hold_fire = now
+                glory_patch(tool)
+                pcall(tool["Activate"], tool)
+            end
+        end)
+
+        local on_tool = function(tool)
+            on_tool_added(tool)
+            glory_patch(tool)
+        end
+
         create_connection(menu_references["rapid_fire"]["on_toggle_change"], function(value)
             restore()
+
+            for i = 1, #heartbeat do
+                if heartbeat[i] == hold_to_fire then
+                    remove(heartbeat, i)
+                    break
+                end
+            end
 
             if connection then
                 connection:Disconnect()
@@ -31984,12 +32073,13 @@ end
                     local tool = handle["Parent"]
 
                     if tool then
-                        on_tool_added(tool)
+                        on_tool(tool)
                     end
                 end
 
                 connection2 = create_connection(signals["on_local_character_added"], reset)
-                connection = create_connection(signals["on_local_tool_equipped"], on_tool_added)
+                connection = create_connection(signals["on_local_tool_equipped"], on_tool)
+                heartbeat[#heartbeat+1] = hold_to_fire
             end
         end)
 
@@ -36461,8 +36551,44 @@ do
     local last_ping_check = clock()
     local ping_data = {}
 
+    -- Where the body has been, one point a frame for the last half second. The server has the body a little late (0.06 to 0.12 s, measured by
+    -- BASED Hub) and takes a shot only from within 17 studs of where it has it: with a follow style that moves the body every frame, a shot
+    -- claimed from where the body is now is often refused. hide_manager.lagged_position(lag) is where the body was `lag` seconds ago.
+    hide_manager["trail_times"] = {}
+    hide_manager["trail_points"] = {}
+
+    hide_manager["lagged_position"] = function(lag)
+        local times, points = hide_manager["trail_times"], hide_manager["trail_points"]
+        local count = #times
+
+        if count == 0 or not lag or lag <= 0 then
+            return nil
+        end
+
+        local wanted = clock() - lag
+
+        for i = count, 1, -1 do
+            if times[i] <= wanted then
+                return points[i]
+            end
+        end
+
+        return points[1]
+    end
+
     local update_server_position = LPH_NO_VIRTUALIZE(function(hrp)
         local_server_position = hrp["CFrame"]
+
+        local times, points = hide_manager["trail_times"], hide_manager["trail_points"]
+        local now = clock()
+
+        times[#times+1] = now
+        points[#points+1] = local_server_position["p"]
+
+        while times[1] and now - times[1] > 0.5 do
+            remove(times, 1)
+            remove(points, 1)
+        end
     end)
 
     local last_fps = clock()
