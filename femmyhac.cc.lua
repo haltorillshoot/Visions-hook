@@ -15886,7 +15886,8 @@ do
         local void_hiding = api and api["is_in_void"] and api["is_in_void"]()
         local rescued_at = getgenv()["neverlose_rescued_at"]
 
-        if not hrp or hrp ~= pushback_part or void_hiding or (rescued_at and now - rescued_at < PUSHBACK_SETTLE) then
+        -- (Follow Target has the body at the target for the physics step, so what is read here is that place, not the real body: it is no push)
+        if not hrp or hrp ~= pushback_part or void_hiding or local_following or (rescued_at and now - rescued_at < PUSHBACK_SETTLE) then
             pushback_part = hrp
             pushback_position = nil
             pushback_settled_at = now + PUSHBACK_SETTLE
@@ -16081,6 +16082,8 @@ do
 
         local velocity = direction["Magnitude"] > 0 and direction["Unit"] * math.max(16, multiplier * pushback_scale) or vector3_zero
 
+        -- Follow Target moves the real body by this while it has the body at the target for the physics step
+        hide_manager["flight_velocity"] = velocity
         hrp["AssemblyLinearVelocity"] = velocity + vector3_new(0, workspace["Gravity"] * dt * 0.5, 0)
     end)
 
@@ -31935,6 +31938,15 @@ end
             return new_cframe
         end
 
+        -- rays for the follow's move carry-over: the character itself and the game's Ignored folder are not walls
+        local move_params = RaycastParams["new"]()
+        move_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+
+        local follow_move_params = function(character)
+            move_params["FilterDescendantsInstances"] = {character, ignored}
+            return move_params
+        end
+
         local follow_target = LPH_JIT_MAX(function(dt, hrp, bypass)
             -- whatever Visualize drew stays only while the character is being sent to the target
             if follow_visual["drawn"] and clock() - follow_visual["drawn"] > 0.4 then
@@ -32002,9 +32014,62 @@ end
                     return new_cframe
                 end
 
+                -- Moving while the ragebot kills (walking, Speed, Flight). The body is at the follow's place for the physics step, because that is when
+                -- the server reads it, so the move the physics would have given the real body was lost and the character could not move. Now the real
+                -- body is moved by what the player is asking for, for the length of the frame, unless a wall is in the way: the walk (the move
+                -- direction times the WalkSpeed, which Speed raises), or Flight's own velocity. Up and down: Flight's own; otherwise a body on the ground
+                -- stays on it, and only while it is jumping or falling is every other frame left to the real physics (gravity and the jump), the frames
+                -- in between still showing the server the follow. The real body keeps its own velocity (none is fed back, so nothing builds up).
+                local humanoid = local_parts["Humanoid"]
+                local flying = flags["flight"] == true
+                local grounded = flying or workspace:Raycast(old_cframe["Position"], vector3_new(0, -4.5, 0), follow_move_params(local_character)) ~= nil
+                local airborne = not flying and (not grounded or (humanoid ~= nil and humanoid["Jump"] == true))
+
+                if airborne then
+                    hide_manager["follow_walk_frame"] = not hide_manager["follow_walk_frame"]
+
+                    if hide_manager["follow_walk_frame"] then
+                        return
+                    end
+                end
+
+                local old_velocity = hrp["AssemblyLinearVelocity"]
+                local frame = math.min(tonumber(dt) or 1/60, 0.05)
+                local wanted = vector3_zero
+
+                if flying then
+                    wanted = hide_manager["flight_velocity"] or vector3_zero
+                elseif humanoid then
+                    wanted = humanoid["MoveDirection"] * humanoid["WalkSpeed"]
+                end
+
                 hrp["CFrame"] = new_cframe
                 render_stepped_wait(render_stepped)
-                hrp["CFrame"] = old_cframe
+
+                local step = wanted * frame
+                local restored = old_cframe
+
+                -- into something solid: slide along it (the part of the step into the surface is dropped), as the physics would
+                if step["Magnitude"] > 0.005 and step["Magnitude"] < 25 then
+                    for _ = 1, 2 do
+                        local hit = workspace:Raycast(old_cframe["Position"], step + step["Unit"] * 1.5, follow_move_params(local_character))
+
+                        if not hit then
+                            restored = old_cframe + step
+                            break
+                        end
+
+                        step -= hit["Normal"] * math.min(step:Dot(hit["Normal"]), 0)
+
+                        if step["Magnitude"] <= 0.005 then
+                            break
+                        end
+                    end
+                end
+
+                hrp["CFrame"] = restored
+                -- the real body keeps moving the way the player wants (for the walk animation and the next frame), with its own fall
+                hrp["AssemblyLinearVelocity"] = flying and wanted or vector3_new(wanted["X"], grounded and 0 or old_velocity["Y"], wanted["Z"])
             else
                 local_following = false
             end
