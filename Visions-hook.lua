@@ -4700,7 +4700,9 @@ local function createJujuLib()
 					value = tonumber(value) or min
 					local share = (max ~= min) and math.clamp((value - min) / (max - min), 0, 1) or 0
 					fill.Size = UDim2.new(share, 0, 0, 2)
-					valueText.Text = formatNumber(value, rounding) .. suffix
+					-- a value that stands for a word ("auto", "off") shows the word, as in the classic menu
+					local word = type(config.Nums) == "table" and (config.Nums[value] or config.Nums[tostring(value)])
+					valueText.Text = word and tostring(word) or (formatNumber(value, rounding) .. suffix)
 				end
 
 				local holding = false
