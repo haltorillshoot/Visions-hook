@@ -3834,7 +3834,7 @@ local function createJujuLib()
 				ZIndex = 20,
 			}, gui)
 			new("UIStroke", { Color = Color3.fromRGB(0, 0, 0), Transparency = 0.4, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, frame)
-			new("Frame", { Name = "Line", BackgroundColor3 = ACCENT, BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), ZIndex = 21 }, frame)
+			local accentLine = new("Frame", { Name = "Line", BackgroundColor3 = ACCENT, BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), ZIndex = 21 }, frame)
 			new("UIPadding", { PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9), PaddingTop = UDim.new(0, 2) }, frame)
 
 			local label = new("TextLabel", {
@@ -3872,8 +3872,11 @@ local function createJujuLib()
 				frames += 1
 			end)
 
+			-- green with the Classic look, red with the Visions one (Lib:Accent)
 			local function accent_hex()
-				return string.format("#%02X%02X%02X", math.floor(ACCENT.R * 255 + 0.5), math.floor(ACCENT.G * 255 + 0.5), math.floor(ACCENT.B * 255 + 0.5))
+				local accent = Lib.Accent and Lib:Accent() or ACCENT
+				accentLine.BackgroundColor3 = accent
+				return string.format("#%02X%02X%02X", math.floor(accent.R * 255 + 0.5), math.floor(accent.G * 255 + 0.5), math.floor(accent.B * 255 + 0.5))
 			end
 
 			local function refresh()
@@ -4412,6 +4415,14 @@ local function createJujuLib()
 		TextSize = 13,
 	}
 	local STYLE_FILE = "visions_menu_style.txt"
+
+	-- the colour of the picked look: the Classic green or the Visions red (the watermark and the keybind list follow it)
+	function Lib:Accent()
+		return Lib:GetMenuStyle() == "visions" and VISIONS_THEME.Accent or ACCENT
+	end
+
+	-- functions run after every change of look (Lib.StyleListeners, filled by whoever draws in the look's colour)
+	Lib.StyleListeners = Lib.StyleListeners or {}
 
 	Lib.MenuRecord = Lib.MenuRecord or {}
 
@@ -5151,6 +5162,7 @@ local function createJujuLib()
 				vtween(current.Underline, { Size = UDim2.new(0, 0, 0, 2) })
 			end
 			current = entry
+			Lib.VisionsSelected = entry.Record.Name
 			entry.Page.Visible = true
 			vtween(entry.Button, { TextColor3 = T.Text })
 			vtween(entry.Underline, { Size = UDim2.new(0.8, 0, 0, 2) })
@@ -5161,7 +5173,23 @@ local function createJujuLib()
 			end
 		end
 
-		for tabIndex, tabRecord in ipairs(Lib.MenuRecord) do
+		local ordered = table.clone(Lib.MenuRecord)
+		local function orderOf(record)
+			local button = record.Tab and record.Tab.Idx
+			return typeof(button) == "Instance" and button.LayoutOrder or 0
+		end
+		local position = {}
+		for index, record in ipairs(ordered) do
+			position[record] = index
+		end
+		table.sort(ordered, function(a, b)
+			if orderOf(a) ~= orderOf(b) then
+				return orderOf(a) < orderOf(b)
+			end
+			return position[a] < position[b]
+		end)
+
+		for tabIndex, tabRecord in ipairs(ordered) do
 			local tabName = tostring(tabRecord.Name)
 			local width = math.max(textWidth(tabName, 13) + 22, 50)
 			local button = new("TextButton", {
@@ -5262,22 +5290,38 @@ local function createJujuLib()
 			end)
 
 			table.insert(V.Tabs, entry)
+		end
 
-			if tabIndex == 1 then
-				selectTab(entry)
+		-- a redraw keeps the tab that was open
+		local reopen = V.Tabs[1]
+		for _, entry in ipairs(V.Tabs) do
+			if entry.Record.Name == Lib.VisionsSelected then
+				reopen = entry
 			end
+		end
+		if reopen then
+			selectTab(reopen)
 		end
 
 		bind(search:GetPropertyChangedSignal("Text"), function()
 			V.Query = string.lower(search.Text)
 		end)
 
-		-- keep every drawn control in step with the classic menu while this one is on screen
+		-- keep every drawn control in step with the classic menu while this one is on screen; when the classic menu has been given more tabs,
+		-- sections or rows since this was drawn (it is still being built when the intro is skipped), it is drawn again
 		task.spawn(function()
+			local checked = os.clock()
 			while frame.Parent do
 				if frame.Visible then
 					for _, fn in ipairs(V.Syncs) do
 						pcall(fn)
+					end
+
+					if os.clock() - checked > 1 then
+						checked = os.clock()
+						if V.Shallow and Lib.CountShallow() ~= V.Shallow and Lib.ApplyMenuStyle then
+							task.defer(Lib.ApplyMenuStyle)
+						end
 					end
 				end
 				task.wait(0.15)
@@ -5285,6 +5329,18 @@ local function createJujuLib()
 		end)
 
 		return V
+	end
+
+	-- tabs + sections + rows written down so far (a change means the Visions look is out of date)
+	function Lib.CountShallow()
+		local count = 0
+		for _, tab in ipairs(Lib.MenuRecord) do
+			count += 1 + #tab.Sections
+			for _, section in ipairs(tab.Sections) do
+				count += #section.Rows
+			end
+		end
+		return count
 	end
 
 	-- shows the look that is picked (and hides the other) while the menu is open
@@ -5353,6 +5409,10 @@ local function createJujuLib()
 
 		closeOverlay()
 		applyMenuStyle()
+
+		for _, listener in ipairs(Lib.StyleListeners) do
+			pcall(listener, style)
+		end
 
 		local item = Lib.Flags["menu_style"]
 		if item and item.GetValue and item:GetValue() ~= (style == "visions" and "Visions" or "Classic") then
@@ -6949,7 +7009,7 @@ local function addKeybindRow(item, order)
 
 	-- Blue marker for options that are currently on.
 	local marker = Instance.new("Frame")
-	marker.BackgroundColor3 = ACCENT_COLOR
+	marker.BackgroundColor3 = NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR
 	marker.BorderSizePixel = 0
 	marker.Position = UDim2.new(0, 8, 0.5, -5)
 	marker.Size = UDim2.fromOffset(2, 10)
@@ -6968,7 +7028,7 @@ local function addKeybindRow(item, order)
 	key.Position = UDim2.new(1, -10, 0, 0)
 	key.Size = UDim2.fromOffset(84, 20)
 	key.TextXAlignment = Enum.TextXAlignment.Right
-	key.TextColor3 = (item.On and ACCENT_COLOR) or Color3.fromRGB(255, 255, 255)
+	key.TextColor3 = (item.On and (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)) or Color3.fromRGB(255, 255, 255)
 	key.TextTransparency = (item.On and 0) or 0.5
 
 	row.Parent = KeybindList.Panel
@@ -14981,6 +15041,13 @@ local function buildInterface()
 	buildPreviewPanel()
 	buildBindPopup()
 	buildKeybindList()
+
+	-- the keybind list is drawn again in the new look's colour when the look changes
+	table.insert(NeverLose.StyleListeners, function()
+		if Session.Alive and KeybindList.Rebuild then
+			KeybindList.Rebuild()
+		end
+	end)
 
 	-- Add Tab Label --
 	window:AddTabLabel("AIMBOT")
