@@ -18960,6 +18960,8 @@ do
         menu_references["auto_reload_settings"] = menu_references["auto_reload"]:create_settings()
         menu_references["auto_reload_activate_when"] = menu_references["auto_reload_settings"]:create_element({["name"] = "activate when"}, {["dropdown"] = {["flag"] = "auto_reload_activate_when", ["options"] = {"rifle has 1/3", "target knocked", "target died", "clip empty"}, ["multi"] = true, ["default"] = {"rifle has 1/3", "target died", "clip empty"}}})
         menu_references["auto_reload_wait_for_stomp"] = menu_references["auto_reload_settings"]:create_element({["name"] = "wait for stomp"}, {["toggle"] = {["flag"] = "auto_reload_wait_for_stomp", ["default"] = false}})
+        -- off: guns are reloaded where the character stands instead of from the void
+        menu_references["auto_reload_void"] = menu_references["auto_reload_settings"]:create_element({["name"] = "void while reloading"}, {["toggle"] = {["flag"] = "auto_reload_void", ["default"] = true}})
 
     local auto_reload_connection = nil
     local auto_reload_connection2 = nil
@@ -31664,15 +31666,18 @@ end
             end
         end
 
-        set_hide_reason("reload", wants, true)
+        -- Void While Reloading (Auto Reload's gear, on by default): off, the reload is sent where the character stands, with no void hide
+        local void_reload = flags["auto_reload_void"] ~= false
+
+        set_hide_reason("reload", wants and void_reload, true)
 
         if not wants then
             reload_hidden_frames = 0
             return
         end
 
-        -- A request is only sent after the hide has really been applied for a couple of frames.
-        if in_void == true then
+        -- A request is only sent after the hide has really been applied for a couple of frames (at once without the hide).
+        if in_void == true or not void_reload then
             reload_hidden_frames += 1
         else
             reload_hidden_frames = 0
