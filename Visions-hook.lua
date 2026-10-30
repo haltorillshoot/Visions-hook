@@ -6972,9 +6972,9 @@ end
 -- Picking someone should be enough to start killing them: the ragebot, automatic fire and follow
 -- target are switched on for as long as anyone is picked. Only the ones switched on here are
 -- switched off again, so options the user turned on themselves stay on.
--- (the Ragebot switch itself is not in the list: picking a target with the target key or the Target List never turns the ragebot on, only the
--- helpers, and only while the ragebot is already on)
-Session.TargetAutoFlags = { "AutoFire", "auto_equip", "follow_target" }
+-- (the Ragebot switch itself is not in the list: picking a target with the target key or the Target List never turns the ragebot on. Nor are
+-- Auto Equip and Follow Target: they stay as they are set. Only Automatic Fire comes on, and only while the ragebot is already on.)
+Session.TargetAutoFlags = { "AutoFire" }
 Session.TargetAutoOwned = {}
 
 -- What a config stores for a toggle that is only on for a while: an option a Hold bind has on while its key is down, and the options picking a
