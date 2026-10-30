@@ -1022,6 +1022,114 @@ LPH_JIT_MAX(function()
     end
 end)()
 
+-- > ( assets )
+-- Every file the script reads from the executor's workspace (hit and bullet sounds, pictures, the custom folder's defaults, the intro's sound) is kept
+-- in the repo's assets folder. Each run fetches the ones that are missing (a first run fetches all of them) and leaves the ones already there alone,
+-- so a file the player replaced stays theirs. A file that can't be fetched only switches off the sound or picture that uses it (read_asset).
+local read_asset = function(path)
+    local ok, data = pcall(readfile, path)
+
+    return ok and type(data) == "string" and data or nil
+end
+
+do
+    local ASSET_BASE = "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/assets/"
+    local ASSET_FILES = {
+        "neverlose recode/assets/1.png",
+        "neverlose recode/assets/2.png",
+        "neverlose recode/assets/Beep1.ogg",
+        "neverlose recode/assets/agpa1.ogg",
+        "neverlose recode/assets/agpa2.ogg",
+        "neverlose recode/assets/break.ogg",
+        "neverlose recode/assets/bubble.ogg",
+        "neverlose recode/assets/copperbell.ogg",
+        "neverlose recode/assets/cowbell.ogg",
+        "neverlose recode/assets/huhh.ogg",
+        "neverlose recode/assets/jaydes.png",
+        "neverlose recode/assets/logo.png",
+        "neverlose recode/assets/mc bow.ogg",
+        "neverlose recode/assets/neverlose.ogg",
+        "neverlose recode/assets/primordial.ogg",
+        "neverlose recode/assets/quake.ogg",
+        "neverlose recode/assets/rust.ogg",
+        "neverlose recode/assets/saturation.png",
+        "neverlose recode/assets/sexy.ogg",
+        "neverlose recode/assets/skeet.ogg",
+        "neverlose recode/assets/sparkle.ogg",
+        "neverlose recode/custom/blossom aura.rbxm",
+        "neverlose recode/custom/character.rbxm",
+        "neverlose recode/custom/crunch.ogg",
+        "neverlose recode/custom/pinksky.rbxm",
+        "neverlose recode/custom/rust.ogg",
+        "neverlose recode/custom/scar.ogg",
+        "neverlose recode/custom/spam.json",
+        "neverlose recode/custom/textures.json",
+        "neverlose recode/custom/x hit.rbxm",
+        "visions_intro.ogg"
+    }
+
+    local missing = {}
+
+    for _, path in ASSET_FILES do
+        local ok, exists = pcall(isfile, path)
+
+        if not (ok and exists) then
+            missing[#missing+1] = path
+        end
+    end
+
+    local notify = function(text, duration)
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {Title = "Visions hook", Text = text, Duration = duration or 5})
+        end)
+    end
+
+    if #missing > 0 then
+        notify("Downloading "..#missing.." asset"..(#missing == 1 and "" or "s").."...", 4)
+
+        local requester = (syn and syn["request"]) or http_request or request
+        local fetched = 0
+
+        for _, path in missing do
+            pcall(function()
+                local folder = path:match("^(.*)/[^/]+$")
+
+                if folder then
+                    local built = nil
+
+                    for part in folder:gmatch("[^/]+") do
+                        built = built and (built.."/"..part) or part
+
+                        if not isfolder(built) then
+                            makefolder(built)
+                        end
+                    end
+                end
+
+                local url = ASSET_BASE..(path:gsub(" ", "%%20"))
+                local body = nil
+
+                if requester then
+                    local response = requester({Url = url, Method = "GET"})
+
+                    if response and (response.StatusCode == 200 or (response.StatusCode == nil and response.Success)) then
+                        body = response.Body
+                    end
+                else
+                    body = game:HttpGet(url)
+                end
+
+                if type(body) == "string" and #body > 0 and body ~= "404: Not Found" then
+                    writefile(path, body)
+                    fetched += 1
+                end
+            end)
+        end
+
+        notify(fetched == #missing and ("Assets ready ("..fetched..")") or ("Assets: "..fetched.." of "..#missing.." downloaded"), 5)
+    end
+end
+
 -- > ( signal library )
 
 local signal = {}
@@ -3433,6 +3541,16 @@ local function createJujuLib()
 
 		Lib.ScreenGui = gui
 
+		-- Every text in here (the menu, the notifications, the keybind list, the panels, the player list, the skins) uses the picked look's font:
+		-- SourceSans for Classic, Gotham for Visions, each label keeping its weight. New texts are set as they come in; a look change sets them all.
+		if Lib.ApplyFonts then
+			Lib.ApplyFonts(gui)
+			-- one step later: a text is often put in its parent before its own font is set
+			gui.DescendantAdded:Connect(function(object)
+				task.defer(pcall, Lib.RestyleText, object)
+			end)
+		end
+
 		local window = {
 			Name = config.Name,
 			Keybind = config.Keybind,
@@ -4396,6 +4514,41 @@ local function createJujuLib()
 
 	-- functions run after every change of look (Lib.StyleListeners, filled by whoever draws in the look's colour)
 	Lib.StyleListeners = Lib.StyleListeners or {}
+
+	-- the weight of each font the script uses, and each look's font for a weight
+	local FONT_WEIGHT = {
+		-- (Legacy: a text made without a font; here they are all empty click areas, set too in case one gets text later)
+		[Enum.Font.SourceSans] = "regular", [Enum.Font.SourceSansLight] = "regular", [Enum.Font.Gotham] = "regular", [Enum.Font.Arial] = "regular", [Enum.Font.Legacy] = "regular",
+		[Enum.Font.SourceSansSemibold] = "medium", [Enum.Font.GothamMedium] = "medium",
+		[Enum.Font.SourceSansBold] = "bold", [Enum.Font.GothamBold] = "bold", [Enum.Font.GothamBlack] = "bold", [Enum.Font.ArialBold] = "bold",
+	}
+	local LOOK_FONTS = {
+		classic = { regular = Enum.Font.SourceSans, medium = Enum.Font.SourceSansSemibold, bold = Enum.Font.SourceSansBold },
+		visions = { regular = Enum.Font.Gotham, medium = Enum.Font.GothamMedium, bold = Enum.Font.GothamBold },
+	}
+
+	function Lib.RestyleText(object)
+		if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+			local weight = FONT_WEIGHT[object.Font]
+			local font = weight and LOOK_FONTS[Lib.MenuStyle == "visions" and "visions" or "classic"][weight]
+
+			if font and object.Font ~= font then
+				object.Font = font
+			end
+		end
+	end
+
+	function Lib.ApplyFonts(root)
+		for _, object in ipairs(root:GetDescendants()) do
+			pcall(Lib.RestyleText, object)
+		end
+	end
+
+	table.insert(Lib.StyleListeners, function()
+		if Lib.ScreenGui then
+			Lib.ApplyFonts(Lib.ScreenGui)
+		end
+	end)
 
 	Lib.MenuRecord = Lib.MenuRecord or {}
 
@@ -15564,7 +15717,7 @@ local function buildInterface()
 
 			local sound = nil
 			pcall(function()
-				for _, path in ipairs({ "visions_intro.mp3", "visions_intro.ogg" }) do
+				for _, path in ipairs({ "visions_intro.ogg", "visions_intro.mp3" }) do
 					if isfile(path) then
 						sound = Instance.new("Sound")
 						sound.SoundId = getcustomasset(path)
@@ -24014,21 +24167,21 @@ do
     local sound_service = cloneref(game:GetService("SoundService"))
 
 local hit_sounds = {
-    ["primordial"] = readfile("neverlose recode/assets/primordial.ogg"),
-    ["Visions hook"] = readfile("neverlose recode/assets/neverlose.ogg"),
-    ["sparkle"] = readfile("neverlose recode/assets/sparkle.ogg"),
-    ["mc bow"] = readfile("neverlose recode/assets/mc bow.ogg"),
-    ["break"] = readfile("neverlose recode/assets/break.ogg"),
-    ["skeet"] = readfile("neverlose recode/assets/skeet.ogg"),
-    ["rust"] = readfile("neverlose recode/assets/rust.ogg"),
-    ["agpa2"] = readfile("neverlose recode/assets/agpa2.ogg"),
-    ["agpa1"] = readfile("neverlose recode/assets/agpa1.ogg"),
-    ["beep1"] = readfile("neverlose recode/assets/Beep1.ogg"),
-    ["bubble"] = readfile("neverlose recode/assets/bubble.ogg"),
-    ["copperbell"] = readfile("neverlose recode/assets/copperbell.ogg"),
-    ["cowbell"] = readfile("neverlose recode/assets/cowbell.ogg"),
-    ["huhh"] = readfile("neverlose recode/assets/huhh.ogg"),
-    ["quake"] = readfile("neverlose recode/assets/quake.ogg"),
+    ["primordial"] = read_asset("neverlose recode/assets/primordial.ogg"),
+    ["Visions hook"] = read_asset("neverlose recode/assets/neverlose.ogg"),
+    ["sparkle"] = read_asset("neverlose recode/assets/sparkle.ogg"),
+    ["mc bow"] = read_asset("neverlose recode/assets/mc bow.ogg"),
+    ["break"] = read_asset("neverlose recode/assets/break.ogg"),
+    ["skeet"] = read_asset("neverlose recode/assets/skeet.ogg"),
+    ["rust"] = read_asset("neverlose recode/assets/rust.ogg"),
+    ["agpa2"] = read_asset("neverlose recode/assets/agpa2.ogg"),
+    ["agpa1"] = read_asset("neverlose recode/assets/agpa1.ogg"),
+    ["beep1"] = read_asset("neverlose recode/assets/Beep1.ogg"),
+    ["bubble"] = read_asset("neverlose recode/assets/bubble.ogg"),
+    ["copperbell"] = read_asset("neverlose recode/assets/copperbell.ogg"),
+    ["cowbell"] = read_asset("neverlose recode/assets/cowbell.ogg"),
+    ["huhh"] = read_asset("neverlose recode/assets/huhh.ogg"),
+    ["quake"] = read_asset("neverlose recode/assets/quake.ogg"),
 }
 
     for _, data in hit_sounds do
@@ -24626,7 +24779,7 @@ local hit_sounds = {
     -- >> ( hit overlay )
 
     local hit_overlay_connection = nil
-    local data = readfile("neverlose recode/assets/1.png")
+    local data = read_asset("neverlose recode/assets/1.png")
 
     local hit_image = nil
     local last_hit = clock()
@@ -26090,7 +26243,7 @@ do
     -- >> ( local bullet sound )
 
     local sounds = {
-        ["sexy"] = readfile("neverlose recode/assets/sexy.ogg")
+        ["sexy"] = read_asset("neverlose recode/assets/sexy.ogg")
     }
 
     for _, data in sounds do
@@ -26132,7 +26285,7 @@ do
     -- >> ( custom armor pop )
 
     local images = {
-        ["jaydes"] = readfile("neverlose recode/assets/jaydes.png"),
+        ["jaydes"] = read_asset("neverlose recode/assets/jaydes.png"),
     }
 
     for _, data in images do
@@ -41289,7 +41442,7 @@ do
                     local create_fake_drawing = getgenv()["_PROXY"]["new"]
                     local color = flags["custom_kick_screen_color"]
                     local path = "neverlose recode/"..(background == "2.png" and "assets/2.png" or "custom/"..background)
-                    local data = isfile(path) and readfile(path) or readfile("neverlose recode/assets/2.png")
+                    local data = isfile(path) and readfile(path) or read_asset("neverlose recode/assets/2.png")
                     local message_label = error["MessageArea"]["ErrorFrame"]["ErrorMessage"]
                     local message = error["MessageArea"]["ErrorFrame"]["ErrorMessage"]
                     error["Visible"] = false
@@ -41328,7 +41481,7 @@ do
                         ["Color"] = color3_fromrgb(255, 255, 255),
                         ["Size"] = udim2_new(0, 100, 0, 100),
                         ["Position"] = udim2_new(0.5, -50, 0.45, -50),
-                        ["Data"] = readfile("neverlose recode/assets/logo.png"),
+                        ["Data"] = read_asset("neverlose recode/assets/logo.png"),
                         ["Transparency"] = 0,
                         ["Parent"] = background,
                         ["Visible"] = true,
