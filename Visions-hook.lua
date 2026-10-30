@@ -17408,7 +17408,9 @@ do
                             local owner = found_model and find_first_child_of_class(found_model, "Humanoid") and players_service["GetPlayerFromCharacter"](players_service, found_model)
 
                             if owner and owner ~= local_player then
-                                local claim = hide_manager["range_enhance"](shot_origin, found["Position"], range_value["Value"], true)
+                                -- from the part's own centre: a ray that met the expanded head stopped up to 21 studs from it, and the pull back on top
+                                -- of that would pass the 25 studs the server takes
+                                local claim = hide_manager["range_enhance"](shot_origin, found_part["Position"], range_value["Value"], true)
                                 args[4] = claim
                                 args[5] = found_part
                                 args[6] = (shot_origin - claim)["Unit"]
@@ -40075,6 +40077,90 @@ do
         end
 
         return position - offset["Unit"] * math.min(over, 20)
+    end
+
+    -- >> ( hitbox expander )
+    -- Part of the ragebot (no toggle): while it is on, its target's Head is a 24 stud cube on this client, invisible, so the gun's own ray (held or
+    -- clicked shots, the Range Enhancer's look-ahead) meets it far from the real head and claims a head shot there. Measured on a test account
+    -- (shots claiming a hit at a point beside the part, damage read from the target): the server takes a claim up to 25 studs from the Head or the
+    -- HumanoidRootPart (Head: 0, 15, 22, 25 studs taken, 46 damage; root: 0 to 25 taken, 26, 27, 28 refused), so the farthest point of the box (its
+    -- corner, 24 * sqrt(3) / 2 = 20.8 studs out) keeps 4 studs for the target moving between the shot and the server. The Head and not the root
+    -- part: a bigger root part takes the shots meant for the head (23 damage instead of 46). The real head comes back when the target changes, the
+    -- ragebot goes off or the script is unloaded. The ragebot's own shots claim the head directly and are not changed by this.
+    do
+        local HITBOX_SIZE = 24
+        local expanded = nil -- {head, size, transparency, can_collide, decals = {decal = transparency}}
+
+        local restore = function()
+            local record = expanded
+            expanded = nil
+
+            if record and record[1] then
+                pcall(function()
+                    record[1]["Size"] = record[2]
+                    record[1]["Transparency"] = record[3]
+                    record[1]["CanCollide"] = record[4]
+
+                    for decal, transparency in record[5] do
+                        decal["Transparency"] = transparency
+                    end
+                end)
+            end
+        end
+
+        hide_manager["hitbox_restore"] = restore
+
+        create_connection(run_service["Heartbeat"], function()
+            local target = flags["ragebot"] and ragebot_target or nil
+            local head = target and target[4] and target[4]["Head"]
+
+            if not head or not head["Parent"] or getgenv()["neverlose_safety_shutdown"] then
+                if expanded then
+                    restore()
+                end
+
+                return
+            end
+
+            if expanded and expanded[1] == head then
+                -- the game can set the size back (a respawn, an accessory change): put the box back
+                if head["Size"]["X"] ~= HITBOX_SIZE then
+                    head["Size"] = vector3_new(HITBOX_SIZE, HITBOX_SIZE, HITBOX_SIZE)
+                end
+
+                return
+            end
+
+            restore()
+
+            local decals = {}
+
+            for _, child in get_children(head) do
+                if child["ClassName"] == "Decal" then
+                    decals[child] = child["Transparency"]
+                end
+            end
+
+            expanded = {head, head["Size"], head["Transparency"], head["CanCollide"], decals}
+
+            pcall(function()
+                head["CanCollide"] = false
+                head["Size"] = vector3_new(HITBOX_SIZE, HITBOX_SIZE, HITBOX_SIZE)
+                head["Transparency"] = 1
+
+                for decal in decals do
+                    decal["Transparency"] = 1
+                end
+            end)
+        end)
+
+        local teardowns = getgenv()["neverlose_teardowns"]
+
+        if teardowns then
+            teardowns[#teardowns+1] = function()
+                pcall(restore)
+            end
+        end
     end
 
     -- >> ( quick draw )
