@@ -597,64 +597,9 @@ LPH_JIT_MAX(function()
             end))
         end)
 
-        -- The checkers themselves, switched off as well. The only game code that runs in this state is the Handshake script: a
-        -- CharacterAdded listener that, for each character, watches its DescendantAdded (CHECKER_2) and the Head's Anchored property
-        -- (CHECKER_3, then Kick("no")). The packets are dropped above either way; this stops them being built.
-        local function from_checker(connection)
-            local callback = connection.Function
-
-            if not callback or isexecutorclosure(callback) then
-                return false
-            end
-
-            local ok, source = pcall(debug.info, callback, "s")
-
-            return ok and type(source) == "string" and string_find(source, "ReplicatedFirst", 1, true) ~= nil
-        end
-
-        local function disable_checkers(signal)
-            for _, connection in getconnections(signal) do
-                if from_checker(connection) then
-                    pcall(function()
-                        connection:Disable()
-                    end)
-                end
-            end
-        end
-
-        -- the listener that builds the checkers for every new character: off, and no later character gets any
-        pcall(disable_checkers, local_player.CharacterAdded)
-
-        -- the current character already has its two watchers. They are swept more than once in case one is made a moment late.
-        local function sweep_checkers(character)
-            local waited = 0
-
-            for _, at in { 0, 0.25, 1, 2.5, 5, 10 } do
-                task.wait(at - waited)
-                waited = at
-
-                if not character.Parent then
-                    return
-                end
-
-                pcall(disable_checkers, character.DescendantAdded)
-
-                local head = character:FindFirstChild("Head")
-
-                if head then
-                    pcall(disable_checkers, head:GetPropertyChangedSignal("Anchored"))
-                end
-            end
-        end
-
-        if local_player.Character then
-            task.spawn(sweep_checkers, local_player.Character)
-        end
-
-        local_player.CharacterAdded:Connect(function(character)
-            pcall(disable_checkers, local_player.CharacterAdded)
-            task.spawn(sweep_checkers, character)
-        end)
+        -- (The checkers on the character used to be switched off here with connection:Disable(). When a dead character was removed, the
+        -- executor crashed on those disabled connections: dying with the script loaded, Anti Stomp's death included, closed the game. They are
+        -- left alone now; what they report is still dropped by the filter above and their Kick("no") is still hooked.)
     ]==]
 
     -- bumped whenever actor_source changes, so a run after an update puts the new filter into an actor that already has the old one
