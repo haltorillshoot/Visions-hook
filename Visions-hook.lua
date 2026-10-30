@@ -5888,6 +5888,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
 	["removespread_amount"] = {"reduce_shotgun_spread_amount", "reduce_shotgun_spread_amount"},
 	["remove_recoil"] = {"remove_recoil", "remove_recoil"},
+	["range_enhancer"] = {"range_enhancer", "range_enhancer"},
 	["dt"] = {"rapid_fire", "rapid_fire"},
 	["rapid_fire_speed"] = {"rapid_fire_speed", "rapid_fire_speed"},
 	["rapid_fire_glory_patch"] = {"rapid_fire_glory_patch", "rapid_fire_glory_patch"},
@@ -15683,6 +15684,13 @@ local function buildInterface()
 		Callback = onChanged("remove_recoil"),
 	})
 
+	-- Range Enhancer: every gun hits up to 15 studs past its own Range (measured on all six guns in hand, see the engine's "range enhancer")
+	addBindableToggle(Other:AddLabel("Range Enhancer"), "Range Enhancer", {
+		Default = false,
+		Flag = "range_enhancer",
+		Callback = onChanged("range_enhancer"),
+	})
+
 	addBindableToggle(Other:AddLabel("Remove Spread"), "Remove Spread", {
 		Default = false,
 		Flag = "removespread",
@@ -16979,6 +16987,18 @@ do
                             end
                         end
                 
+                        -- Range Enhancer: a claim past the gun's Range is pulled back towards the origin, up to 20 studs (hide_manager.range_enhance)
+                        local enhance = hide_manager["range_enhance"]
+
+                        if enhance then
+                            local range_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+                            local range_value = range_tool and find_first_child(range_tool, "Range")
+
+                            if range_value then
+                                pos = enhance(origin, pos, range_value["Value"])
+                            end
+                        end
+
                         -- An origin thousands of studs from the claim (the body was in the void when it was taken, or the claim is the target's void spot):
                         -- the server refuses it whatever the gun, so it is not sent (measured: a third of a fight's shots went out from 1e9 studs).
                         local reach_gap = (origin - pos)["Magnitude"]
@@ -17067,6 +17087,41 @@ do
                     -- bullet manipulation's hit checker: a shot that would miss the locked target is never sent
                     if silent_shot_gate and not silent_shot_gate(args) then
                         return
+                    end
+
+                    -- Range Enhancer on the gun's own shots: the game's ray stops at the gun's Range, so a player standing past it is looked for on the
+                    -- same line, up to the Range + 15 studs the server takes; found, the shot names them and claims the hit on that line, pulled back
+                    -- inside the Range (hide_manager.range_enhance). (Dot calls only: a method call in here would replace the namecall method.)
+                    if flags["range_enhancer"] == true and not checkcaller() and typeof(args[2]) == "Instance" and typeof(args[3]) == "Vector3" and typeof(args[4]) == "Vector3" then
+                        local range_tool = args[2]["Parent"]
+                        local range_value = range_tool and find_first_child(range_tool, "Range")
+                        local shot_origin = args[3]
+                        local way = args[4] - shot_origin
+
+                        if range_value and way["Magnitude"] > 0.1 and not (typeof(args[5]) == "Instance" and args[5]["Parent"] and find_first_child_of_class(args[5]["Parent"], "Humanoid")) then
+                            local range_params = hide_manager["range_params"]
+
+                            if not range_params then
+                                range_params = RaycastParams["new"]()
+                                range_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+                                hide_manager["range_params"] = range_params
+                            end
+
+                            range_params["FilterDescendantsInstances"] = {local_character, find_first_child(workspace, "Ignored")}
+
+                            local found = workspace["Raycast"](workspace, shot_origin, way["Unit"] * (range_value["Value"] + 15), range_params)
+                            local found_part = found and found["Instance"]
+                            local found_model = found_part and found_part["Parent"]
+                            local owner = found_model and find_first_child_of_class(found_model, "Humanoid") and players_service["GetPlayerFromCharacter"](players_service, found_model)
+
+                            if owner and owner ~= local_player then
+                                local claim = hide_manager["range_enhance"](shot_origin, found["Position"], range_value["Value"])
+                                args[4] = claim
+                                args[5] = found_part
+                                args[6] = (shot_origin - claim)["Unit"]
+                                return old_namecall(self, unpack(args))
+                            end
+                        end
                     end
 
                     local part = args[5]
@@ -38097,6 +38152,7 @@ local get_silent_aim_position = nil
         menu_references["reduce_shotgun_spread_settings"] = menu_references["reduce_shotgun_spread"]:create_settings()
         menu_references["reduce_shotgun_spread_amount"] = menu_references["reduce_shotgun_spread_settings"]:create_element({["name"] = "reduce amount"}, {["slider"] = {["flag"] = "reduce_shotgun_spread_amount", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["decimals"] = 0, ["suffix"] = "%", ["min_text"] = "none", ["max_text"] = "all"}})
         menu_references["remove_recoil"] = menu_references["legitbot_other_section"]:create_element({["name"] = "remove recoil"}, {["toggle"] = {["flag"] = "remove_recoil"}})
+        menu_references["range_enhancer"] = menu_references["legitbot_other_section"]:create_element({["name"] = "range enhancer"}, {["toggle"] = {["flag"] = "range_enhancer"}})
 
     -- >> ( legitbot master )
 
@@ -39185,6 +39241,11 @@ local get_silent_aim_position = nil
             end
         end
 
+        -- Range Enhancer (hide_manager.range_enhance)
+        if hide_manager["range_enhance"] and range then
+            position = hide_manager["range_enhance"](origin, position, range["Value"])
+        end
+
         return {origin, position, part, (origin - position)["Unit"], data[2]}
     end)
 
@@ -39678,6 +39739,31 @@ do
     -- claimed from where the body is now is often refused. hide_manager.lagged_position(lag) is where the body was `lag` seconds ago.
     hide_manager["trail_times"] = {}
     hide_manager["trail_points"] = {}
+
+    -- >> ( range enhancer )
+    -- Measured on two of the user's accounts (a shot sent straight at a standing target, stepping the distance out, damage read from its health),
+    -- with the six guns in hand: the server takes a hit while (1) the claimed hit is within the gun's Range of the shot's origin and (2) the target
+    -- itself is within the Range plus about 15 studs. The gun's own script only claims a hit on a part its ray reached, so normally (1) and the
+    -- client's ray stop it at the Range: Tactical 100 (95 hit, 105 miss), DB 120 (115 / 125), AUG, Revolver and Flintlock 200 (195 / 205), Rifle 250.
+    -- Claiming the hit up to 20 studs short of the part, on the line to it (the server takes a claim within about 22 studs of the part), moves (1)
+    -- out of the way, and (2) is then the limit: Tactical 115 (117 miss), DB 135 (137), AUG, Revolver, Flintlock 215 (217), Rifle 264 (267). Moving
+    -- the origin towards the target as well gained nothing (the same 215 for the AUG). So the claim goes back only as far as a shot past the Range
+    -- needs (3 studs of margin), never more than 20, and a shot within the Range is left exactly as it was.
+    hide_manager["range_enhance"] = function(origin, position, range)
+        if flags["range_enhancer"] ~= true or typeof(origin) ~= "Vector3" or typeof(position) ~= "Vector3" or type(range) ~= "number" then
+            return position
+        end
+
+        local offset = position - origin
+        local distance = offset["Magnitude"]
+        local over = distance - (range - 3)
+
+        if distance ~= distance or over <= 0 then
+            return position
+        end
+
+        return position - offset["Unit"] * math.min(over, 20)
+    end
 
     -- The ragebot's target is in the void and its spot there has jumped in the last half second (do_ragebot marks it).
     hide_manager["is_void_jittering"] = function(target, position)
