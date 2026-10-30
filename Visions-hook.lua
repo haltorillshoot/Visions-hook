@@ -10047,13 +10047,7 @@ function Session.buildSettingsPanels(rows)
 	panelSlider(heal, "Try Cooldown", "auto_heal_try_cooldown", 0, 2, 2, "s", 0.05)
 	panelToggle(heal, "Stop Following While Healing", "auto_heal_stop_following", false)
 
-	-- Rapid fire: how much of each gun's own cooldown is taken away (100 = all of it, 0 = none)
-	local rapidPanel = rows.rapidFire:AddOption()
-	panelSlider(rapidPanel, "Speed", "rapid_fire_speed", 0, 100, 0, "%", 100)
-	-- Semi Rage's rapid fire (Glory v4), here as well (it stays in the Semi Rage tab)
-	panelToggle(rapidPanel, "Glory Patch", "rapid_fire_glory_patch", false)
-	panelToggle(rapidPanel, "Hold To Fire", "rapid_fire_hold", false)
-	panelSlider(rapidPanel, "Fire Delay", "rapid_fire_delay", 0, 1, 2, "s", 0.01)
+	-- Maximum Fire Rate has no settings: every gun fires as fast as the server takes its shots (the engine's "rapid fire")
 
 	-- A/D: how long each key is held before switching to the other
 	panelSlider(rows.adStrafe:AddOption(), "Interval", "ad_strafe_interval", 0.05, 1, 2, "s", 0.22)
@@ -10183,7 +10177,7 @@ Session.installEngineTabs = function()
 			sections = {
 				{ key = { "main", "movement" }, name = "MOVEMENT", position = "left" },
 				{ key = { "main", "other" }, name = "OTHER", position = "left", only = { "animation breaker", "animation player", "spinbot" } },
-				{ key = { "main", "utility" }, name = "UTILITY", position = "right", except = { "auto reload" } },
+				{ key = { "main", "utility" }, name = "UTILITY", position = "right", except = { "auto reload", "rapid fire" } },
 				{ key = { "main", "server" }, name = "SERVER", position = "right" },
 			},
 		},
@@ -13425,17 +13419,29 @@ do
 		end)
 
 		---------- Per frame ----------
-		-- Force Hit, Force Fire and the Trigger Bot live in the Rage tab now and act on the ragebot's target: its head is handed to the silent aim
-		-- here (Select mode), and let go when the ragebot has nobody. While the ragebot itself aims (auto fire, bullet manipulation) its own hook
-		-- sends the shots and this one stays out of the way (ragebotaims).
+		-- Force Hit and Force Fire are part of the ragebot (no rows, no master switch): on whenever the ragebot is on, off when it is off. They act
+		-- on the ragebot's target: its head is handed to the silent aim here (Select mode), and let go when the ragebot has nobody. While the
+		-- ragebot itself aims (auto fire, bullet manipulation) its own hook sends the shots and this one stays out of the way (ragebotaims).
+		-- The trigger bot is not part of it: always off, with no delay.
 		local linkedtarget = nil
 
 		connect(runservice.RenderStepped, function()
 			local silent = config["silent aimbot"]
-			local wanted = silent["force hit"] or silent["force fire"] or config["trigger bot"]["enabled"]
+			local api = sharedEnv.neverlose
+			local ragebotOn = api and api.get_flag and api.get_flag("ragebot") == true or false
+
+			silent["force hit"] = ragebotOn
+			silent["force fire"] = ragebotOn
+			config["trigger bot"]["enabled"] = false
+			config["trigger bot"]["delay"] = 0
+
+			if ragebotOn and Semi.installSilentHook then
+				Semi.installSilentHook()
+			end
+
+			local wanted = ragebotOn
 
 			if wanted then
-				local api = sharedEnv.neverlose
 				local ok, player = pcall(function()
 					return api and api.get_ragebot_target and api.get_ragebot_target()
 				end)
@@ -13682,7 +13688,7 @@ do
 	---Builds the Semi Rage tab. Every control writes straight into Semi.Config; toggles are
 	---registered like the rest of the menu, so they can be bound to keys and the master switch
 	---can turn them off and back on.
-	function Semi.buildTab(tab, forceOnly)
+	function Semi.buildTab(tab)
 		local config = Semi.Config
 
 		-- The table that holds the last key of a config path, and that key.
@@ -13826,26 +13832,6 @@ do
 			end
 
 			return section
-		end
-
-		-- The Rage tab's FORCE section: Force Hit, Force Fire and the Trigger Bot (the Semi Rage tab is gone). They work on the ragebot's target
-		-- (see "Per frame"); the flags are the ones the Semi Rage rows had, so configs keep their values.
-		if forceOnly then
-			local function enableSilent(value)
-				if value and Semi.installSilentHook then
-					Semi.installSilentHook()
-				end
-			end
-
-			return addSection("FORCE", "right", {
-				toggle("Force Hit", { "silent aimbot", "force hit" }, enableSilent),
-				toggle("Force Fire", { "silent aimbot", "force fire" }, enableSilent),
-				toggle("Trigger Bot", { "trigger bot", "enabled" }),
-				dropdown("Trigger Mode", { "trigger bot", "mode" }, { "Always", "Toggle", "Hold" }),
-				keybind("Trigger Key", { "binds", "triggerbot" }),
-				slider("Trigger Delay", { "trigger bot", "delay" }, 0, 1, 2, "s"),
-				toggle("Require Target", { "trigger bot", "require target" }),
-			})
 		end
 
 		local hitParts = { "Closest Part", "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" }
@@ -15384,11 +15370,15 @@ local function startFullAuto()
 		local cooldownValue = tool:FindFirstChild("ShootingCooldown")
 		local cooldown = cooldownValue and tonumber(cooldownValue.Value) or 0.3
 
-		-- Rapid Fire takes part of the gun's own cooldown away: the trigger is pulled that much sooner.
+		-- Maximum Fire Rate: the trigger is pulled when the gun is due again at the server (the engine's gun_due), not on a timer of our own
 		local rapid = NeverLose.Flags["dt"]
-		if rapid and rapid:GetValue() == true then
-			local rapidSpeed = NeverLose.Flags["rapid_fire_speed"]
-			cooldown = cooldown * (1 - math.clamp(rapidSpeed and tonumber(rapidSpeed:GetValue()) or 100, 0, 100) / 100)
+		local gunDue = sharedEnv.neverlose_gun_due
+		if rapid and rapid:GetValue() == true and type(gunDue) == "function" then
+			if gunDue(tool) then
+				FullAuto.Last = os.clock()
+				pcall(tool.Activate, tool)
+			end
+			return
 		end
 		local speedItem = NeverLose.Flags["full_auto_speed"]
 		local speed = speedItem and tonumber(speedItem:GetValue()) or 100
@@ -15970,8 +15960,9 @@ local function buildInterface()
 		Callback = onChanged("full_auto"),
 	})
 
-	rows.rapidFire = Other:AddLabel("Rapid Fire")
-	addBindableToggle(rows.rapidFire, "Rapid Fire", {
+	rows.rapidFire = Other:AddLabel("Maximum Fire Rate")
+	rows.rapidFire:ToolTip("Every gun fires as fast as the server takes its shots, held or clicked, and the ragebot's shotguns too")
+	addBindableToggle(rows.rapidFire, "Maximum Fire Rate", {
 		Default = false,
 		Flag = "dt",
 		Callback = onChanged("dt"),
@@ -16081,14 +16072,7 @@ local function buildInterface()
 		warn("[Visions hook] Full Auto failed to start: " .. tostring(fullAutoError))
 	end
 
-	-- The Semi Rage tab is gone: Force Hit, Force Fire and the Trigger Bot are the Rage tab's FORCE section (with the menu's master switch).
-	-- A problem there must never take the rest of the menu down with it.
-	local okSemiTab, forceSection = pcall(Session.Semi.buildTab, Rage, true)
-	if not okSemiTab then
-		warn("[Visions hook] The FORCE section failed: " .. tostring(forceSection))
-	elseif forceSection then
-		Session.addMasterRow(forceSection, "master_switch_semi")
-	end
+	-- The Semi Rage tab and the FORCE section are gone: Force Hit and Force Fire run with the ragebot (Semi's "Per frame"), the trigger bot is off.
 
 	local okSemiStart, semiStartError = pcall(Session.Semi.start)
 	if not okSemiStart then
@@ -30947,6 +30931,21 @@ end
         -- Force Fire (always on): a gun is sent every cooldown whether or not the server took the last one, so there is no back-off after refusals.
 
         if not policed then
+            -- Maximum Fire Rate: a gun is sent when the server is ready for it (gun_due) instead of every step, so the server takes as many and turns
+            -- far fewer away; a send it did turn away (the ammo still what it was a round trip later) is tried again after that round trip.
+            if flags["rapid_fire"] == true and hide_manager["gun_due"] then
+                if hide_manager["gun_due"](tool) then
+                    return true
+                end
+
+                local sent_at = hide_manager["gun_fired_at"][tool]
+                local sent_with = hide_manager["gun_ammo_sent"][tool]
+                local ammo_value = find_first_child(tool, "Ammo")
+
+                return sent_at ~= nil and sent_with ~= nil and ammo_value ~= nil and ammo_value["Value"] >= sent_with
+                    and clock() - sent_at >= math.max(local_ping / 1000 + 0.08, 0.25)
+            end
+
             if not hide_manager["pace_slow_guns"] or wait_time < 0.25 then
                 return true
             end
@@ -31004,7 +31003,9 @@ end
         if cooldown then
             local last = math.max(tool:GetAttribute("LocalLastShotAt") or -math.huge, hide_manager["gun_fired_at"][tool] or -math.huge)
 
-            if clock() - last < wait_time + 0.0595 then
+            -- The gun's own script turns a pull away until cooldown + 0.0095 + 0.05; the server takes the shot from cooldown + 0.0095 (measured: the
+            -- DB 0.36 s, against 0.41 s here). With Maximum Fire Rate the script's wait is patched out, so only the server's is kept.
+            if clock() - last < wait_time + (flags["rapid_fire"] == true and 0.0095 or 0.0595) then
                 return false
             end
         end
@@ -35134,7 +35135,16 @@ end
     end
 
 
-    -- >> ( rapid fire )
+    -- >> ( rapid fire ) -- the menu's Maximum Fire Rate
+    --
+    -- Measured on a test account (no script, then with this; shots counted by the server's Ammo value, which only drops for a shot it took): the
+    -- server takes a gun's shots no closer than its ShootingCooldown + 0.0095 apart and turns the rest away. Revolver: sends every 0.2, 0.15, 0.1 or
+    -- 0.05 s were all taken 0.209 s apart (4.78/s); the AUG 0.056 to 0.060 s (about 17/s); the Rifle 1.31 s; the DB 0.36 s. Its own scripts are
+    -- slower than that: the Revolver 0.214 to 0.224 s, the DB 0.42 s, and the AUG fires bursts of three with a 0.47 s pause (5.1/s), a wait the
+    -- server does not have. Patching the gun script's cooldown (below) takes away the script's waits; the server's cooldown stays, so nothing
+    -- registers faster than the numbers above, whatever is sent. What is left to win is sending each shot when the server is ready for it:
+    -- gun_due says when that is, and the held trigger, Full Auto and the ragebot's shotguns wait for it instead of pulling every frame (which
+    -- had half of the AUG's sends refused).
 
     -- A gun's own script refuses a shot that comes inside its cooldown (the rifle's: `tick() - last < 1.3095`). Rapid Fire rewrites that number in each
     -- gun in your hands: Speed 100 removes the cooldown, a lower speed keeps that share of it (50 halves the wait, 0 changes nothing). The number is
@@ -35146,11 +35156,26 @@ end
         local connection = nil
         local connection2 = nil
 
-        -- What takes the place of a cooldown: 0 and below never refuses a shot, so full speed uses a value far below zero.
+        -- What takes the place of a cooldown: 0 and below never refuses a shot (always full speed, there is no slider any more).
         local patched_value = function(original)
-            local scale = 1 - clamp(tonumber(flags["rapid_fire_speed"]) or 100, 0, 100)/100
+            return -10000
+        end
 
-            return scale <= 0 and -10000 or original * scale
+        -- When the gun in hand is due again at the server: its ShootingCooldown + 0.0095 after the last shot this client sent (the gun script's
+        -- LocalLastShotAt, or the ragebot's own send). The guns the server does not police may go half a frame early: the server holds one shot
+        -- that comes early and fires it on time. The shotguns never go early (every refused call counts against their SecurityTolerance): they
+        -- keep the 0.0095 the game's own script waits, which the server never turned away (Tactical 0.661 s, DB 0.36 s).
+        hide_manager["gun_due"] = function(tool)
+            local cooldown = find_first_child(tool, "ShootingCooldown")
+            local wait_time = cooldown and tonumber(cooldown["Value"]) or 0
+            local last = math.max(tool:GetAttribute("LocalLastShotAt") or -math.huge, hide_manager["gun_fired_at"] and hide_manager["gun_fired_at"][tool] or -math.huge)
+            local margin = tool:GetAttribute("SecurityTolerance") ~= nil and 0.0095 or 0.0015
+
+            return clock() - last >= wait_time + margin
+        end
+
+        getgenv()["neverlose_gun_due"] = function(tool)
+            return typeof(tool) == "Instance" and hide_manager["gun_due"](tool) or false
         end
 
         local on_tool_added = function(tool)
@@ -35233,19 +35258,6 @@ end
             end
         end
 
-        -- The same guns again with the speed that is set now.
-        local reapply = function()
-            for func, record in patched do
-                if record["constant"] then
-                    pcall(setconstant, func, record["constant"][1], patched_value(record["constant"][2]))
-                end
-
-                if record["upvalue"] then
-                    pcall(setupvalue, func, record["upvalue"][1], patched_value(record["upvalue"][2]))
-                end
-            end
-        end
-
         local restore = function()
             for func, record in patched do
                 if record["constant"] then
@@ -35265,37 +35277,11 @@ end
             patched = {}
         end)
 
-        -- Semi Rage's rapid fire (Glory v4), in here as well. Glory Patch zeroes every number the gun's Activated handlers keep (their delays; it is
-        -- not put back until the gun is replaced, on the next respawn). Hold To Fire pulls the trigger of the gun in hand every Fire Delay seconds for
-        -- as long as the left mouse button is held.
-        local glory_patched = setmetatable({}, {["__mode"] = "k"})
-
-        local glory_patch = function(tool)
-            if not tool or flags["rapid_fire_glory_patch"] ~= true or glory_patched[tool] then
-                return
-            end
-
-            glory_patched[tool] = true
-
-            pcall(function()
-                for _, activated in getconnections(tool["Activated"]) do
-                    local func = activated["Function"]
-
-                    if func then
-                        for i, value in getupvalues(func) do
-                            if type(value) == "number" then
-                                setupvalue(func, i, 0)
-                            end
-                        end
-                    end
-                end
-            end)
-        end
-
         local last_hold_fire = 0
 
+        -- Held trigger: while the left button is held the gun in hand is fired each time it is due (gun_due), for the semi-automatic guns too.
         local hold_to_fire = LPH_NO_VIRTUALIZE(function()
-            if flags["rapid_fire"] ~= true or flags["rapid_fire_hold"] ~= true or not user_input_service:IsMouseButtonPressed(Enum["UserInputType"]["MouseButton1"]) then
+            if flags["rapid_fire"] ~= true or not user_input_service:IsMouseButtonPressed(Enum["UserInputType"]["MouseButton1"]) then
                 return
             end
 
@@ -35308,24 +35294,17 @@ end
                 return
             end
 
-            local now = clock()
-
-            if now - last_hold_fire < (tonumber(flags["rapid_fire_delay"]) or 0.01) then
-                return
-            end
-
             local tool = local_character and find_first_child_of_class(local_character, "Tool")
+            local ammo = tool and find_first_child(tool, "Ammo")
 
-            if tool and find_first_child(tool, "Ammo") then
-                last_hold_fire = now
-                glory_patch(tool)
+            if ammo and ammo["Value"] > 0 and hide_manager["gun_due"](tool) then
+                last_hold_fire = clock()
                 pcall(tool["Activate"], tool)
             end
         end)
 
         local on_tool = function(tool)
             on_tool_added(tool)
-            glory_patch(tool)
         end
 
         create_connection(menu_references["rapid_fire"]["on_toggle_change"], function(value)
@@ -35363,7 +35342,6 @@ end
             end
         end)
 
-        create_connection(menu_references["rapid_fire_speed"]["on_slider_change"], reapply)
     end
 
     -- >> ( velocity desync )
