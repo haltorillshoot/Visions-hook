@@ -13016,6 +13016,12 @@ do
 			local ammo = tool and tool:FindFirstChild("Ammo")
 			local remote = replicatedstorage:FindFirstChild("MainEvent")
 
+			-- the ragebot's target on a spawn pad: nothing is counted there, so nothing is sent (the engine's on_spawn_pad)
+			local onPad = sharedEnv.neverlose_target_on_pad
+			if type(onPad) == "function" and onPad() then
+				return
+			end
+
 			if not (hit and root and handle and ammo and remote) or tool.Name == "[Knife]" or (tonumber(ammo.Value) or 0) <= 0 then
 				return
 			end
@@ -17448,6 +17454,11 @@ do
                         -- An origin thousands of studs from the claim (the body was in the void when it was taken, or the claim is the target's void spot):
                         -- the server refuses it whatever the gun, so it is not sent (measured: a third of a fight's shots went out from 1e9 studs).
                         local reach_gap = (origin - pos)["Magnitude"]
+
+                        -- the target stands on a spawn pad: the server counts no shot at it there (hide_manager.on_spawn_pad)
+                        if hide_manager["target_on_pad"] == true then
+                            return
+                        end
 
                         if reach_gap ~= reach_gap or reach_gap > 2000 then
                             return
@@ -31989,6 +32000,50 @@ end
     -- One spawn protection test for every module (ragebot, legitbot, triggerbot, silent aim, the API), read live from the character.
     -- The cached part table is only as good as its ChildAdded / ChildRemoved events, and it knows nothing about a character the
     -- server has not finished loading.
+    -- >> ( spawn pads )
+    -- Watched in a fight: an opponent stood on a spawn pad (Workspace.Ignored.Spawn) for 24 s and the server counted none of the 456 shots sent at it
+    -- (claims a stud from its head, origins 3 studs from the body, 15 to 36 studs away), its health going up all the while; the moment it stepped off,
+    -- 5 shots were taken and it was knocked. So while the ragebot's target stands on a pad nothing is sent at it (a refused shotgun call also counts
+    -- against SecurityTolerance); the ragebot keeps following, and fires the moment it steps off. On a pad = its root over the pad's top (1.5 studs
+    -- of slack round the edge) and less than 7 studs above it.
+    local spawn_pads = {}
+    local spawn_pads_at = -math.huge
+
+    hide_manager["on_spawn_pad"] = LPH_NO_VIRTUALIZE(function(position)
+        if typeof(position) ~= "Vector3" then
+            return nil
+        end
+
+        if clock() - spawn_pads_at > 5 then
+            spawn_pads_at = clock()
+            spawn_pads = {}
+
+            local folder = ignored and find_first_child(ignored, "Spawn")
+
+            for _, pad in folder and get_children(folder) or {} do
+                if pad["ClassName"] == "SpawnLocation" then
+                    spawn_pads[#spawn_pads+1] = pad
+                end
+            end
+        end
+
+        for _, pad in spawn_pads do
+            local size = pad["Size"]
+            local offset = pad["CFrame"]:PointToObjectSpace(position)
+            local above = offset["Y"] - size["Y"]/2
+
+            if math.abs(offset["X"]) <= size["X"]/2 + 1.5 and math.abs(offset["Z"]) <= size["Z"]/2 + 1.5 and above >= -1 and above <= 7 then
+                return pad
+            end
+        end
+
+        return nil
+    end)
+
+    getgenv()["neverlose_target_on_pad"] = function()
+        return hide_manager["target_on_pad"] == true
+    end
+
     hide_manager["is_protected"] = LPH_NO_VIRTUALIZE(function(data)
         return data[7] == true or get_target_phase(data) ~= nil
     end)
@@ -33316,6 +33371,10 @@ end
             end
         end
 
+        if not (target and hrp) then
+            hide_manager["target_on_pad"] = false
+        end
+
         if target and hrp then
             local parts = target[4]
             -- Force Hit (always on): the head takes the shot whatever the Target Hitbox says
@@ -33327,6 +33386,18 @@ end
 
             local torso = parts["HumanoidRootPart"]
             local grabbing_constraint = parts["GRABBING_CONSTRAINT"]
+
+            -- the target on a spawn pad (hide_manager.on_spawn_pad): no shot is sent until it steps off; said once
+            local on_pad = torso and hide_manager["on_spawn_pad"](torso["Position"]) ~= nil or false
+
+            if on_pad and hide_manager["target_on_pad_said"] ~= target then
+                hide_manager["target_on_pad_said"] = target
+                new_notification(target[2]["Name"].." is on a spawn pad: holding fire until they step off", 3)
+            elseif not on_pad and hide_manager["target_on_pad_said"] == target then
+                hide_manager["target_on_pad_said"] = nil
+            end
+
+            hide_manager["target_on_pad"] = on_pad
 
             -- Targets that are respawning, still loading or invulnerable are never dropped: we hide in the void and
             -- wait for them. A dead target is kept for as long as its player is in the server.
@@ -33577,7 +33648,7 @@ end
                     end
                 end
 
-                if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= fire_reach) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
+                if aim_valid and local_gun and not hide_manager["target_on_pad"] and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= fire_reach) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
                     local delay = follow_burst and 0 or flags["shot_delay"]
                     local stale = false
 
