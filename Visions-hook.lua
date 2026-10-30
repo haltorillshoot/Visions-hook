@@ -33365,12 +33365,41 @@ end
         return clock() < (hide_manager["salvo_until"][tool] or 0)
     end
 
+    -- Fake bullets: while the target is in reach and the last send of a gun has not been taken (its ammo has not dropped since), the shot is sent
+    -- again every FAKE_BULLET_INTERVAL instead of after a cooldown or a round trip, so the first moment a shot can land one is already on its way
+    -- (it used to wait up to 0.25 s after a refused send). A refused send costs nothing on these guns; one that comes while the gun is still on
+    -- its cooldown at the server is held there and fired on time, so this never shoots faster than the server allows. Once the ammo drops the
+    -- gun goes back to its cooldown. Not the shotguns: every refused call counts against their SecurityTolerance.
+    local FAKE_BULLET_INTERVAL = 0.03
+
+    hide_manager["fake_bullet_due"] = function(tool)
+        if tool:GetAttribute("SecurityTolerance") ~= nil then
+            return false
+        end
+
+        local sent_at = hide_manager["gun_fired_at"][tool]
+
+        if not sent_at then
+            return true
+        end
+
+        local sent_with = hide_manager["gun_ammo_sent"][tool]
+        local ammo_value = find_first_child(tool, "Ammo")
+        local unconfirmed = sent_with ~= nil and ammo_value ~= nil and ammo_value["Value"] > 0 and ammo_value["Value"] >= sent_with
+
+        return unconfirmed and clock() - sent_at >= FAKE_BULLET_INTERVAL
+    end
+
     hide_manager["gun_ready"] = LPH_NO_VIRTUALIZE(function(tool, ammo)
         local policed = tool:GetAttribute("SecurityTolerance") ~= nil
         local cooldown = find_first_child(tool, "ShootingCooldown")
         local wait_time = cooldown and cooldown["Value"] or 0
 
         -- Force Fire (always on): a gun is sent every cooldown whether or not the server took the last one, so there is no back-off after refusals.
+
+        if not policed and hide_manager["fake_bullet_due"](tool) then
+            return true
+        end
 
         if not policed then
             -- Maximum Fire Rate: a gun is sent when the server is ready for it (gun_due) instead of every step, so the server takes as many and turns
@@ -36075,15 +36104,12 @@ end
                                 continue
                             end
 
-                            -- Bullet Manipulation: a gun only takes its turn while the target is within its Range plus 50 studs (from where the server
-                            -- has the body); a farther shot is turned away by the server, and a shotgun's refused calls count against its SecurityTolerance.
-                            -- Another gun in hand that does reach still goes.
+                            -- A gun only takes its turn while the target is within its reach (from where the server has the body); another gun in hand
+                            -- that does reach still goes. Bullet Manipulation used to allow the Range + 50 here, but the server refused everything past
+                            -- Range + 15 with it on as well, and the fake bullets then started 35 studs out.
                             local within_reach = true
 
-                            if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and candidate[2] then
-                                local away = (ragebot_aim_position - local_server_position)["Magnitude"]
-                                within_reach = away == away and away <= candidate[2] + 50
-                            elseif candidate[2] then
+                            if candidate[2] then
                                 -- Server reach: a target past the gun's Range (+ 15 with the Range Enhancer, hide_manager.range_enhance) is refused every
                                 -- time (measured: Revolver at 226 studs, 21 sends, none taken), and each refused send restarted the gun's wait, so the
                                 -- first shot once the target came back in reach was late by up to a cooldown. Such a gun now waits and another one that
@@ -36096,7 +36122,8 @@ end
                             if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
                                 local since = pick_time - sent_at
                                 local cooldown = find_first_child(tool, "ShootingCooldown")
-                                local window_over = sent_gun == nil or (sent_gun == tool and since >= (cooldown and cooldown["Value"] or 0.05) + 0.015) or (sent_gun ~= tool and since >= gap_between(sent_gun["Name"], tool["Name"]))
+                                -- (the same gun again: after its cooldown, or as a fake bullet while its last send has not been taken)
+                                local window_over = sent_gun == nil or (sent_gun == tool and (since >= (cooldown and cooldown["Value"] or 0.05) + 0.015 or hide_manager["fake_bullet_due"](tool))) or (sent_gun ~= tool and since >= gap_between(sent_gun["Name"], tool["Name"]))
 
                                 if is_slow_gun(tool) then
                                     if window_over then
