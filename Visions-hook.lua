@@ -11238,7 +11238,7 @@ do
 			["distance check"] = { ["enabled"] = true, ["max distance"] = 300 },
 		},
 		["target line"] = {
-			["enabled"] = true,
+			["enabled"] = false, -- not drawn any more (it showed as a pink line to the ragebot's target)
 			["thickness"] = 2.2,
 			["transparency"] = 0.8,
 			["vulnerable"] = Color3.fromRGB(255, 85, 127),
@@ -12745,7 +12745,8 @@ do
 		local function updatetargetline()
 			local line = config["target line"]
 
-			if not line["enabled"] or not currenttarget or not currenttarget.Parent or (not silentaimactive and not camlockactive) then
+			-- the target line is not drawn (a saved config may still have it on)
+			if true or not line["enabled"] or not currenttarget or not currenttarget.Parent or (not silentaimactive and not camlockactive) then
 				targetline.Visible = false
 				return
 			end
@@ -17385,8 +17386,8 @@ do
                     -- the hitbox expander's box (a part only this client has) stands for the real Head it sits in
                     local hit_part = args[5]
 
-                    if typeof(hit_part) == "Instance" and hit_part["Name"] == "VisionsHitbox" then
-                        args[5] = hit_part["Parent"]
+                    if hit_part ~= nil and hit_part == hide_manager["hitbox_box"] then
+                        args[5] = hide_manager["hitbox_head"]
                     end
 
                     -- A shot the gun's own script made (not the ragebot's forged call): bullet manipulation's watchdog needs to know the pull did shoot.
@@ -17576,8 +17577,8 @@ do
                             local found = workspace["Raycast"](workspace, shot_origin, way["Unit"] * (range_value["Value"] + 15), range_params)
                             local found_part = found and found["Instance"]
 
-                            if found_part and found_part["Name"] == "VisionsHitbox" then
-                                found_part = found_part["Parent"]
+                            if found_part ~= nil and found_part == hide_manager["hitbox_box"] then
+                                found_part = hide_manager["hitbox_head"]
                             end
                             local found_model = found_part and found_part["Parent"]
                             local owner = found_model and find_first_child_of_class(found_model, "Humanoid") and players_service["GetPlayerFromCharacter"](players_service, found_model)
@@ -32682,7 +32683,7 @@ end
 
             local filter = {}
             local target = hide_manager["walls_target"] or ragebot_target
-            local extras = {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")}
+            local extras = {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored"), hide_manager["hitbox_box"]}
 
             for _, instance in extras do
                 filter[#filter+1] = instance
@@ -32746,7 +32747,7 @@ end
             local filter = {}
             local target = hide_manager["walls_target"] or ragebot_target
 
-            for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")} do
+            for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored"), hide_manager["hitbox_box"]} do
                 filter[#filter+1] = instance
             end
 
@@ -32766,7 +32767,7 @@ end
             local filter = {}
             local target = hide_manager["walls_target"] or ragebot_target
 
-            for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored")} do
+            for _, instance in {local_character, target and target[3], find_first_child(workspace, "Bush"), find_first_child(workspace, "Ignored"), hide_manager["hitbox_box"]} do
                 filter[#filter+1] = instance
             end
 
@@ -34737,7 +34738,7 @@ end
         move_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
 
         local follow_move_params = function(character)
-            move_params["FilterDescendantsInstances"] = {character, ignored}
+            move_params["FilterDescendantsInstances"] = {character, ignored, hide_manager["hitbox_box"]}
             return move_params
         end
 
@@ -38781,7 +38782,7 @@ local get_silent_aim_position = nil
                     if legitbot_untarget_when_not_visible then
                         local distance = hrp_position-camera_pos
 
-                        params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles}
+                        params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]}
                         blocked = raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) ~= nil
 
                         if blocked then
@@ -38826,7 +38827,7 @@ local get_silent_aim_position = nil
                             if blocked == nil then
                                 local distance = hrp_position-camera_pos
 
-                                params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles}
+                                params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]}
                                 blocked = raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) ~= nil
                             end
 
@@ -38905,7 +38906,7 @@ local get_silent_aim_position = nil
             if legitbot_ignore_if_not_visible then
                 local distance = target[4]-camera_pos
 
-                params["FilterDescendantsInstances"] = {target[1][3], local_character, ignored, bush, vehicles}
+                params["FilterDescendantsInstances"] = {target[1][3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]}
 
                 if raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) then
                     continue
@@ -39640,7 +39641,7 @@ local get_silent_aim_position = nil
         end
 
         local filter = {}
-        for _, instance in {local_character, ignored, bush, vehicles} do
+        for _, instance in {local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]} do
             filter[#filter+1] = instance
         end
 
@@ -40034,7 +40035,7 @@ local get_silent_aim_position = nil
                 if not data[7] and not data[18] and not hide_manager["is_protected"](data) and target_hrp then
                     local max = (triggerbot_max_distance == 0 and (local_gun or 250) or triggerbot_max_distance)
                     if triggerbot_max_distance == 2500 or (hrp["Position"]-target_hrp["Position"])["Magnitude"] <= max then
-                        local ignore = {local_character, ignored, bush, vehicles, data[13]}
+                        local ignore = {local_character, ignored, bush, vehicles, data[13], hide_manager["hitbox_box"]}
 
                         for name, part in parts do
                             if part["ClassName"] == "Accessory" then
@@ -40320,9 +40321,11 @@ do
     -- Measured on a test account (shots claiming a hit beside the part): the server takes a claim up to 25 studs from the Head or the root part (Head:
     -- 0, 15, 22, 25 taken, 46 damage; root: 26, 27, 28 refused), and the box's corner is 24 * sqrt(3) / 2 = 20.8 studs out. The Head and not the root
     -- part: a bigger root part takes the shots meant for the head (23 damage instead of 46).
-    -- The box is its own anchored part (VisionsHitbox, inside the Head, moved onto it every frame). The first version resized the real Head, which made
-    -- it the heaviest part of the character (assembly mass 9,656), so this client took it as the character's root and stopped moving the character
-    -- with what the server sent: the target froze on screen while it moved on the server, and every shot went at the frozen copy.
+    -- The box is its own anchored part (VisionsHitbox) moved onto the head every frame, kept in the camera (on this client only) and not in the
+    -- character: a highlight on the character (chams) draws every part inside it, invisible ones too, which showed the box as a huge blue cube. The
+    -- remote hook and the Range Enhancer map it back to the head (hide_manager.hitbox_head); the script's own line checks leave it out. The first
+    -- version resized the real Head, which made it the heaviest part of the character (assembly mass 9,656), so this client took it as the
+    -- character's root and stopped moving the character with what the server sent: the target froze on screen and every shot went at the copy.
     do
         local HITBOX_SIZE = 24
         local box = nil
@@ -40334,6 +40337,7 @@ do
             end
 
             box, box_head = nil, nil
+            hide_manager["hitbox_box"], hide_manager["hitbox_head"] = nil, nil
         end
 
         hide_manager["hitbox_restore"] = remove_box
@@ -40350,7 +40354,7 @@ do
                 return
             end
 
-            if box_head ~= head or not box or box["Parent"] ~= head then
+            if box_head ~= head or not box or box["Parent"] ~= camera then
                 remove_box()
 
                 local part = Instance["new"]("Part")
@@ -40364,9 +40368,10 @@ do
                 part["CastShadow"] = false
                 part["Size"] = vector3_new(HITBOX_SIZE, HITBOX_SIZE, HITBOX_SIZE)
                 part["CFrame"] = head["CFrame"]
-                part["Parent"] = head
+                part["Parent"] = camera
 
                 box, box_head = part, head
+                hide_manager["hitbox_box"], hide_manager["hitbox_head"] = part, head
             end
 
             box["CFrame"] = head["CFrame"]
