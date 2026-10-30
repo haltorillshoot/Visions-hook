@@ -6414,6 +6414,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["ue_resolver_lerp"] = {"ue_resolver_lerp", "ue_resolver_lerp"},
 	["resolver_type"] = {"resolver_type", "resolver_type", "list"},
 	["resolver_rate"] = {"resolver_rate", "resolver_rate"},
+	["prediction_strength"] = {"prediction_strength", "prediction_strength"},
 	["void_spam_resolver_position_weight"] = {"void_spam_resolver_position_weight", "void_spam_resolver_position_weight"},
 	["void_spam_resolver_forget_rate"] = {"void_spam_resolver_forget_rate", "void_spam_resolver_forget_rate"},
 	["void_spam_resolver_void_weight"] = {"void_spam_resolver_void_weight", "void_spam_resolver_void_weight"},
@@ -10680,7 +10681,9 @@ function Session.buildSettingsPanels(rows)
 	resolverRateRow:SetVisible(false)
 	-- Where the target's velocity comes from: its position change between two reads (delta), the way its humanoid is walking or the way its body faces
 	-- (both times its walk speed), or nothing at all (no lead).
-	panelList(predictionPanel, "Velocity Source", "velocity_source", { "delta", "estimator", "move direction", "look vector", "none" }, "delta")
+	panelList(predictionPanel, "Velocity Source", "velocity_source", { "delta", "velocity", "estimator", "move direction", "look vector", "none" }, "delta")
+	-- How much of the worked-out lead is used: under 100% for targets that keep turning back, over it for fast flyers the shots trail
+	panelSlider(predictionPanel, "Strength", "prediction_strength", 50, 200, 0, "%", 100)
 
 	-- Void hide --
 	local voidHide = rows.voidHide:AddOption()
@@ -13493,6 +13496,17 @@ do
 
 			if not (hit and root and handle and ammo and remote) or tool.Name == "[Knife]" or (tonumber(ammo.Value) or 0) <= 0 then
 				return
+			end
+
+			-- Past the gun's Range (+ 15 with the Range Enhancer) the server refuses the shot every time (the engine's auto fire holds such a gun
+			-- too); for a shotgun every refused call also counts against its SecurityTolerance.
+			local range = tool:FindFirstChild("Range")
+			if range and hit.position then
+				local api = sharedEnv.neverlose
+				local enhanced = api and api.get_flag and api.get_flag("range_enhancer") == true
+				if (hit.position - root.Position).Magnitude > range.Value + (enhanced and 15 or 0) then
+					return
+				end
 			end
 
 			-- Paced like the engine's own shots: only when the gun is due again at the server (the engine's gun_due, which also sees the engine's
@@ -18056,6 +18070,26 @@ do
     -- shots were accepted by the server but never landed. Once a newer run exists this one just hands the call on.
     local hook_generation = getgenv()["neverlose_bypass_generation"]
 
+    -- Double Tap on a shot the gun's own script sent with no ragebot target (a click, Full Auto): the same call once more, a frame later, for the
+    -- server to hold behind it (hide_manager.salvo_extra). Only after the first has gone: a method call before old_namecall would replace the
+    -- namecall method. The copy comes back through the hook from an executor thread and goes out as it is.
+    local send_manual_salvo = function(remote, ...)
+        local call = table.pack(...)
+        local salvo_extra = hide_manager["salvo_extra"]
+
+        if not salvo_extra or not salvo_extra(call[2], true) then
+            return
+        end
+
+        task["defer"](function()
+            hide_manager["salvo_busy"] = true
+            pcall(function()
+                remote:FireServer(unpack(call, 1, call["n"]))
+            end)
+            hide_manager["salvo_busy"] = false
+        end)
+    end
+
     local new = {
         -- the work on the FireServer calls this run handles (the wrapper below the table decides which calls get here, and sets the identity)
         ["__namecall"] = LPH_JIT_MAX(function(self, ...)
@@ -18190,7 +18224,8 @@ do
                         -- +0.03 s and the second 1.29 s later (twice), and two plain calls in a frame did the same (+0.05 s, +1.35 s).
                         local salvo_extra = hide_manager["salvo_extra"]
 
-                        if salvo_extra and salvo_extra(handle) then
+                        -- (the gun's own shot, a click, may pair the Revolver too; the ragebot's forged one may not)
+                        if salvo_extra and salvo_extra(handle, not checkcaller()) then
                             local remote = self
 
                             local salvo_delay = getgenv()["neverlose_salvo_delay"] or 0
@@ -18231,6 +18266,11 @@ do
                             hide_manager["last_claim"] = {rebuilt[2], clock(), claim_tool ~= nil and hide_manager["pellets_of"] ~= nil and hide_manager["pellets_of"](claim_tool) > 1}
                             getgenv()["neverlose_last_claim"] = hide_manager["last_claim"]
                             spawn(get_bullet_result, rebuilt[5], rebuilt[3])
+
+                            if not checkcaller() then
+                                send_manual_salvo(self, "ShootGun", args[2], rebuilt[1], rebuilt[2], rebuilt[3], rebuilt[4], unpack(args, 7))
+                            end
+
                             return first
                         end
                     end
@@ -18269,14 +18309,20 @@ do
                             local found_model = found_part and found_part["Parent"]
                             local owner = found_model and find_first_child_of_class(found_model, "Humanoid") and players_service["GetPlayerFromCharacter"](players_service, found_model)
 
-                            if owner and owner ~= local_player then
+                            -- The expanded head reaches 12 studs past the head itself: a head past the Range + 15 the server takes is not a shot worth
+                            -- redirecting to (it was refused, and the gun's own hit was lost with it).
+                            local within_server_reach = found_part ~= nil and (found_part["Position"] - shot_origin)["Magnitude"] <= range_value["Value"] + 15
+
+                            if owner and owner ~= local_player and within_server_reach then
                                 -- from the part's own centre: a ray that met the expanded head stopped up to 21 studs from it, and the pull back on top
                                 -- of that would pass the 25 studs the server takes
                                 local claim = hide_manager["range_enhance"](shot_origin, found_part["Position"], range_value["Value"], true)
                                 args[4] = claim
                                 args[5] = found_part
                                 args[6] = (shot_origin - claim)["Unit"]
-                                return old_namecall(self, unpack(args))
+                                old_namecall(self, unpack(args))
+                                send_manual_salvo(self, unpack(args))
+                                return
                             end
                         end
                     end
@@ -18302,7 +18348,13 @@ do
                                     end
 
                                     spawn(get_bullet_result, player, part)
-                                    return old_namecall(self, unpack(args, 1, select("#", ...)))
+                                    old_namecall(self, unpack(args, 1, select("#", ...)))
+
+                                    if not checkcaller() then
+                                        send_manual_salvo(self, unpack(args, 1, select("#", ...)))
+                                    end
+
+                                    return
                                 end
 
                                 spawn(get_bullet_result, player, part)
@@ -18313,7 +18365,20 @@ do
                     -- The box was put in for the Head above: the call goes out with that swap, not with the box itself (a part only this client has,
                     -- which reached the server as nothing, so the shot never landed). The count keeps trailing nils.
                     if box_swapped then
-                        return old_namecall(self, unpack(args, 1, select("#", ...)))
+                        old_namecall(self, unpack(args, 1, select("#", ...)))
+
+                        if not checkcaller() then
+                            send_manual_salvo(self, unpack(args, 1, select("#", ...)))
+                        end
+
+                        return
+                    end
+
+                    -- the gun's own shot as it is (Double Tap pairs it on a click)
+                    if not checkcaller() then
+                        old_namecall(self, ...)
+                        send_manual_salvo(self, ...)
+                        return
                     end
                 elseif packet == "UpdateCursorImage" and flags["unlock_custom_crosshair"] then
                     local value = args[2]
@@ -32537,7 +32602,8 @@ end
         menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 2000, ["min_text"] = "off", ["max_text"] = "auto", ["suffix"] = "%", ["decimals"] = 2}})
         menu_references["prediction_settings"] = menu_references["prediction"]:create_settings()
         menu_references["resolver_rate"] = menu_references["prediction_settings"]:create_element({["name"] = "resolver rate"}, {["slider"] = {["flag"] = "resolver_rate", ["min"] = 0, ["suffix"] = "s", ["max"] = 0.1, ["default"] = 0.043, ["decimals"] = 4}})
-        menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "estimator", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["prediction_strength"] = menu_references["prediction_settings"]:create_element({["name"] = "strength"}, {["slider"] = {["flag"] = "prediction_strength", ["min"] = 50, ["suffix"] = "%", ["max"] = 200, ["default"] = 100}})
+        menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "velocity", "estimator", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["shot_delay"] = menu_references["general_section"]:create_element({["name"] = "shot delay"}, {["slider"] = {["flag"] = "shot_delay", ["min"] = 0, ["max"] = 1000, ["suffix"] = "ms", ["default"] = 0, ["min_text"] = "none"}})
         menu_references["ragebot_field_of_view"] = menu_references["general_section"]:create_element({["name"] = "field of view"}, {["slider"] = {["flag"] = "ragebot_field_of_view", ["min"] = 5, ["max"] = 180, ["suffix"] = "°", ["default"] = 180, ["max_text"] = "full"}})
         menu_references["fire_cooldown"] = menu_references["general_section"]:create_element({["name"] = "fire cooldown"}, {["slider"] = {["flag"] = "fire_cooldown", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 0.001, ["decimals"] = 3, ["min_text"] = "none"}})
@@ -32918,8 +32984,14 @@ end
     -- sent 0.016, 0.1 or 0.3 s later it was not held. The call has to go out after the shot (see the remote hook).
     hide_manager["salvo_sent"] = setmetatable({}, {["__mode"] = "k"})
     hide_manager["salvo_until"] = setmetatable({}, {["__mode"] = "k"})
+    -- when the last pair went out, per gun: the gun's next shot waits for the held one (hide_manager.gun_due)
+    hide_manager["salvo_pair_at"] = setmetatable({}, {["__mode"] = "k"})
 
-    hide_manager["salvo_extra"] = function(handle)
+    -- Fast guns that still take a held shot when it is the player's own (a click or Full Auto, `manual`): the Revolver (0.2 s cooldown). The ragebot
+    -- already sends it on every server window, so a pair there only adds a refused call; on a click the second shot comes 0.21 s later on its own.
+    local salvo_manual_guns = {["[Revolver]"] = true}
+
+    hide_manager["salvo_extra"] = function(handle, manual)
         if flags["auto_fire_salvo"] ~= true or hide_manager["salvo_busy"] == true or typeof(handle) ~= "Instance" then
             return false
         end
@@ -32932,8 +33004,9 @@ end
 
         local cooldown = find_first_child(tool, "ShootingCooldown")
         local ammo = find_first_child(tool, "Ammo")
+        local fast_ok = manual == true and salvo_manual_guns[tool["Name"]] == true
 
-        if not cooldown or cooldown["Value"] < 0.25 or not ammo or ammo["Value"] < 2 then
+        if not cooldown or (cooldown["Value"] < 0.25 and not fast_ok) or not ammo or ammo["Value"] < 2 then
             return false
         end
 
@@ -32947,6 +33020,7 @@ end
 
         hide_manager["salvo_sent"][tool] = now
         hide_manager["salvo_until"][tool] = now + cooldown["Value"] + 0.3 + local_ping/1000
+        hide_manager["salvo_pair_at"][tool] = now
 
         return true
     end
@@ -35129,7 +35203,35 @@ end
         local walk_speed = humanoid and humanoid["WalkSpeed"] or 16
 
         if source == "move direction" then
-            return humanoid and humanoid["MoveDirection"] * walk_speed or nil
+            -- A target moved by a script (MoveTo) shows no MoveDirection here at all: the position delta read above stands.
+            local move_direction = humanoid and humanoid["MoveDirection"]
+
+            if not move_direction or move_direction["Magnitude"] < 0.01 then
+                return nil
+            end
+
+            -- The way is the target's own input (it turns before the body does); the speed is the body's own. Against a live player's next 0.1 s
+            -- this was 5.4 studs/s off on average, MoveDirection times WalkSpeed 8.5 (WalkSpeed reads 16 whatever the body does).
+            local body_velocity = torso["AssemblyLinearVelocity"]
+            local flat_speed = (body_velocity * vector3_new(1, 0, 1))["Magnitude"]
+
+            -- faster than anyone runs: a faked velocity (velocity desync), the position delta stands
+            if flat_speed ~= flat_speed or flat_speed > 80 then
+                return nil
+            end
+
+            return move_direction["Unit"] * flat_speed
+        elseif source == "velocity" then
+            -- The body's replicated velocity: the closest of the sources to a live player's next 0.1 s (3.7 studs/s off on average; delta 5.0,
+            -- move direction 5.4). A faked one (velocity desync, faster than anyone runs) leaves the position delta standing.
+            local body_velocity = torso["AssemblyLinearVelocity"]
+            local speed = body_velocity["Magnitude"]
+
+            if speed ~= speed or speed > 80 then
+                return nil
+            end
+
+            return body_velocity
         elseif source == "look vector" then
             return torso["CFrame"]["LookVector"] * walk_speed
         end
@@ -35345,7 +35447,9 @@ end
                         factor = local_ping/500
                     end
 
-                    local raw = velocity*factor
+                    -- Prediction Strength (100% = as worked out): the share of that lead which is used
+                    local strength = tonumber(flags["prediction_strength"]) or 100
+                    local raw = velocity*factor*(strength/100)
                     local lead_length = raw["Magnitude"]
 
                     -- The lead is capped, so a bad velocity sample can never throw the aim far away from the target.
@@ -35493,6 +35597,11 @@ end
                     end
                 end
 
+                -- the Range Enhancer's 15 studs count as reach too
+                if fire_reach and hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() then
+                    fire_reach += 15
+                end
+
                 if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= fire_reach) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
                     local delay = follow_burst and 0 or flags["shot_delay"]
                     local stale = false
@@ -35638,6 +35747,14 @@ end
                             if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and candidate[2] then
                                 local away = (ragebot_aim_position - local_server_position)["Magnitude"]
                                 within_reach = away == away and away <= candidate[2] + 50
+                            elseif candidate[2] then
+                                -- Server reach: a target past the gun's Range (+ 15 with the Range Enhancer, hide_manager.range_enhance) is refused every
+                                -- time (measured: Revolver at 226 studs, 21 sends, none taken), and each refused send restarted the gun's wait, so the
+                                -- first shot once the target came back in reach was late by up to a cooldown. Such a gun now waits and another one that
+                                -- reaches goes. No margin: a send at 217 studs with the Revolver was refused and held the next one back a cooldown.
+                                local away = (ragebot_aim_position - local_server_position)["Magnitude"]
+                                local reach = candidate[2] + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() and 15 or 0)
+                                within_reach = away ~= away or away <= reach
                             end
 
                             if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
@@ -37239,6 +37356,14 @@ end
             local wait_time = cooldown and tonumber(cooldown["Value"]) or 0
             local last = math.max(tool:GetAttribute("LocalLastShotAt") or -math.huge, hide_manager["gun_fired_at"] and hide_manager["gun_fired_at"][tool] or -math.huge)
             local margin = tool:GetAttribute("SecurityTolerance") ~= nil and 0.0095 or 0.0015
+
+            -- Double Tap: the server fires the held half of a pair one cooldown after the first, so the next shot waits a second cooldown (sent
+            -- earlier it lands on the held one and is refused)
+            local pair_at = hide_manager["salvo_pair_at"] and hide_manager["salvo_pair_at"][tool]
+
+            if pair_at and pair_at >= last - 0.02 and clock() - pair_at < wait_time * 2 + margin then
+                return false
+            end
 
             return clock() - last >= wait_time + margin
         end
@@ -42496,10 +42621,12 @@ do
         local_fps = 1/math.max(frame_time - last_fps, 1e-4)
         last_fps = frame_time
 
-        if clock()-last_ping_check > 2 then
+        -- The ping is read every half second and averaged over the last 3 s (it used to be every 2 s over 20 s, so the prediction's lead and the
+        -- shot waits kept a ping spike's value, or missed it, for a long while).
+        if clock()-last_ping_check > 0.5 then
             last_ping_check = clock()
 
-            if #ping_data >= 10 then
+            if #ping_data >= 6 then
                 remove(ping_data, 1)
             end
 
