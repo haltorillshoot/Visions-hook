@@ -1070,10 +1070,16 @@ do
 
     local missing = {}
 
+    -- Paths that could not be fetched earlier in this executor session are not asked for again on a re-execute: a file gone from the repo
+    -- cost a request and a "Downloading" notification on every run.
+    local asset_env = (type(getgenv) == "function" and getgenv()) or _G
+    local misses = type(asset_env["visions_asset_misses"]) == "table" and asset_env["visions_asset_misses"] or {}
+    asset_env["visions_asset_misses"] = misses
+
     for _, path in ASSET_FILES do
         local ok, exists = pcall(isfile, path)
 
-        if not (ok and exists) then
+        if not (ok and exists) and not misses[path] then
             missing[#missing+1] = path
         end
     end
@@ -1088,42 +1094,59 @@ do
         notify("Downloading "..#missing.." asset"..(#missing == 1 and "" or "s").."...", 4)
 
         local requester = (syn and syn["request"]) or http_request or request
-        local fetched = 0
+        local fetched, finished = 0, 0
 
+        -- The files are fetched side by side, one thread each, and the load waits for all of them (20 s at most). A first run waited for
+        -- 31 requests one after another. Each thread makes its folders before its first request yields, so two threads never race on one.
         for _, path in missing do
-            pcall(function()
-                local folder = path:match("^(.*)/[^/]+$")
+            task.spawn(function()
+                local ok_fetch, written = pcall(function()
+                    local folder = path:match("^(.*)/[^/]+$")
 
-                if folder then
-                    local built = nil
+                    if folder then
+                        local built = nil
 
-                    for part in folder:gmatch("[^/]+") do
-                        built = built and (built.."/"..part) or part
+                        for part in folder:gmatch("[^/]+") do
+                            built = built and (built.."/"..part) or part
 
-                        if not isfolder(built) then
-                            makefolder(built)
+                            if not isfolder(built) then
+                                makefolder(built)
+                            end
                         end
                     end
-                end
 
-                local url = ASSET_BASE..(path:gsub(" ", "%%20"))
-                local body = nil
+                    local url = ASSET_BASE..(path:gsub(" ", "%%20"))
+                    local body = nil
 
-                if requester then
-                    local response = requester({Url = url, Method = "GET"})
+                    if requester then
+                        local response = requester({Url = url, Method = "GET"})
 
-                    if response and (response.StatusCode == 200 or (response.StatusCode == nil and response.Success)) then
-                        body = response.Body
+                        if response and (response.StatusCode == 200 or (response.StatusCode == nil and response.Success)) then
+                            body = response.Body
+                        end
+                    else
+                        body = game:HttpGet(url)
                     end
-                else
-                    body = game:HttpGet(url)
-                end
 
-                if type(body) == "string" and #body > 0 and body ~= "404: Not Found" then
-                    writefile(path, body)
-                    fetched += 1
+                    if type(body) == "string" and #body > 0 and body ~= "404: Not Found" then
+                        writefile(path, body)
+                        fetched += 1
+                        return true
+                    end
+
+                    return false
+                end)
+
+                if not (ok_fetch and written) then
+                    misses[path] = true
                 end
+                finished += 1
             end)
+        end
+
+        local deadline = os.clock() + 20
+        while finished < #missing and os.clock() < deadline do
+            task.wait(0.05)
         end
 
         notify(fetched == #missing and ("Assets ready ("..fetched..")") or ("Assets: "..fetched.." of "..#missing.." downloaded"), 5)
@@ -1609,15 +1632,91 @@ pop_menu = _G.pop_menu
 if type(getgenv) == "function" then
     getgenv()["neverlose"] = getgenv()["neverlose"] or {}
     getgenv()["neverlose"]["get_flags"] = function() return flags end
+    -- The engine element that owns a flag, and which of its controls it is ("toggle", "slider", "color", "transparency", ...).
+    -- menu_references is keyed by element name, not by flag, so the records of every engine section (gear settings included) are searched.
+    local signal_of_kind = {
+        toggle = "on_toggle_change", slider = "on_slider_change", dropdown = "on_dropdown_change", keybind = "on_keybind_change",
+        textbox = "on_textbox_change", color = "on_color_change", transparency = "on_transparency_change",
+    }
+    local function find_flag_owner(name)
+        local function scan(items)
+            for _, record in ipairs(type(items) == "table" and items or {}) do
+                local def = type(record) == "table" and record.def
+                if type(def) == "table" and record.stub then
+                    for _, kind in ipairs({ "toggle", "slider", "dropdown", "keybind", "textbox", "color" }) do
+                        if type(def[kind]) == "table" and def[kind].flag == name then
+                            return record.stub, kind
+                        end
+                    end
+                    local picker = def.colorpicker
+                    if type(picker) == "table" then
+                        if picker.color_flag == name then return record.stub, "color" end
+                        if picker.transparency_flag == name then return record.stub, "transparency" end
+                    end
+                    local settings = rawget(record.stub, "_settings")
+                    if settings then
+                        local stub, kind = scan(rawget(settings, "_items"))
+                        if stub then return stub, kind end
+                    end
+                end
+            end
+            return nil
+        end
+
+        local ui = _G.NL_ENGINE_UI
+        if type(ui) ~= "table" then
+            return nil
+        end
+        for _, section in ipairs(ui.sections or {}) do
+            local stub, kind = scan(section.stub and rawget(section.stub, "_items"))
+            if stub then return stub, kind end
+        end
+        for _, panel in pairs(ui.panels or {}) do
+            local stub, kind = scan(rawget(panel, "_items"))
+            if stub then return stub, kind end
+        end
+        return nil
+    end
+
     getgenv()["neverlose"]["set_flag"] = function(name, value)
+        -- The menu row of an engine flag is the Lib flag "e_<flag>". Its SetValue runs the row's callback, which writes the flag and fires
+        -- the engine's listener, so the row, the Visions look and the saved config all keep the new value instead of the old one coming back.
+        local session = getgenv()["__NeverLoseMenuSession"]
+        local lib = type(session) == "table" and session.Alive and session.Lib
+        local row = lib and type(lib.Flags) == "table" and lib.Flags["e_" .. tostring(name)]
+        -- a row of the menu's own (Rage, Legit...) mapped to this flag, for a toggle or slider value
+        if not row and lib and type(lib.Flags) == "table" and (type(value) == "boolean" or type(value) == "number") and type(session.NativeFlagFor) == "table" then
+            local native = session.NativeFlagFor[name]
+            row = native and lib.Flags[native]
+        end
+        if type(row) == "table" and type(row.SetValue) == "function" and pcall(row.SetValue, row, value) then
+            return
+        end
+
         flags[name] = value
+
+        -- No row: only the owner's own kind of signal is fired (a colour listener no longer gets a toggle's boolean).
+        local stub, kind = find_flag_owner(name)
+        if stub then
+            local sig = stub[signal_of_kind[kind]]
+            if sig and sig.Fire then pcall(sig.Fire, sig, value) end
+            if kind == "toggle" then
+                local mirror = rawget(stub, "_ui_toggle")
+                if mirror then pcall(mirror, value) end
+            end
+            return
+        end
+
+        -- Older callers pass an element name (menu_references key): its signals are picked by the type of the value.
         local el = menu_references[name]
-        if el then
-            if el.on_toggle_change then el.on_toggle_change:Fire(value) end
-            if el.on_slider_change then el.on_slider_change:Fire(value) end
-            if el.on_dropdown_change then el.on_dropdown_change:Fire(value) end
-            if el.on_keybind_change then el.on_keybind_change:Fire(value) end
-            if el.on_color_change then el.on_color_change:Fire(value) end
+        if type(el) == "table" then
+            local names = typeof(value) == "Color3" and { "on_color_change" }
+                or type(value) == "boolean" and { "on_toggle_change" }
+                or { "on_slider_change", "on_dropdown_change", "on_keybind_change" }
+            for _, signal_name in ipairs(names) do
+                local sig = el[signal_name]
+                if sig and sig.Fire then pcall(sig.Fire, sig, value) end
+            end
         end
     end
     getgenv()["neverlose"]["get_flag"] = function(name) return flags[name] end
@@ -1964,14 +2063,27 @@ local function createJujuLib()
 	-- one connection per slider running its check on every mouse move.
 	local draggers = {}
 	local draggerConnection = nil
+	local draggerEndConnection = nil
 
-	local function setDragger(handler, held)
-		draggers[handler] = held and true or nil
+	-- onEnded (optional) is the control's handler for letting go: it runs from one shared InputEnded connection, and only while the
+	-- control is held, instead of one InputEnded connection per control.
+	local function setDragger(handler, held, onEnded)
+		draggers[handler] = held and (onEnded or true) or nil
 
 		if held and not draggerConnection then
 			draggerConnection = bind(UserInputService.InputChanged, function(input)
 				for dragHandler in pairs(draggers) do
 					dragHandler(input)
+				end
+			end)
+		end
+
+		if held and onEnded and not draggerEndConnection then
+			draggerEndConnection = bind(UserInputService.InputEnded, function(input)
+				for _, ended in pairs(draggers) do
+					if ended ~= true then
+						ended(input)
+					end
 				end
 			end)
 		end
@@ -2467,19 +2579,19 @@ local function createJujuLib()
 				end
 			end
 
-			bar.InputBegan:Connect(function(input)
-				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-					holding = true
-					setDragger(onDrag, true)
-					closeOverlay()
-					fromInput(input)
-				end
-			end)
-
-			bind(UserInputService.InputEnded, function(input)
+			local function onRelease(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					holding = false
 					setDragger(onDrag, false)
+				end
+			end
+
+			bar.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					holding = true
+					setDragger(onDrag, true, onRelease)
+					closeOverlay()
+					fromInput(input)
 				end
 			end)
 
@@ -3149,16 +3261,33 @@ local function createJujuLib()
 				if alphaHolder then
 					alphaHolder.InputBegan:Connect(drag)
 				end
-				bind(UserInputService.InputChanged, function(input)
+
+				-- The mouse is followed through the shared dragger, and only while the square, the hue bar or the opacity bar is held,
+				-- instead of two connections per colour picker that ran on every mouse move.
+				local function follow(input)
 					if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
 						drag(input)
 					end
-				end)
-				bind(UserInputService.InputEnded, function(input)
+				end
+
+				local function release(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 then
 						dragging = nil
+						setDragger(follow, false)
 					end
-				end)
+				end
+
+				local function press(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 then
+						setDragger(follow, true, release)
+					end
+				end
+
+				square.InputBegan:Connect(press)
+				hueBar.InputBegan:Connect(press)
+				if alphaHolder then
+					alphaHolder.InputBegan:Connect(press)
+				end
 
 				apply(false)
 			end
@@ -3847,6 +3976,22 @@ local function createJujuLib()
 			end
 		end
 
+		-- A tab's Signal says its page is on screen (the Player List and Skins pages listen to it). Lib.ApplyMenuStyle calls this: once the menu
+		-- is closed (or held) every tab hears it is hidden, and with the classic window back the tab in front hears it is shown again. The
+		-- Visions look tells the tabs it borrows panels from through PlaceBorrows.
+		function window.TellTabs(open, classicShown)
+			if open and not classicShown then
+				return
+			end
+
+			for _, tab in ipairs(tabs) do
+				local on = (classicShown and tab == selected) or false
+				if tab.Signal:GetValue() ~= on then
+					tab.Signal:Fire(on)
+				end
+			end
+		end
+
 		function window:ToggleInterface()
 			local open = not window.Signal:GetValue()
 			panel.Visible = open
@@ -4414,7 +4559,11 @@ local function createJujuLib()
 				if ok then
 					logger.new("", "Loaded Default Config", 3.5)
 				else
+					-- Nothing is in use until a config is loaded (as after Delete): the autosave and the unload save would otherwise write the
+					-- menu's defaults over the file within seconds, and the user's settings would be gone.
+					configState.Active = nil
 					warn("[Visions hook] The Default config could not be read: " .. tostring(err))
+					logger.new("", "The Default config could not be loaded, so it is not autosaved. Load it again or overwrite it from Config", 6)
 				end
 			end
 
@@ -4458,6 +4607,12 @@ local function createJujuLib()
 	function Lib:Unload()
 		closeOverlay()
 
+		-- the Visions look keeps its connections in a list of its own (buildVisions): they are cut here too, and a key it listens for ends
+		if Lib.CutVisions then
+			pcall(Lib.CutVisions)
+			Lib.CutVisions = nil
+		end
+
 		for _, connection in ipairs(connections) do
 			pcall(function()
 				connection:Disconnect()
@@ -4466,6 +4621,7 @@ local function createJujuLib()
 		table.clear(connections)
 		table.clear(draggers)
 		draggerConnection = nil
+		draggerEndConnection = nil
 		table.clear(captures)
 		Lib.KeyCaptures = 0
 
@@ -4599,6 +4755,50 @@ local function createJujuLib()
 		end
 
 		local V = { Syncs = {}, Tabs = {}, Count = 0 }
+
+		-- This drawing's connections are its own (V.Connections): a rebuild or an unload cuts them (V.Cut). Frame:Destroy alone left the
+		-- UserInputService ones running, each holding the old drawing, and every bind stayed in the menu's list. Every bind below is this one.
+		V.Connections = {}
+		V.Captures = {}
+
+		local function bind(signal, callback)
+			local connection = signal:Connect(callback)
+			table.insert(V.Connections, connection)
+			return connection
+		end
+
+		-- One InputChanged and one InputEnded connection serve every Visions control. A slider, colour picker or the window drag puts its
+		-- move handler in `held` (with its handler for letting go) while the button is down, so a mouse move only runs what is held right now.
+		local held = {}
+
+		local function hold(handler, on, onEnded)
+			held[handler] = on and onEnded or nil
+		end
+
+		bind(UserInputService.InputChanged, function(input)
+			for handler in pairs(held) do
+				handler(input)
+			end
+		end)
+		bind(UserInputService.InputEnded, function(input)
+			for _, ended in pairs(held) do
+				ended(input)
+			end
+		end)
+
+		function V.Cut()
+			for finish in pairs(V.Captures) do
+				pcall(finish)
+			end
+			for _, connection in ipairs(V.Connections) do
+				pcall(function()
+					connection:Disconnect()
+				end)
+			end
+			table.clear(V.Connections)
+			table.clear(held)
+		end
+		Lib.CutVisions = V.Cut
 
 		-- Panels a tab draws by itself (the Player List's list, the whole Skins browser) are not rows, so they cannot be drawn twice. They are
 		-- borrowed instead: while the Visions look is on screen with that tab open, the classic panel itself is moved into it (and that classic
@@ -4778,20 +4978,24 @@ local function createJujuLib()
 		do
 			local dragStart, startPos = nil, nil
 
-			bind((razor or top).InputBegan, function(input)
-				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-					dragStart, startPos = input.Position, frame.Position
-				end
-			end)
-			bind(UserInputService.InputChanged, function(input)
+			local function move(input)
 				if dragStart and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 					local delta = input.Position - dragStart
 					frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 				end
-			end)
-			bind(UserInputService.InputEnded, function(input)
+			end
+
+			local function stop(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragStart = nil
+					hold(move, false)
+				end
+			end
+
+			bind((razor or top).InputBegan, function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					dragStart, startPos = input.Position, frame.Position
+					hold(move, true, stop)
 				end
 			end)
 		end
@@ -4913,20 +5117,24 @@ local function createJujuLib()
 					draw(value)
 				end
 
-				bind(bar.InputBegan, function(input)
-					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-						holding = true
-						fromMouse(input.Position.X)
-					end
-				end)
-				bind(UserInputService.InputChanged, function(input)
+				local function move(input)
 					if holding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 						fromMouse(input.Position.X)
 					end
-				end)
-				bind(UserInputService.InputEnded, function(input)
+				end
+
+				local function stop(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 						holding = false
+						hold(move, false)
+					end
+				end
+
+				bind(bar.InputBegan, function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						holding = true
+						hold(move, true, stop)
+						fromMouse(input.Position.X)
 					end
 				end)
 
@@ -5071,6 +5279,30 @@ local function createJujuLib()
 					b.Text = "..."
 
 					local connection
+
+					-- Ends the listening, as the classic keybind does. Closing the menu or a tab switch (cancelCaptures), a rebuild of this
+					-- look or an unload (V.Cut) end it too, so the next key press is not taken by a row that is gone and the menu key works again.
+					local function finish()
+						if not capturing then
+							return
+						end
+
+						capturing = false
+						captures[finish] = nil
+						V.Captures[finish] = nil
+						if connection then
+							connection:Disconnect()
+						end
+						shown = nil
+
+						task.defer(function()
+							Lib.KeyCaptures = math.max(Lib.KeyCaptures - 1, 0)
+						end)
+					end
+
+					captures[finish] = true
+					V.Captures[finish] = true
+
 					connection = UserInputService.InputBegan:Connect(function(input)
 						local value = nil
 
@@ -5083,11 +5315,7 @@ local function createJujuLib()
 						end
 
 						if value then
-							connection:Disconnect()
-							capturing = false
-							task.defer(function()
-								Lib.KeyCaptures = math.max(Lib.KeyCaptures - 1, 0)
-							end)
+							finish()
 
 							local blocked = false
 							for _, name in ipairs(type(config.Blacklist) == "table" and config.Blacklist or {}) do
@@ -5190,26 +5418,31 @@ local function createJujuLib()
 					send()
 				end
 
+				local function move(input)
+					if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+						dragTo(input.Position)
+					end
+				end
+
+				local function stop(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = nil
+						hold(move, false)
+					end
+				end
+
 				bind(square.InputBegan, function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 						dragging = "square"
+						hold(move, true, stop)
 						dragTo(input.Position)
 					end
 				end)
 				bind(hueBar.InputBegan, function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 						dragging = "hue"
+						hold(move, true, stop)
 						dragTo(input.Position)
-					end
-				end)
-				bind(UserInputService.InputChanged, function(input)
-					if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-						dragTo(input.Position)
-					end
-				end)
-				bind(UserInputService.InputEnded, function(input)
-					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-						dragging = nil
 					end
 				end)
 
@@ -5442,6 +5675,8 @@ local function createJujuLib()
 			end
 			current = entry
 			Lib.VisionsSelected = entry.Record.Name
+			-- a key being listened for ends with the tab switch, as in the classic menu
+			cancelCaptures()
 			entry.Page.Visible = true
 			vtween(entry.Button, { TextColor3 = T.Text })
 			vtween(entry.Underline, { Size = UDim2.new(0.8, 0, 0, 2) })
@@ -5690,6 +5925,8 @@ local function createJujuLib()
 				if fresh ~= visions.Shallow then
 					-- borrowed panels go home first, or they would be destroyed with the old drawing
 					pcall(visions.PlaceBorrows, nil)
+					-- its connections go with it (Destroy only cuts the frame's own signals)
+					pcall(visions.Cut)
 					visions.Frame:Destroy()
 					visions = nil
 				end
@@ -5708,6 +5945,10 @@ local function createJujuLib()
 					end
 					visions.Shallow = shallow
 				else
+					-- a build that failed half way still made connections
+					if Lib.CutVisions then
+						pcall(Lib.CutVisions)
+					end
 					warn("[Visions hook] The Visions look could not be built, the classic menu is shown: " .. tostring(built))
 					Lib.MenuStyle = "classic"
 					style = "classic"
@@ -5725,6 +5966,11 @@ local function createJujuLib()
 			elseif style == "classic" then
 				pcall(visions.PlaceBorrows, nil)
 			end
+		end
+
+		-- the tabs hear whether their page is on screen (a closed menu fired nothing, so the Player List kept refreshing every second)
+		if window.TellTabs then
+			pcall(window.TellTabs, open, window.Panel.Visible)
 		end
 	end
 	Lib.ApplyMenuStyle = applyMenuStyle
@@ -5805,7 +6051,8 @@ local function createJujuLib()
 		local keyConnection
 
 		local function pick(style)
-			if finished then
+			-- (nothing is picked once the menu was unloaded)
+			if finished or not gui then
 				return
 			end
 			finished = true
@@ -5869,7 +6116,8 @@ local function createJujuLib()
 			end
 		end)
 
-		keyConnection = UserInputService.InputBegan:Connect(function(input, processed)
+		-- bound, so an unload while the picker is up cuts it
+		keyConnection = bind(UserInputService.InputBegan, function(input, processed)
 			if processed then
 				return
 			end
@@ -5888,6 +6136,9 @@ local function createJujuLib()
 end
 
 NeverLose = createJujuLib()
+
+-- getgenv().neverlose.set_flag (near the top) moves the menu row of a flag through this
+Session.Lib = NeverLose
 
 -- Set before any UI is built, so Unload() takes everything down.
 NeverLose.UnloadEnabled = true
@@ -6045,14 +6296,9 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["quick_draw"] = {"quick_draw", "quick_draw"},
 	["ragebot_lead_fast"] = {"ragebot_lead_fast", "ragebot_lead_fast"},
 	["dt"] = {"rapid_fire", "rapid_fire"},
-	["rapid_fire_speed"] = {"rapid_fire_speed", "rapid_fire_speed"},
-	["rapid_fire_glory_patch"] = {"rapid_fire_glory_patch", "rapid_fire_glory_patch"},
-	["rapid_fire_hold"] = {"rapid_fire_hold", "rapid_fire_hold"},
-	["rapid_fire_delay"] = {"rapid_fire_delay", "rapid_fire_delay"},
-	["aa"] = {"fake_position", "fake_position"},
+	-- Rapid fire's own settings, Fake Position, Network Desync, Velocity Desync and Sender Rate Value have no menu row (the engine's anti
+	-- section is not built), so they keep the engine's defaults and have no row here either. Target Key and Target Players have callbacks of their own.
 	["resolver"] = {"auto_fire_defensive", "auto_fire_defensive"},
-	["target_key"] = {"target_selection_target_bind", "target_selection_target_bind"},
-	["target_players"] = {"target_players", "target_players"},
 	-- new ragebot features welded onto the femmyhac.cc engine
 	["safe_purchasing"] = {"safe_purchasing", "safe_purchasing"},
 	["auto_loadout"] = {"auto_loadout", "auto_loadout"},
@@ -6080,27 +6326,12 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["face_target"] = {"face_target", "face_target"},
 	["show_fov"] = {"ragebot_field_of_view_show_fov", "ragebot_field_of_view_show_fov"},
 	["tracer"] = {"ragebot_tracer", "ragebot_tracer"},
-	["sender_rate_value"] = {"sender_rate_value", "sender_rate_value"},
-	["network_desync"] = {"network_desync", "network_desync"},
-	["velocity_desync"] = {"velocity_desync", "velocity_desync"},
 	["void_hide"] = {"void_hide", "void_hide"},
 	-- gear-menu settings; the optional third field says how the menu value is shaped for the engine
 	["auto_equip_unequip_when"] = {"auto_equip_unequip_when", "auto_equip_unequip_when", "list"},
 	["auto_equip_gun"] = {"auto_equip_gun", "auto_equip_gun", "list"},
 	["auto_equip_prioritize_db"] = {"auto_equip_prioritize_db", "auto_equip_prioritize_db"},
 	["auto_equip_distance_check"] = {"auto_equip_distance_check", "auto_equip_distance_check"},
-	["sender_rate_value_type"] = {"sender_rate_value_type", "sender_rate_value_type", "list"},
-	["sender_rate_value_rate"] = {"sender_rate_value_rate", "sender_rate_value_rate"},
-	["velocity_desync_rotate"] = {"velocity_desync_rotate", "velocity_desync_rotate"},
-	["velocity_desync_disable_when"] = {"velocity_desync_disable_when", "velocity_desync_disable_when", "list"},
-	["velocity_desync_health"] = {"velocity_desync_health", "velocity_desync_health"},
-	["velocity_desync_type"] = {"velocity_desync_type", "velocity_desync_type", "list"},
-	["fake_position_indicator"] = {"fake_position_indicator", "fake_position_indicator"},
-	["fake_position_notifications"] = {"fake_position_notifications", "fake_position_notifications"},
-	["fake_position_safe_mode"] = {"fake_position_safe_mode", "fake_position_safe_mode"},
-	["refresh_every"] = {"refresh_every", "refresh_every"},
-	["fake_position_freeze_time"] = {"fake_position_freeze_time", "freeze_time"},
-	["sleep_rate"] = {"sleep_rate", "sleep_rate"},
 	["void_hide_type"] = {"void_hide_type", "void_hide_type", "list"},
 	["void_hide_bait_distance"] = {"void_hide_bait_distance", "void_hide_bait_distance"},
 	["void_hide_bait_cooldown"] = {"void_hide_bait_cooldown", "void_hide_bait_cooldown"},
@@ -6184,6 +6415,15 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["ragebot_tracer_end_point"] = {"ragebot_tracer_end_point", "ragebot_tracer_end_point", "list"},
 }
 
+-- The menu row (Lib flag) of an engine flag for the rows above whose value is the same on both sides (toggles and sliders), so the engine's
+-- set_flag can move the row too; list, colour and hitbox rows keep their own format and are left out.
+Session.NativeFlagFor = {}
+for menuFlag, map in pairs(NL_TO_NEVERLOSE_FLAG) do
+	if map[1] and map[3] == nil then
+		Session.NativeFlagFor[map[1]] = menuFlag
+	end
+end
+
 local function onChanged(name)
 	return function(value)
 		if DEBUG then
@@ -6215,6 +6455,9 @@ local function onChanged(name)
 			local head = false
 			if type(value) == "table" then
 				head = value.Head == true or table.find(value, "Head") ~= nil
+			else
+				-- a single-pick row (Head / Body) gives the name itself
+				head = value == "Head"
 			end
 			value = { head and "head" or "root" }
 		end
@@ -7247,15 +7490,15 @@ Session.Sorter = (function()
 			return
 		end
 
-		-- the order wanted: the slots first, then the rest (by kind, or as they are)
-		local order, used = {}, {}
+		-- the slots picked first, each at its own number, then the rest (by kind, or as they are) in the numbers left over
+		local placed, used = {}, {}
 		for slot = 1, sorter.SLOTS do
 			local name = sorter.slots[slot]
 			if name and name ~= NONE then
 				for _, tool in ipairs(tools) do
 					if not used[tool] and tool.Name == name then
 						used[tool] = true
-						table.insert(order, tool)
+						placed[slot] = tool
 						break
 					end
 				end
@@ -7278,21 +7521,33 @@ Session.Sorter = (function()
 				return a.index < b.index
 			end)
 		end
-		for _, entry in ipairs(rest) do
-			table.insert(order, entry.tool)
+		-- one slot a name (every food is one FOOD slot: the hotbar puts any food there), as many as the hotbar has. A picked slot keeps its
+		-- number even when a slot before it is "None" or names a tool not owned right now; the rest fill the numbers still free, in order.
+		local layout, named, taken = {}, {}, {}
+		for slot = 1, sorter.SLOTS do
+			local tool = placed[slot]
+			if tool and slot <= HOTBAR then
+				local name = slotName(tool)
+				if not named[name] then
+					named[name] = true
+					taken[slot] = true
+					layout[tostring(slot)] = name
+				end
+			end
 		end
-
-		-- one slot a name (every food is one FOOD slot: the hotbar puts any food there), as many as the hotbar has
-		local layout, named, count = {}, {}, 0
-		for _, tool in ipairs(order) do
-			local name = slotName(tool)
+		local free = 1
+		for _, entry in ipairs(rest) do
+			local name = slotName(entry.tool)
 			if not named[name] then
-				named[name] = true
-				count += 1
-				if count > HOTBAR then
+				while taken[free] do
+					free += 1
+				end
+				if free > HOTBAR then
 					break
 				end
-				layout[tostring(count)] = name
+				named[name] = true
+				taken[free] = true
+				layout[tostring(free)] = name
 			end
 		end
 
@@ -7302,14 +7557,20 @@ Session.Sorter = (function()
 			return
 		end
 
-		-- the same layout as the saved one: nothing to send
-		local okSaved, saved = pcall(HttpService.JSONDecode, HttpService, LocalPlayer:GetAttribute("HotbarLayout") or "[]")
+		-- the same layout as the saved one: nothing to send. Keys and names are compared as text, so a saved layout that comes back as a
+		-- JSON array (number keys) still matches.
+		local attribute = LocalPlayer:GetAttribute("HotbarLayout")
+		local okSaved, saved = pcall(HttpService.JSONDecode, HttpService, attribute or "[]")
 		if okSaved and type(saved) == "table" then
+			local savedByKey = {}
+			for key, value in pairs(saved) do
+				savedByKey[tostring(key)] = tostring(value)
+			end
 			local same = true
 			for key, value in pairs(layout) do
-				if saved[key] ~= value then same = false break end
+				if savedByKey[key] ~= value then same = false break end
 			end
-			for key in pairs(saved) do
+			for key in pairs(savedByKey) do
 				if layout[key] == nil then same = false break end
 			end
 			if same then
@@ -7317,11 +7578,33 @@ Session.Sorter = (function()
 			end
 		end
 
-		if os.clock() - lastSent < 1.5 then
-			sorter.request()
+		-- the layout sent last time again: while the attribute is still what it was then, or what the server made of it (in whatever shape it
+		-- keeps it), there is nothing new to send. A layout changed since (the game's own Save Layout) is sorted again, and Sort Now always sends.
+		if not manual and encoded == sorter.sentLayout then
+			if sorter.sentAnswer == nil and attribute ~= sorter.sentBefore then
+				sorter.sentAnswer = attribute
+			end
+			if attribute == sorter.sentBefore or attribute == sorter.sentAnswer then
+				return
+			end
+		end
+
+		local gap = 1.5 - (os.clock() - lastSent)
+		if gap > 0 then
+			if manual then
+				-- Sort Now waits out the gap itself: request() only sorts while the Auto Sorter is on, and never as a manual sort
+				task.delay(gap, function()
+					if Session.Alive then
+						pcall(sorter.sort, true)
+					end
+				end)
+			else
+				sorter.request()
+			end
 			return
 		end
 		lastSent = os.clock()
+		sorter.sentLayout, sorter.sentBefore, sorter.sentAnswer = encoded, attribute, nil
 
 		local remote = game:GetService("ReplicatedStorage"):FindFirstChild("MainEvent")
 		if remote then
@@ -7352,11 +7635,12 @@ Session.Sorter = (function()
 		end
 		sorter.bag = bag
 		if bag and sorter.enabled then
-			sorter.bagConnection = track(bag.ChildAdded:Connect(function(child)
+			-- (not tracked: one a spawn would pile up in Session.Connections; the cleanup below disconnects the last one)
+			sorter.bagConnection = bag.ChildAdded:Connect(function(child)
 				if not sorter.busy and child:IsA("Tool") then
 					sorter.request()
 				end
-			end))
+			end)
 			sorter.request()
 		end
 	end
@@ -7377,6 +7661,10 @@ Session.Sorter = (function()
 			watch(child)
 		end
 	end))
+
+	table.insert(Session.Cleanups, function()
+		watch(nil)
+	end)
 
 	return sorter
 end)()
@@ -7675,7 +7963,8 @@ KeybindList.Rebuild = function()
 		local okStates, states = pcall(semi.keyStates)
 		if okStates then
 			for _, item in ipairs(states) do
-				if showAll or (Session.Master.Active and item.On) then
+				-- (keyStates already reports every key as off while the master switch is on)
+				if showAll or (showToggled and item.On) then
 					table.insert(shown, item)
 				end
 			end
@@ -8948,33 +9237,63 @@ local function checkHit(player, character, damage, health)
 	end
 end
 
+-- One health watch a player (for the character they have now) and one spawn watch: a respawn replaces the old health watch and a player who
+-- leaves takes both along, so they don't pile up in Session.Connections or keep old characters alive. All of them go at unload.
+Session.HitWatch = {}
+
+function Session.dropHitWatch(player)
+	local watch = Session.HitWatch[player]
+	if watch then
+		Session.HitWatch[player] = nil
+		for _, connection in pairs(watch) do
+			pcall(connection.Disconnect, connection)
+		end
+	end
+end
+
 local function watchCharacter(player, character)
 	local humanoid = character:WaitForChild("Humanoid", 10)
-	if not (humanoid and Session.Alive) then
+	local watch = Session.HitWatch[player]
+	-- (a player who left, or a character a newer one replaced while its humanoid was awaited, is not watched)
+	if not (humanoid and Session.Alive and watch and player.Character == character) then
 		return
 	end
 
+	if watch.life then
+		pcall(watch.life.Disconnect, watch.life)
+	end
 	local lastHealth = humanoid.Health
-	track(humanoid.HealthChanged:Connect(function(health)
+	watch.life = humanoid.HealthChanged:Connect(function(health)
 		local damage = lastHealth - health
 		lastHealth = health
 		if Session.Alive and damage > 0 and anyHitVisual() then
 			checkHit(player, character, damage, health)
 		end
-	end))
+	end)
 end
 
 function watchPlayer(player)
 	if player == LocalPlayer then
 		return
 	end
+	Session.dropHitWatch(player)
+	local watch = {}
+	Session.HitWatch[player] = watch
 	if player.Character then
 		task.spawn(watchCharacter, player, player.Character)
 	end
-	track(player.CharacterAdded:Connect(function(character)
+	watch.spawn = player.CharacterAdded:Connect(function(character)
 		watchCharacter(player, character)
-	end))
+	end)
 end
+
+track(Players.PlayerRemoving:Connect(Session.dropHitWatch))
+
+table.insert(Session.Cleanups, function()
+	for player in pairs(Session.HitWatch) do
+		Session.dropHitWatch(player)
+	end
+end)
 
 ---------- Bullet tracers and impacts ------------
 local function drawTracer(startPosition, endPosition, isLocal)
@@ -9042,7 +9361,19 @@ local function onBulletRay(object)
 	if object.Name ~= "BULLET_RAYS" then
 		return
 	end
+	-- Every player's shots come through here (each shotgun pellet is one): with no tracer, impact or hit visual on there is nothing to do,
+	-- so none of the waiting and searching below is done.
+	if not (Visual.LocalTracers or Visual.PlayerTracers or Visual.Impacts or anyHitVisual()) then
+		return
+	end
+	local arrived = os.clock()
 	task.wait()
+
+	-- another player's shot is only drawn by Player Tracers (impacts and the hit visuals are for your own shots)
+	local owner = object:GetAttribute("OwnerCharacter")
+	if owner ~= nil and owner ~= LocalPlayer.Name and not Visual.PlayerTracers then
+		return
+	end
 
 	-- A skin with a tracer of its own (SkinAssets.GunBeam) puts its beam in the shot as well, and it may not be the first one or have its end set
 	-- yet: the first beam (anywhere in the shot) with both ends is used, waiting up to twenty frames for one.
@@ -9070,6 +9401,7 @@ local function onBulletRay(object)
 	local endPosition = beam.Attachment1.WorldPosition
 	local startPosition = (object:IsA("BasePart") and object.Position) or (beam.Attachment0 and beam.Attachment0.WorldPosition) or endPosition
 	local isLocal = object:GetAttribute("OwnerCharacter") == LocalPlayer.Name
+	local skipTracer = false
 
 	if isLocal then
 		local now = os.clock()
@@ -9078,9 +9410,10 @@ local function onBulletRay(object)
 		local last = sharedEnv.neverlose_last_ray
 		sharedEnv.neverlose_last_ray = { now, startPosition }
 
+		-- (the pellet still gets its impact and counts for the hit visuals: only its tracer is left out)
 		if VisualSettings.LocalTracerOneLine and Visual.LocalTracers and last and now - last[1] < 0.05 and (last[2] - startPosition).Magnitude < 3 then
 			beam.Enabled = false
-			return
+			skipTracer = true
 		end
 
 		-- The game draws the shot where the gun was pointed; a shot the ragebot or the silent aim sent somewhere else ends where it was sent
@@ -9088,14 +9421,17 @@ local function onBulletRay(object)
 		local claim = sharedEnv.neverlose_last_claim
 
 		-- (a shotgun's pellets, the Double-Barrel's or the Tactical's, keep the ends the game gave them: the tracers show the spread)
-		if claim and not claim[3] and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+		-- A claim belongs to one shot: only the first ray that turned up after it was made takes it, so a shot of your own right after a
+		-- ragebot shot is not drawn to the ragebot's target.
+		if claim and not claim[3] and not claim.TracerUsed and claim[2] <= arrived + 0.05 and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+			claim.TracerUsed = true
 			endPosition = claim[1]
 		end
 	end
 
 	-- From Server Position: a shot the gun made starts at the drawn body; while desynced the tracer starts where the server has the character
 	-- instead (a shot the ragebot forged already starts there, far from the drawn body, and is left alone).
-	if isLocal and VisualSettings.LocalTracerServerOrigin then
+	if isLocal and Visual.LocalTracers and not skipTracer and VisualSettings.LocalTracerServerOrigin then
 		local api = getgenv().neverlose
 		local okServer, server = pcall(function()
 			return api and api.get_server_cframe and api.get_server_cframe()
@@ -9112,7 +9448,7 @@ local function onBulletRay(object)
 		recordShot(endPosition)
 	end
 
-	if (isLocal and Visual.LocalTracers) or (not isLocal and Visual.PlayerTracers) then
+	if not skipTracer and ((isLocal and Visual.LocalTracers) or (not isLocal and Visual.PlayerTracers)) then
 		for _, item in ipairs(object:GetDescendants()) do
 			if item:IsA("Beam") then
 				item.Enabled = false
@@ -9177,10 +9513,14 @@ local function applyAspectRatio()
 		return
 	end
 
+	local written = nil
 	RunService:BindToRenderStep(ASPECT_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+		-- Only a CFrame the camera wrote since last frame is scaled: one left as it was (a Scriptable camera, a cutscene) would be squashed
+		-- again every frame until the view collapses.
 		local camera = workspace.CurrentCamera
-		if camera then
-			camera.CFrame = camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, VisualSettings.AspectRatio, 0, 0, 0, 1)
+		if camera and camera.CFrame ~= written then
+			written = camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, VisualSettings.AspectRatio, 0, 0, 0, 1)
+			camera.CFrame = written
 		end
 	end)
 end
@@ -9679,8 +10019,11 @@ local function styleTool(tool)
 		for _, part in ipairs(tool:GetDescendants()) do
 			if part:IsA("BasePart") then
 				ToolStyle.Parts[part] = { Material = part.Material, Color = part.Color }
-				part.Material = material
-				part.Color = PlayerSettings.ToolColor
+				-- (Rainbow only needs the part noted, it paints it every frame; the material and colour are Material Tools' own)
+				if PlayerVisual.ToolMaterial then
+					part.Material = material
+					part.Color = PlayerSettings.ToolColor
+				end
 			end
 		end
 	end
@@ -9756,7 +10099,8 @@ RunService:BindToRenderStep(PLAYERS_BIND, Enum.RenderPriority.Camera.Value + 2, 
 end)
 
 -- Hide other players' nametags (and health bars), remembering how they were.
-local nametagOriginals = {}
+-- (weak keys: a humanoid of a character that is gone drops out by itself)
+local nametagOriginals = setmetatable({}, { __mode = "k" })
 
 local function hideNametag(humanoid)
 	if not nametagOriginals[humanoid] then
@@ -10096,7 +10440,7 @@ function Session.buildSettingsPanels(rows)
 	panelList(selection, "Untarget When", "target_selection_untarget_when", { "better target", "knocked", "flung", "dead" }, { "dead" })
 	panelList(selection, "Target Statuses", "target_statuses", { "friendly", "neutral", "enemy" }, { "neutral" })
 	panelList(selection, "Prioritize By", "target_selection_prioritize_by", { "closest to character", "closest to mouse", "highest wanted", "lowest health", "random" }, "closest to mouse")
-	panelList(selection, "Ignore If", "target_selection_ignore_if", { "knocked", "in void" }, {})
+	panelList(selection, "Ignore If", "target_selection_ignore_if", { "in void" }, {})
 	panelSlider(selection, "Target Distance", "target_selection_target_distance", 5, 250, 0, " studs", 250, { [250] = "infinite" })
 
 	-- Visualization --
@@ -10220,7 +10564,6 @@ function Session.buildSettingsPanels(rows)
 	})
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
-	panelToggle(autoFire, "Fast Retry", "auto_fire_fast_retry", false)
 	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
 	panelSlider(autoFire, "Gun Gap", "auto_fire_gun_gap", 0, 300, 0, "ms", 140, { [0] = "at once" })
@@ -10581,7 +10924,8 @@ Session.installEngineTabs = function()
 			end
 		end
 
-		row:AddDropdown({
+		local dropdown
+		dropdown = row:AddDropdown({
 			Default = multi and shown or shown[1],
 			Values = table.clone(options),
 			Multi = multi,
@@ -10594,6 +10938,14 @@ Session.installEngineTabs = function()
 				local names = pickedNames(value, options)
 				if #names == 0 and config.requires_one then
 					names = lastPicked
+					-- the row shows the pick the engine keeps (a config saved now stores it too); it is not empty, so this runs once
+					if #names > 0 and dropdown then
+						task.defer(function()
+							if Session.Alive then
+								pcall(dropdown.SetValue, dropdown, multi and names or names[1])
+							end
+						end)
+					end
 				end
 				lastPicked = names
 
@@ -10613,8 +10965,12 @@ Session.installEngineTabs = function()
 	end
 
 	controls.keybind = function(row, config, stub, name)
-		-- Start on the engine's own default key (E for the legitbot target bind).
+		-- Start on the engine's own default key, except one that is the Target List key (the legitbot target bind's E): one press would then
+		-- pick a Target List player and switch the legit target as well. That bind starts on None and can be set in its row.
 		local defaultKey = config.default ~= nil and keyName(config.default) or "None"
+		if defaultKey == TARGET_KEY then
+			defaultKey = "None"
+		end
 		local entry = { stub = stub, key = defaultKey, name = name }
 
 		row:AddKeybind({
@@ -10982,7 +11338,9 @@ do
 		for flag, control in pairs(NeverLose.Flags) do
 			if not Session.MasterFlags[flag] and string.sub(flag, 1, 3) ~= "ui_" and type(control) == "table" and type(control.GetValue) == "function" then
 				local ok, value = pcall(control.GetValue, control)
-				if ok and value == true then
+				-- an option that is only on while its Hold key is down is not noted: switching the master off must not leave it on with no key held
+				local bind = Binds.Entries[flag]
+				if ok and value == true and not (bind and bind.Held) then
 					table.insert(found, flag)
 				end
 			end
@@ -11178,13 +11536,15 @@ do
 		["targeting"] = {
 			["mode"] = "Select", -- "Select" = pick by key, "Automatic" = closest to the cursor
 		},
+		-- The Semi Rage tab is gone and Force Hit / Force Fire follow the ragebot, so none of its keys is bound any more: a key with no row
+		-- behind it could change the silent aim, the camera aimbot or the Name ESP without the menu showing it ("None" never matches a key).
 		["binds"] = {
-			["silent aim"] = "C",
-			["cam lock"] = "X",
-			["triggerbot"] = "V",
-			["super jump"] = "B",
-			["esp"] = "Y",
-			["speed"] = "Z",
+			["silent aim"] = "None",
+			["cam lock"] = "None",
+			["triggerbot"] = "None",
+			["super jump"] = "None",
+			["esp"] = "None",
+			["speed"] = "None",
 		},
 		["silent aimbot"] = {
 			["enabled"] = false,
@@ -11327,10 +11687,22 @@ do
 	local SHOTGUN_NAMES = { ["Double-Barrel SG"] = true, ["TacticalShotgun"] = true, ["Shotgun"] = true, ["DrumShotgun"] = true }
 	local PRIORITY_PARTS = { "Head", "UpperTorso", "LowerTorso" }
 
-	-- Runs `callback` and keeps the connection so Semi.stop can drop it.
+	-- Runs `callback` and keeps the connection so Semi.stop can drop it. Every respawn adds the new character's and tools' listeners, and the
+	-- old ones die with their instances: once the list has doubled, the dead ones are taken out of it, so it does not grow all session.
 	local function connect(signal, callback)
 		local connection = signal:Connect(callback)
-		table.insert(Semi.Connections, connection)
+		local list = Semi.Connections
+		table.insert(list, connection)
+
+		if #list >= (Semi.ConnectionsPruneAt or 64) then
+			for index = #list, 1, -1 do
+				if list[index].Connected == false then
+					table.remove(list, index)
+				end
+			end
+			Semi.ConnectionsPruneAt = math.max(64, #list * 2)
+		end
+
 		return connection
 	end
 
@@ -11432,7 +11804,7 @@ do
 		local backpackconnection = nil
 		local sorting = false
 		local speedactive = false
-		local knifedata = {}
+		local knifedata = setmetatable({}, { __mode = "k" }) -- a knife tool that is gone takes its entry with it
 		local closestcache = {}
 		local closestcacherate = 1 / 30
 
@@ -11556,13 +11928,14 @@ do
 				return
 			end
 
-			walljumpconnection = hum.StateChanged:Connect(function(_, new)
+			-- kept with the other connections, so Semi.stop drops them too
+			walljumpconnection = connect(hum.StateChanged, function(_, new)
 				if new == Enum.HumanoidStateType.Landed or new == Enum.HumanoidStateType.Running or new == Enum.HumanoidStateType.RunningNoPhysics or new == Enum.HumanoidStateType.Jumping then
 					haswalljumped = false
 				end
 			end)
 
-			walljumpchild = char.ChildAdded:Connect(function(child)
+			walljumpchild = connect(char.ChildAdded, function(child)
 				if child:IsA("Humanoid") then
 					task.wait(0.1)
 					setupwalljumpreset()
@@ -12909,7 +13282,8 @@ do
 		-- The gun's own ShootGun call on MainEvent is caught and sent on aimed at the target instead (forcehit_silent), so the mouse is never touched.
 		-- In Select mode with Force Hit on, the head takes the shot whatever the FOV and the walls say, and Force Fire shoots at it by itself (forcehit dh).
 		local SHOOT_NORMAL = Vector3.new(0, 0, -1)
-		local restorenamecall = setnamecallmethod or set_namecall_method or function() end
+		-- Without it the method can't be put back after getsilenthit's calls, and every game shot would be lost: the hook is then not installed.
+		local restorenamecall = setnamecallmethod or set_namecall_method
 
 		---Where the silent aimbot wants a shot to land: { part, position }, or nil to leave the shot alone.
 		local function getsilenthit()
@@ -12965,7 +13339,7 @@ do
 		local originalnamecall
 
 		function Semi.installSilentHook()
-			if silenthooked or not Semi.Alive then
+			if silenthooked or not Semi.Alive or type(restorenamecall) ~= "function" then
 				return
 			end
 			silenthooked = true
@@ -12999,13 +13373,15 @@ do
 			end))
 		end
 
-		-- forcehit dh: Force Fire shoots the target by itself, once per cooldown of the gun in the hand.
-		-- A shotgun keeps its own script (the pellets need its numbers); the hook above aims them.
+		-- forcehit dh: Force Fire shoots the ragebot's target by itself. It only shoots while the engine has an aim (ragebotaims): the engine's hook
+		-- then sends the shot at its own aim, past its wall, range, prediction and spawn checks. With no engine aim nothing is sent, since a shot
+		-- the server refuses is wasted, and for a shotgun it counts against its SecurityTolerance (past it the gun is locked for the server).
+		-- A shotgun keeps its own script (the pellets need its numbers); the engine's hook aims them.
 		local lastforcefire = 0
 
 		connect(runservice.Heartbeat, function()
 			local silent = config["silent aimbot"]
-			if not (silent["enabled"] and silent["force fire"]) or masterActive() or Session.isTyping() or selfknocked() then
+			if not (silent["enabled"] and silent["force fire"]) or masterActive() or Session.isTyping() or selfknocked() or not ragebotaims() then
 				return
 			end
 
@@ -13027,9 +13403,17 @@ do
 				return
 			end
 
+			-- Paced like the engine's own shots: only when the gun is due again at the server (the engine's gun_due, which also sees the engine's
+			-- and the gun script's last shot). This module's own sends are not in the engine's record, so its last send is kept as well, with the
+			-- server's 0.0095 margin.
 			local cooldown = tool:FindFirstChild("ShootingCooldown")
 			local now = os.clock()
-			if now - lastforcefire < math.max(cooldown and tonumber(cooldown.Value) or 0, 0.05) then
+			if now - lastforcefire < math.max(cooldown and tonumber(cooldown.Value) or 0, 0.05) + 0.0095 then
+				return
+			end
+
+			local gunDue = sharedEnv.neverlose_gun_due
+			if type(gunDue) == "function" and not gunDue(tool) then
 				return
 			end
 			lastforcefire = now
@@ -13585,6 +13969,11 @@ do
 		-- The trigger bot is not part of it: always off, with no delay.
 		local linkedtarget = nil
 
+		-- The ragebot's target (a Player or nil); called through pcall, so an engine error can't stop the frame.
+		local function getragebottarget(api)
+			return api and api.get_ragebot_target and api.get_ragebot_target()
+		end
+
 		connect(runservice.RenderStepped, function()
 			local silent = config["silent aimbot"]
 			local api = sharedEnv.neverlose
@@ -13602,20 +13991,22 @@ do
 			local wanted = ragebotOn
 
 			if wanted then
-				local ok, player = pcall(function()
-					return api and api.get_ragebot_target and api.get_ragebot_target()
-				end)
+				local ok, player = pcall(getragebottarget, api)
 				local head = ok and typeof(player) == "Instance" and player:IsA("Player") and player.Character and player.Character:FindFirstChild("Head") or nil
 
 				silent["enabled"] = true
 				config["targeting"]["mode"] = "Select"
 
-				if head ~= linkedtarget then
+				-- Checked against the live target as well, not only the last one handed over: anything that cleared or changed it (a self
+				-- knock) is put back to the ragebot's target on the next frame.
+				if head ~= linkedtarget or currenttarget ~= head or silentaimactive ~= (head ~= nil) then
 					linkedtarget = head
 					Semi.setTarget(head)
 				end
-			elseif linkedtarget then
+			elseif linkedtarget or silent["enabled"] then
+				-- The ragebot went off: the silent aim goes off with it, so no manual shot is redirected any more.
 				linkedtarget = nil
+				silent["enabled"] = false
 				Semi.setTarget(nil)
 			end
 
@@ -13657,7 +14048,10 @@ do
 				end
 			end
 
-			expandhitboxes()
+			-- only while the expander is on, or has boxes left to put back
+			if config["hitbox expander"]["enabled"] or next(expanded) then
+				expandhitboxes()
+			end
 
 			updatefovbox(fovparts.silent, fov2dboxes.silent, silent["fov"], silentaimactive and silent["enabled"])
 			updatefovbox(fovparts.camlock, fov2dboxes.camlock, config["camera aimbot"]["fov"], camlockactive and config["camera aimbot"]["enabled"])
@@ -15513,6 +15907,12 @@ local function startFullAuto()
 			return
 		end
 
+		-- the menu opened while the button was held: the hold ends there (a click on the menu is not a shot), a new click starts it again
+		if menuIsOpen() then
+			FullAuto.Held = false
+			return
+		end
+
 		local enabled = NeverLose.Flags["full_auto"]
 		if not (enabled and enabled:GetValue() == true) or Session.isTyping() then
 			return
@@ -16495,9 +16895,16 @@ local function watchNametags(player)
 	if player.Character then
 		task.spawn(onOtherCharacter, player, player.Character)
 	end
-	track(player.CharacterAdded:Connect(function(character)
+	-- kept with the player's hit watch (Session.HitWatch), so it goes when the player leaves
+	local connection = player.CharacterAdded:Connect(function(character)
 		onOtherCharacter(player, character)
-	end))
+	end)
+	local watch = Session.HitWatch and Session.HitWatch[player]
+	if watch then
+		watch.nametags = connection
+	else
+		track(connection)
+	end
 end
 
 for _, player in ipairs(Players:GetPlayers()) do
@@ -16909,8 +17316,9 @@ do
             __neverlose_hrp_hooked = generation,
             __neverlose_hrp_original_index = old_index,
             ["__index"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index)
-                if not checkcaller() and self and index == "CFrame" and (#anti_aim ~= 0 or purchasing) and not vehicle then
-                    return local_client_position
+                -- Position as well as CFrame, the way the vehicle hook does it: a read of either one shows where the body is said to be
+                if not checkcaller() and self and (index == "CFrame" or index == "Position") and (#anti_aim ~= 0 or purchasing) and not vehicle then
+                    return index == "CFrame" and local_client_position or local_client_position["Position"]
                 end
                 return old_index(self, index)
             end))
@@ -17002,7 +17410,8 @@ do
                 if range then
                     local_gun = range["Value"]
 
-                    new_local_gun = {handle, local_gun, ammo["Value"]}
+                    -- a tool with a Range and no Ammo still sets local_gun; it is just not kept in local_guns below
+                    new_local_gun = {handle, local_gun, ammo and ammo["Value"]}
                 end
 
                 if ammo and range then
@@ -17044,7 +17453,8 @@ do
                 break
             end
 
-            local_gun = found and local_gun or nil
+            -- the Range of the gun that is still out, not of the one that just went
+            local_gun = found and local_guns[found][2] or nil
             local_tool = found and found["Parent"] or nil
         end
     end)
@@ -17071,11 +17481,14 @@ do
 
         local humanoid = wait_for_child(character, "Humanoid", 5)
 
-        create_connection(humanoid:GetPropertyChangedSignal("Health"), function()
-            signals["on_local_health_changed"]:Fire(humanoid["Health"])
-        end)
+        -- Like the root part above: a humanoid that never arrived (or one whose metatable cannot be replaced) must not end the rest of this setup.
+        if humanoid then
+            create_connection(humanoid:GetPropertyChangedSignal("Health"), function()
+                signals["on_local_health_changed"]:Fire(humanoid["Health"])
+            end)
 
-        hook_humanoid(humanoid)
+            pcall(hook_humanoid, humanoid)
+        end
 
         wait_for_child(character, "Head", 5)
 
@@ -17084,8 +17497,9 @@ do
             local child = children[i]
             local_parts[child["Name"]] = child
 
+            -- one tool that cannot be read must not stop the rest (the ChildAdded/ChildRemoved connections and local_character below)
             if child["ClassName"] == "Tool" then
-                on_child_added(child)
+                pcall(on_child_added, child)
             end
         end
 
@@ -17250,10 +17664,12 @@ do
     local setthreadidentity = setthreadidentity
     local getnamecallmethod = getnamecallmethod
     local checkcaller = checkcaller
+    local getthreadidentity = getthreadidentity
     local tostring = tostring
 
-    local older_health = nil
-    local older_data = nil
+    -- One report per shot: the calls made for one shot (every pellet, and the ragebot's own beside the hook's) start in the same frame, and only
+    -- the first of them reports. Two misses in a row on the same target used to come out as one, the second having the same health.
+    local result_started = setmetatable({}, {__mode = "k"})
 
     -- >> ( event setup )
 
@@ -17266,16 +17682,22 @@ do
             return
         end
 
+        local started_at = clock()
+        local last_started = result_started[data]
+
+        if last_started and started_at - last_started < 0.01 then
+            return
+        end
+
+        result_started[data] = started_at
+
         local old_count = shot_count
         local old_health = data[9]
 
         local start = clock()
         repeat wait() until clock() - start > 0.25 + local_ping/1000 or shot_count > old_count
 
-        if data and older_health ~= data[9] or older_data ~= data then
-            older_health = data[9]
-            older_data = data
-
+        do
             local message = old_server_position and " (pred miss: "..tostring(round((aim_position-part["Position"])["Magnitude"], 1))..") (velocity: "..tostring(round((target_velocity or vector3_zero)["Magnitude"], 1))..(did_defensive and ") (defensive: true)" or ") (defensive: false)")
 
             if shot_count == old_count then
@@ -17296,44 +17718,177 @@ do
 
     local game_on_client_event = nil
 
-    -- guard: on a re-injection the event's OnClientEvent is already our table, not a signal
-    if typeof(event) == "Instance" and typeof(event["OnClientEvent"]) == "RBXScriptSignal" then
-        for _, v in getconnections(event["OnClientEvent"]) do
+    -- The game's own MainEvent listener (the one whose constants hold "ShootingRecoil", in PlayerGui.Framework) is switched off and fed through
+    -- the forwarder below instead. A later run used to lose it: its guard read OnClientEvent through this run's __index, got the stand-in table
+    -- back, never looked for the listener (switched off by then anyway) and never connected a forwarder of its own, so the game handled no
+    -- MainEvent packet again until a rejoin. So the real signal is read through the original __index (kept in the metatable as
+    -- __neverlose_event_original_index; for a metatable from before that, the Instance metatable's own), and the listener is found switched off or not.
+    local old = getrawmetatable(event)
+    local old_namecall = old["__namecall"]
+    local instance_metatable = typeof(event) == "Instance" and getrawmetatable(game) or nil
+    local o_i = rawget(old, "__neverlose_event_original_index") or (instance_metatable and instance_metatable["__index"]) or old["__index"]
+    local original_metatable = rawget(old, "__neverlose_event_original_metatable") or instance_metatable or old
+    local real_signal = typeof(event) == "Instance" and o_i(event, "OnClientEvent") or nil
+    local game_connection = nil
+    local game_script = nil
+
+    if typeof(real_signal) ~= "RBXScriptSignal" then
+        real_signal = nil
+    end
+
+    if real_signal then
+        -- an older run's forwarder that is still connected (that run was not unloaded) would hand every packet to the game a second time
+        local previous_forwarder = getgenv()["neverlose_main_forwarder"]
+
+        if previous_forwarder then
+            pcall(function()
+                previous_forwarder:Disconnect()
+            end)
+        end
+
+        for _, v in getconnections(real_signal) do
             local func = v["Function"]
+            local read, constants = false, nil
+
             if func then
-                local info = getinfo(func)
-                if info then
-                    for _, constant in getconstants(func) do
-                        if tostring(constant) == "ShootingRecoil" then
-                            game_on_client_event = func
-                            v:Disable()
-                            break
-                        end
+                read, constants = pcall(getconstants, func)
+            end
+
+            local holds_recoil = false
+
+            if read and type(constants) == "table" then
+                for _, constant in constants do
+                    if tostring(constant) == "ShootingRecoil" then
+                        holds_recoil = true
+                        break
                     end
                 end
             end
+
+            if holds_recoil then
+                if isexecutorclosure and isexecutorclosure(func) then
+                    -- the forwarder of an older run from before it was kept in getgenv
+                    pcall(function()
+                        v:Disable()
+                    end)
+                elseif not game_on_client_event then
+                    game_on_client_event = func
+                    game_connection = v
+                end
+            end
+        end
+
+        -- not among the connections any more (an executor that lists no switched off ones, say): the one an earlier run kept
+        local kept = getgenv()["neverlose_game_main_handler"]
+
+        if not game_on_client_event and type(kept) == "table" and kept[1] then
+            game_on_client_event, game_connection, game_script = kept[1], kept[2], kept[3]
+        end
+
+        if game_connection then
+            pcall(function()
+                game_connection:Disable()
+            end)
+        end
+
+        if game_on_client_event and not game_script then
+            local read, environment = pcall(getfenv, game_on_client_event)
+            game_script = read and type(environment) == "table" and rawget(environment, "script") or nil
+        end
+
+        if game_on_client_event then
+            getgenv()["neverlose_game_main_handler"] = {game_on_client_event, game_connection, game_script}
         end
     end
 
-    local old = getrawmetatable(event)
-    local old_namecall = old["__namecall"]
-    local o_i = old["__index"]
-    local f = {
-        Connect = function(_, callback)
-            game_on_client_event = callback
-            return {
-                Disconnect = function() end
-            }
+    -- Game scripts that read MainEvent.OnClientEvent after this point get this stand-in (see __index below), fed by the forwarder too. The
+    -- game's own listener connecting again (the same script, or no script to tell them apart) takes the captured handler's place, as before;
+    -- any other script's listener is kept beside it until it is disconnected or its script is gone. Once and Wait work the way a signal's do.
+    local f_listeners = {}
+    local f_waiting = {}
+    local getcallingscript = getcallingscript
+
+    local function f_caller()
+        if not getcallingscript then
+            return nil
         end
-    }
+
+        local read, caller = pcall(getcallingscript)
+
+        return read and typeof(caller) == "Instance" and caller or nil
+    end
+
+    local function f_add(callback, caller)
+        local entry = {callback, caller}
+        f_listeners[#f_listeners+1] = entry
+
+        local handle = {["Connected"] = true}
+
+        handle["Disconnect"] = function()
+            handle["Connected"] = false
+
+            local index = table.find(f_listeners, entry)
+
+            if index then
+                table.remove(f_listeners, index)
+            end
+        end
+        handle["disconnect"] = handle["Disconnect"]
+
+        return handle
+    end
+
+    local f = {}
+
+    f["Connect"] = function(_, callback)
+        local caller = f_caller()
+
+        if game_on_client_event == nil or caller == nil or game_script == nil or caller == game_script or caller["Name"] == game_script["Name"] then
+            game_on_client_event = callback
+            game_script = caller or game_script
+
+            local handle = {["Connected"] = true}
+
+            handle["Disconnect"] = function()
+                handle["Connected"] = false
+
+                if game_on_client_event == callback then
+                    game_on_client_event = nil
+                end
+            end
+            handle["disconnect"] = handle["Disconnect"]
+
+            return handle
+        end
+
+        return f_add(callback, caller)
+    end
+
+    f["Once"] = function(_, callback)
+        local handle = nil
+
+        handle = f_add(function(...)
+            handle["Disconnect"]()
+            return callback(...)
+        end, f_caller())
+
+        return handle
+    end
+
+    f["Wait"] = function()
+        f_waiting[#f_waiting+1] = coroutine.running()
+        return coroutine.yield()
+    end
 
     f["connect"] = f["Connect"]
+    f["ConnectParallel"] = f["Connect"]
 
     local last_client_bullet_position = vector3_zero
     local last_client_bullet_shooter = nil
     local on_shot_at = signals["on_shot_at"]
+    local forwarder = nil
 
-    create_connection(event["OnClientEvent"], LPH_JIT_MAX(function(packet, ...)
+    local forward_packet = LPH_JIT_MAX(function(packet, ...)
         -- While the ragebot has a target nothing of the shooting shows on this client: the game's hit marker and the camera kick are not passed on.
         if (packet == "HitMarker" or packet == "ShootingRecoil") and flags["ragebot"] and ragebot_target ~= nil then
             if packet == "ShootingRecoil" then
@@ -17353,18 +17908,54 @@ do
         elseif packet == "ClientBullet" then
             local shooter, v350, v351, position, v353, v354 = ...
             last_client_bullet_position = position
-            last_client_bullet_shooter = find_first_child(players_service, shooter["Name"])
+            -- a shooter that has just left comes as nil: an error here ended the forwarder before the game got the packet
+            last_client_bullet_shooter = typeof(shooter) == "Instance" and find_first_child(players_service, shooter["Name"]) or nil
         elseif packet == "ShotFrom" and last_client_bullet_shooter then
             setthreadidentity(8)
             on_shot_at:Fire(last_client_bullet_shooter, last_client_bullet_position)
             last_client_bullet_shooter = nil
             last_client_bullet_position = nil
         end
-        if game_on_client_event then
+
+        -- game scripts waiting on the stand-in, then the ones connected to it, then the game's own listener
+        if game_on_client_event or f_listeners[1] or f_waiting[1] then
             setthreadidentity(4)
-            return game_on_client_event(packet, ...)
+
+            if f_waiting[1] then
+                local waiting = f_waiting
+                f_waiting = {}
+
+                for i = 1, #waiting do
+                    spawn(waiting[i], packet, ...)
+                end
+            end
+
+            if f_listeners[1] then
+                for i = #f_listeners, 1, -1 do
+                    local caller = f_listeners[i][2]
+
+                    -- the script that connected is gone (a GUI that resets on respawn): its listener goes with it
+                    if caller ~= nil and caller["Parent"] == nil then
+                        table.remove(f_listeners, i)
+                    end
+                end
+
+                for i = 1, #f_listeners do
+                    spawn(f_listeners[i][1], packet, ...)
+                end
+            end
+
+            if game_on_client_event then
+                return game_on_client_event(packet, ...)
+            end
         end
-    end))
+    end)
+
+    if real_signal then
+        forwarder = create_connection(real_signal, forward_packet)
+        -- a later run disconnects it (see previous_forwarder above)
+        getgenv()["neverlose_main_forwarder"] = forwarder
+    end
 
     -- A newer run of the script cannot take this hook out of the chain, it can only be wrapped. Left alone, the older hook kept
     -- rewriting every shot with its own frozen state (an aim position and a server position from a character that is long gone):
@@ -17372,12 +17963,8 @@ do
     local hook_generation = getgenv()["neverlose_bypass_generation"]
 
     local new = {
-        ["__namecall"] = newcclosure(LPH_JIT_MAX(function(self, ...)
-            if getgenv()["neverlose_bypass_generation"] ~= hook_generation then
-                return old_namecall(self, ...)
-            end
-
-            setthreadidentity(4)
+        -- the work on the FireServer calls this run handles (the wrapper below the table decides which calls get here, and sets the identity)
+        ["__namecall"] = LPH_JIT_MAX(function(self, ...)
             if getnamecallmethod() == "FireServer" then
                 local args = {...}
                 local packet = args[1]
@@ -17385,9 +17972,11 @@ do
                 if packet == "ShootGun" then
                     -- the hitbox expander's box (a part only this client has) stands for the real Head it sits in
                     local hit_part = args[5]
+                    local box_swapped = false
 
                     if hit_part ~= nil and hit_part == hide_manager["hitbox_box"] then
                         args[5] = hide_manager["hitbox_head"]
+                        box_swapped = true
                     end
 
                     -- A shot the gun's own script made (not the ragebot's forged call): bullet manipulation's watchdog needs to know the pull did shoot.
@@ -17422,6 +18011,19 @@ do
                             if away_length == away_length and away_length > 0.1 and away_length < 40 then
                                 origin = ragebot_aim_position + away["Unit"] * 1.5
                             end
+                        end
+
+                        -- the target stands on a spawn pad: the server counts no shot at it there (hide_manager.on_spawn_pad)
+                        if hide_manager["target_on_pad"] == true then
+                            return
+                        end
+
+                        -- An origin thousands of studs from the claim is dropped below anyway; checked here first as well, so such a shot costs none of
+                        -- the rays of the wall route and the Range Enhancer (they move either end by tens of studs at most, hence the margin).
+                        local early_gap = (origin - pos)["Magnitude"]
+
+                        if early_gap ~= early_gap or early_gap > 2100 then
+                            return
                         end
 
                         -- Walls: the server takes a shot only when nothing blocks the line from this origin to where the hit is claimed (a Rifle sent at a
@@ -17462,11 +18064,6 @@ do
                         -- An origin thousands of studs from the claim (the body was in the void when it was taken, or the claim is the target's void spot):
                         -- the server refuses it whatever the gun, so it is not sent (measured: a third of a fight's shots went out from 1e9 studs).
                         local reach_gap = (origin - pos)["Magnitude"]
-
-                        -- the target stands on a spawn pad: the server counts no shot at it there (hide_manager.on_spawn_pad)
-                        if hide_manager["target_on_pad"] == true then
-                            return
-                        end
 
                         if reach_gap ~= reach_gap or reach_gap > 2000 then
                             return
@@ -17601,38 +18198,88 @@ do
                         local parent = part["Parent"]
 
                         if parent then
-                            local player = find_first_child(players_service, parent["Name"]) or find_first_child(players_service, parent["Parent"]["Name"])
+                            local grand_parent = parent["Parent"]
+                            local player = find_first_child(players_service, parent["Name"]) or (grand_parent and find_first_child(players_service, grand_parent["Name"]))
 
                             if player then
                                 if parent["GetAttribute"](parent, "1") then
-                                    part = player_data[player][4][part["Name"]]
-                                    args[5] = part
+                                    -- no record for the player, or none of that part: the shot goes with the part it hit
+                                    local data = player_data[player]
+                                    local mapped = data and data[4][part["Name"]]
+
+                                    if mapped then
+                                        part = mapped
+                                        args[5] = part
+                                    end
+
                                     spawn(get_bullet_result, player, part)
-                                    return old_namecall(self, unpack(args))
+                                    return old_namecall(self, unpack(args, 1, select("#", ...)))
                                 end
 
                                 spawn(get_bullet_result, player, part)
                             end
                         end
                     end
+
+                    -- The box was put in for the Head above: the call goes out with that swap, not with the box itself (a part only this client has,
+                    -- which reached the server as nothing, so the shot never landed). The count keeps trailing nils.
+                    if box_swapped then
+                        return old_namecall(self, unpack(args, 1, select("#", ...)))
+                    end
                 elseif packet == "UpdateCursorImage" and flags["unlock_custom_crosshair"] then
                     local value = args[2]
-                    inventory["Parent"]["CursorImage"]["Value"] = value
+                    -- the inventory is only found once the data block near the end has loaded; until then the game's call is just dropped
+                    local cursor_image = inventory and inventory["Parent"] and find_first_child(inventory["Parent"], "CursorImage")
+
+                    if cursor_image then
+                        cursor_image["Value"] = value
+                    end
+
                     return
                 elseif packet == "CHECKER_4" or packet == "CalculateShootClient" then
-                    print(packet)
                     return
                 end
             end
             return old_namecall(self, ...)
-        end)),
+        end),
         ["__index"] = newcclosure(function(s, i)
             if i == "OnClientEvent" and not getfenv(0).closeTop25Button then
                 return f
             end
             return o_i(s, i)
-        end)
+        end),
+        -- what a later run reads the real OnClientEvent with, and what the unload puts back
+        ["__neverlose_event_original_index"] = o_i,
+        ["__neverlose_event_original_metatable"] = original_metatable
     }
+
+    -- Only the packets handled above get past this wrapper, and only for them is the thread's identity raised to 4 (what the shot rebuild has
+    -- always run at); it is put back afterwards. It used to be set for every MainEvent call and never put back: the game's own threads (which
+    -- send MainEvent packets every frame) kept identity 4 for good, and the script's threads dropped from 8 to 4 after their first FireServer.
+    -- (No method calls in here either: one before old_namecall replaces the namecall method.)
+    local fire_server = new["__namecall"]
+
+    local function put_identity_back(identity, ...)
+        setthreadidentity(identity)
+        return ...
+    end
+
+    new["__namecall"] = newcclosure(LPH_JIT_MAX(function(self, ...)
+        if getgenv()["neverlose_bypass_generation"] ~= hook_generation or getnamecallmethod() ~= "FireServer" then
+            return old_namecall(self, ...)
+        end
+
+        local packet = ...
+
+        if packet ~= "ShootGun" and packet ~= "UpdateCursorImage" and packet ~= "CHECKER_4" and packet ~= "CalculateShootClient" then
+            return old_namecall(self, ...)
+        end
+
+        local identity = getthreadidentity()
+        setthreadidentity(4)
+
+        return put_identity_back(identity, fire_server(self, ...))
+    end))
 
     for _, v in old do
         if not new[_] then
@@ -17641,6 +18288,36 @@ do
     end
 
     setrawmetatable(event, new)
+
+    -- Unload: the game's listener is switched back on and the event gets its own metatable back (the game handled no MainEvent packet after an
+    -- unload before this). The teardowns also run on the Anti Report's safety shutdown, which keeps the script loaded, so this waits a moment
+    -- and only goes ahead once the unload has disconnected the forwarder too; and only while no newer run exists (a newer run unloads this one
+    -- after it has bumped the generation, and keeps the game's listener off itself).
+    local teardowns = getgenv()["neverlose_teardowns"]
+
+    if teardowns and forwarder then
+        teardowns[#teardowns+1] = function()
+            task["defer"](function()
+                if forwarder["Connected"] or getgenv()["neverlose_bypass_generation"] ~= hook_generation then
+                    return
+                end
+
+                if getgenv()["neverlose_main_forwarder"] == forwarder then
+                    getgenv()["neverlose_main_forwarder"] = nil
+                end
+
+                if game_connection then
+                    pcall(function()
+                        game_connection:Enable()
+                    end)
+                end
+
+                if getrawmetatable(event) == new then
+                    pcall(setrawmetatable, event, original_metatable)
+                end
+            end)
+        end
+    end
 end
 
 -- > ( shop )
@@ -18025,7 +18702,7 @@ do
         local selected = menu_references["items_section"]["selected"]["name"]
         if selected then
             local shop = shops[selected]
-            if local_cash > shop[2] then
+            if local_cash >= shop[2] then
                 purchase_blocked_until[shop[6]] = nil
                 purchase_item(selected)
             else
@@ -18050,7 +18727,7 @@ do
             local ammo_name = selected.." ammo"
             local shop = shops[ammo_name]
             local ammo = flags["ammo_amount"]
-            if local_cash > shop[2] * ammo then
+            if local_cash >= shop[2] * ammo then
                 local has = false
                 local name = selected.."]"
                 for _, tool in get_children(local_player["Backpack"]) do
@@ -18599,9 +19276,16 @@ do
                 end
             end
 
+            -- Each track is put at a random point up to jitter x its length away from where it is, inside the track. (math.random was given
+            -- fractional bounds, which it cuts to whole numbers, and the negative product pinned every track at 0.)
             if jitter then
                 for i = 1, #animations do
-                    animations[i]["TimePosition"]*=-math_random(1 + jitter/4, 1.5 + jitter*4)
+                    local animation = animations[i]
+                    local length = animation["Length"]
+
+                    if length > 0 then
+                        animation["TimePosition"] = math["clamp"](animation["TimePosition"] + (math_random() * 2 - 1) * length * jitter, 0, length)
+                    end
                 end
             end
         end
@@ -18758,6 +19442,39 @@ do
             local last_chat = clock()
             local stomped_connection = nil
 
+            -- a .txt list is one message per line, a .json list an array of messages (every file used to go through JSONDecode)
+            local load_trash_talk_list = function()
+                local name = flags["trash_talk_list"][1]
+                local path = "neverlose recode/custom/"..name
+
+                if isfile(path) then
+                    local loaded = pcall(function()
+                        local text = readfile(path)
+
+                        if string.lower(string.sub(name, -4)) == ".txt" then
+                            local list = {}
+
+                            for line in string.gmatch(text, "[^\r\n]+") do
+                                if string.find(line, "%S") then
+                                    list[#list+1] = line
+                                end
+                            end
+
+                            trash_talk_list = list
+                        else
+                            trash_talk_list = http_service:JSONDecode(text)
+                        end
+                    end)
+
+                    if not loaded then
+                        new_notification(
+                            "failed to load trash talk list due to invalid json",
+                            3
+                        )
+                    end
+                end
+            end
+
             local do_trashtalk = LPH_JIT_MAX(function()
                 local count = #trash_talk_list
                 if count > 0 then
@@ -18776,19 +19493,7 @@ do
             end)
 
             create_connection(menu_references["trash_talk"]["on_toggle_change"], function(bool)
-                local path = "neverlose recode/custom/"..flags["trash_talk_list"][1]
-                if isfile(path) then 
-                    local s, err = pcall(function()
-                        trash_talk_list = http_service:JSONDecode(readfile(path))
-                    end)
-
-                    if err then
-                        new_notification(
-                            "failed to load trash talk list due to invalid json",
-                            3
-                        )
-                    end 
-                end
+                load_trash_talk_list()
 
                 for i = 1, #heartbeat do 
                     if heartbeat[i] == do_trashtalk_spam then
@@ -18814,19 +19519,7 @@ do
             end)
 
             create_connection(menu_references["trash_talk_list"]["on_dropdown_change"], function(value)
-                local path = "neverlose recode/custom/"..flags["trash_talk_list"][1]
-                if isfile(path) then 
-                    local s, err = pcall(function()
-                        trash_talk_list = http_service:JSONDecode(readfile(path))
-                    end)
-
-                    if err then
-                        new_notification(
-                            "failed to load trash talk list due to invalid json",
-                            3
-                        )
-                    end 
-                end
+                load_trash_talk_list()
             end)
 
             create_connection(menu_references["trash_talk_always"]["on_toggle_change"], function(value)
@@ -19344,7 +20037,8 @@ do
         local bike_events = bike_folder and find_first_child(bike_folder, "Events")
         local packet_receiver = bike_events and find_first_child(bike_events, "PacketReceiver") or __nil_event
         local do_auto_vehicle = LPH_NO_VIRTUALIZE(function(dt, hrp)
-            if vehicle == nil then
+            -- a try that came to nothing waits before the next (hide_manager.vehicle_retry_at, set by get_vehicle)
+            if vehicle == nil and clock() >= (hide_manager["vehicle_retry_at"] or 0) then
                 for i = 1, #anti_aim do
                     if anti_aim[i] == get_vehicle then
                         return
@@ -19767,6 +20461,16 @@ end)
             end
         end
 
+        -- No vehicle came of a try (none free, or the spawner too slow): auto vehicle tries again only after retry_wait seconds, doubled after each
+        -- such try up to 30. It used to start again the next frame, putting the body at the spawner every frame for as long as none came.
+        local retry_wait = 2
+
+        local function give_up()
+            hide_manager["vehicle_retry_at"] = clock() + retry_wait
+            retry_wait = math["min"](retry_wait * 2, 30)
+            reset()
+        end
+
         get_vehicle = LPH_JIT_MAX(function(dt, hrp)
             if not dt then
                 reset()
@@ -19780,8 +20484,13 @@ end)
                 end
             end
         
-            if not hrp or vehicle_blocked or (clock() - started > 1) then
+            if not hrp or vehicle_blocked then
                 reset()
+                return
+            end
+
+            if clock() - started > 1 then
+                give_up()
                 return
             end
         
@@ -19790,6 +20499,8 @@ end)
             end
         
             if vehicle then
+                retry_wait = 2
+                hide_manager["vehicle_retry_at"] = nil
                 vehicle_tick = vehicle_tick or clock()
                 if clock() - vehicle_tick > local_ping / 500 then
                     reset()
@@ -19810,7 +20521,7 @@ end)
                 if not set_vehicle then
                     -- No prompt was found at the spawner when the script loaded (vehicle_spawner is then nil, or still the folder): nowhere to go.
                     if type(vehicle_spawner) ~= "table" then
-                        reset()
+                        give_up()
                         return
                     end
 
@@ -19866,8 +20577,17 @@ end)
     end)
 
     create_connection(menu_references["server_section"]:create_element({["name"] = "hop servers"}, {["button"] = {}})["on_clicked"], function()
-        local page = http_service:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game["PlaceId"].."/servers/Public?sortOrder=Asc&limit=100"))
-        local servers = page["data"]
+        local fetched, page = pcall(function()
+            return http_service:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game["PlaceId"].."/servers/Public?sortOrder=Asc&limit=100"))
+        end)
+        local servers = fetched and type(page) == "table" and page["data"] or nil
+
+        -- the request failed or the page is empty
+        if type(servers) ~= "table" or not servers[1] then
+            new_notification("failed to find server", 3)
+            return
+        end
+
         -- the cursor sits next to the list in the answer, not in it (it was read from the list, so the second page never loaded)
         local cursor = page["nextPageCursor"]
 
@@ -19885,12 +20605,13 @@ end)
         local lowest_ping = 9e9
         local most_players = 0
         local best_server
-        local max_players = tonumber(servers[1]["maxPlayers"])
+        local max_players = tonumber(servers[1]["maxPlayers"]) or 0
         local half = max_players / 2
         for i = 1, #servers do
             local server = servers[i]
-            local players = tonumber(server["playing"])
-            local ping = tonumber(server["ping"])
+            local players = tonumber(server["playing"]) or 0
+            -- some entries come without a ping: taken only when nothing better is found
+            local ping = tonumber(server["ping"]) or 1e9
             if players ~= max_players and players > half and ping < lowest_ping then
                 lowest_ping = ping
                 most_players = players
@@ -19937,12 +20658,17 @@ do
 
         if selected_player then
             player_wanted:set_visible(true)
+            -- the record can be missing for a moment around a join or a leave
             local data = player_data[selected_player]
-            local status = data[1]
-            local information = data[17]
+            local status = data and data[1]
+            local information = data and data[17]
+            local wanted = information and find_first_child(information, "Wanted")
 
-            player_wanted:set_info("Text", information and information["Wanted"]["Value"] or "?")
-            player_status:set_dropdown({status == 1 and "neutral" or status == 2 and "friendly" or status == 3 and "enemy"}, false, true)
+            player_wanted:set_info("Text", wanted and wanted["Value"] or "?")
+
+            if status then
+                player_status:set_dropdown({status == 1 and "neutral" or status == 2 and "friendly" or status == 3 and "enemy"}, false, true)
+            end
         else
             player_wanted:set_visible(false)
         end
@@ -19954,7 +20680,7 @@ do
             local value = value[1]
             local status = value == "neutral" and 1 or value == "friendly" and 2 or 3
 
-            if data[1] ~= status then
+            if data and data[1] ~= status then
                 data[1] = status
                 signals["on_player_status_changed"]:Fire(data, status)
 
@@ -19968,7 +20694,8 @@ do
 
     create_connection(player_editor:create_element({["name"] = "copy crew link"}, {["button"] = {}})["on_clicked"], function()
         if selected_player then
-            local information = player_data[selected_player][17]
+            local data = player_data[selected_player]
+            local information = data and data[17]
 
             if information then
                 local crew = find_first_child(information, "Crew")
@@ -20003,7 +20730,7 @@ do
     create_connection(teleport_to["on_clicked"], function()
         if selected_player then
             local data = player_data[selected_player]
-            local torso = data[4]["HumanoidRootPart"]
+            local torso = data and data[4]["HumanoidRootPart"]
 
             if torso then
                 local hrp = local_parts["HumanoidRootPart"]
@@ -20196,10 +20923,22 @@ do
         end
         
         local player = find_first_child(players_service, character["Name"])
-        local data = player_data[player]
+        local data = player and player_data[player]
+
+        -- the record is gone (the player is leaving) or was never made
+        if not data then
+            return
+        end
+
         data[3] = character
         -- Knocked out in the last life says nothing about this one; it is read again once BodyEffects has loaded.
         data[18] = false
+
+        -- Nor does the last life's tool: a character that is destroyed fires no ChildRemoved for it (the children below set it again).
+        if data[13] ~= nil then
+            data[13] = nil
+            signals["on_player_tool_equipped"]:Fire(data, nil)
+        end
 
         if head then
             signals["on_player_character_added_quick"]:Fire(character, head["Position"])
@@ -20266,12 +21005,33 @@ do
         signals["on_player_character_added"]:Fire(data, character)
         signals["on_player_health_changed"]:Fire(data, old_health, -old_health)
 
-        local body_effects = wait_for_child(character, "BodyEffects", 9e9)
-        local really_dead = wait_for_child(body_effects, "SDeath", 9e9)
-        local dead = wait_for_child(body_effects, "Dead", 9e9)
+        -- Waited for only while this is still the player's character: one that died or left before it loaded kept its thread parked here for good.
+        local function wait_while_current(parent, name)
+            while data[3] == character do
+                local child = wait_for_child(parent, name, 5)
 
-        local armor = wait_for_child(body_effects, "Armor", 9e9)
-        local knocked = wait_for_child(body_effects, "K.O", 9e9)
+                if child then
+                    return child
+                end
+
+                if character["Parent"] == nil then
+                    return nil
+                end
+            end
+
+            return nil
+        end
+
+        local body_effects = wait_while_current(character, "BodyEffects")
+        local really_dead = body_effects and wait_while_current(body_effects, "SDeath")
+        local dead = really_dead and wait_while_current(body_effects, "Dead")
+
+        local armor = dead and wait_while_current(body_effects, "Armor")
+        local knocked = armor and wait_while_current(body_effects, "K.O")
+
+        if not knocked then
+            return
+        end
 
         local old_armor = armor["Value"]
 
@@ -20635,7 +21395,11 @@ do
     }
 
     do -- > ( spoof properties)
-        local metatable = getrawmetatable(lighting)
+        -- The real metatable is kept in getgenv: a run started while an earlier one's fake is still on Lighting wraps the real one, not the fake
+        -- (each re-run added one more layer to every Lighting read and write the game makes).
+        local saved_metatable = getgenv()["neverlose_lighting_metatable"]
+        local metatable = saved_metatable and saved_metatable[1] == lighting and saved_metatable[2] or getrawmetatable(lighting)
+        getgenv()["neverlose_lighting_metatable"] = {lighting, metatable}
             local old_new_index = metatable["__newindex"]
             local old_index = metatable["__index"]
 
@@ -20666,6 +21430,17 @@ do
         end
 
         setrawmetatable(lighting, fake_metatable)
+
+        -- Unloading puts the real metatable back (only while ours is the one in place).
+        local teardowns = getgenv()["neverlose_teardowns"]
+
+        if teardowns then
+            teardowns[#teardowns+1] = function()
+                if getrawmetatable(lighting) == fake_metatable then
+                    setrawmetatable(lighting, metatable)
+                end
+            end
+        end
     end
 
     menu_references["lighting_section"] = menu["groups"]["visuals"]:create_section("general", "world", 1, 0.65, 0)
@@ -20695,7 +21470,8 @@ do
                 sound = nil
             end
 
-            if value then
+            -- a custom sound that could not be loaded has no id: nothing is played
+            if value and sounds[flags["background_noise_sound"][1]] then
                 sound = create_instance("Sound", {
                     ["SoundId"] = sounds[flags["background_noise_sound"][1]],
                     ["Volume"] = flags["background_noise_volume"]/65,
@@ -20736,6 +21512,15 @@ do
 
                     sounds[value] = new_sound
                 end
+            end
+
+            -- A file that is missing or could not be loaded keeps the sound that is playing.
+            if not new_sound then
+                if not isfile("neverlose recode/custom/"..value) and not sounds[value] then
+                    new_notification("failed to load background noise "..tostring(value), 3)
+                end
+
+                return
             end
 
             if sound then
@@ -20861,18 +21646,48 @@ do
     -- >> ( saturation )
 
     local color_correction = find_first_child_of_class(lighting, "ColorCorrectionEffect")
+    -- What the effect had before an option changed it, so turning the option off puts the game's own value back (not a fixed one).
+    local color_correction_saved = {}
+
+    -- The effect is looked up again when there was none at load or the game replaced it; turning an option on with none at all makes one.
+    local set_color_correction = function(property, enabled, value)
+        if not color_correction or not color_correction["Parent"] then
+            color_correction = find_first_child_of_class(lighting, "ColorCorrectionEffect")
+            color_correction_saved = {}
+
+            if not color_correction and enabled then
+                color_correction = create_instance("ColorCorrectionEffect", {
+                    ["Name"] = "\0",
+                    ["Parent"] = lighting
+                })
+            end
+        end
+
+        if not color_correction then
+            return
+        end
+
+        if enabled then
+            if color_correction_saved[property] == nil then
+                color_correction_saved[property] = color_correction[property]
+            end
+
+            color_correction[property] = value
+        elseif color_correction_saved[property] ~= nil then
+            color_correction[property] = color_correction_saved[property]
+            color_correction_saved[property] = nil
+        end
+    end
 
     menu_references["saturation"] = menu_references["lighting_section"]:create_element({["name"] = "saturation"}, {["toggle"] = {["flag"] = "saturation"}, ["slider"] = {["min"] = -1, ["max"] = 1, ["decimals"] = 2, ["default"] = round(color_correction and color_correction["Saturation"] or 0, 2), ["flag"] = "saturation_value"}})
 
     create_connection(menu_references["saturation"]["on_toggle_change"], function(value)
-        if color_correction then
-            color_correction["Saturation"] = value and flags["saturation_value"] or 0.1
-        end
+        set_color_correction("Saturation", value, flags["saturation_value"])
     end)
 
     create_connection(menu_references["saturation"]["on_slider_change"], function(value)
-        if color_correction and flags["saturation"] then
-            color_correction["Saturation"] = value
+        if flags["saturation"] then
+            set_color_correction("Saturation", true, value)
         end
     end)
 
@@ -20881,14 +21696,12 @@ do
     menu_references["contrast"] = menu_references["lighting_section"]:create_element({["name"] = "contrast"}, {["toggle"] = {["flag"] = "contrast"}, ["slider"] = {["min"] = -1, ["max"] = 1, ["decimals"] = 2, ["default"] = round(color_correction and color_correction["Contrast"] or 0, 2), ["flag"] = "contrast_value"}})
 
     create_connection(menu_references["contrast"]["on_toggle_change"], function(value)
-        if color_correction then
-            color_correction["Contrast"] = value and flags["contrast_value"] or 0.05
-        end
+        set_color_correction("Contrast", value, flags["contrast_value"])
     end)
 
     create_connection(menu_references["contrast"]["on_slider_change"], function(value)
-        if color_correction and flags["contrast"] then
-            color_correction["Contrast"] = value
+        if flags["contrast"] then
+            set_color_correction("Contrast", true, value)
         end
     end)
 
@@ -20910,7 +21723,8 @@ do
             ["WoodPlanks"] = "http://www.roblox.com/asset/?id=8676581022"
         },
     }
-    local restores = {}
+    -- weak keys: a map part that is gone does not stay held here while the feature is on
+    local restores = setmetatable({}, {["__mode"] = "k"})
     local textures = texture_packs["minecraft"]
     local variants = {}
 
@@ -20981,19 +21795,17 @@ do
                 return http_service:JSONDecode(readfile(path))
             end)
 
-            if s and data then
+            if s and type(data) == "table" then
                 local texture_pack = {}
 
-                for property, value in data do
-                    texture_pack[property] = value
+                -- (the loop's names used to hide the pack's name, so the pack was stored under its last texture id)
+                for material, id in data do
+                    texture_pack[material] = id
                 end
 
                 texture_packs[value] = texture_pack
 
-                textures = texture_pack
-                if textures_connection then
-                    apply_textures()
-                end
+                return texture_pack
             else
                 new_notification(
                     "failed to load file "..value,
@@ -21026,14 +21838,24 @@ do
 
     create_connection(menu_references["textures_pack"]["on_dropdown_change"], LPH_NO_VIRTUALIZE(function(value)
         local value = value[1]
-        textures = texture_packs[value]
+        local pack = texture_packs[value] or get_textures(value)
 
-        if not textures then
-            get_textures(value)
-            textures = texture_packs[value]
+        -- a pack that could not be loaded keeps the one in use
+        if not pack or pack == textures then
+            return
         end
 
-        textures = texture_packs[value]
+        textures = pack
+
+        -- Textures on: the old pack's colours and variants come off and the new pack goes on (every pack change, not only a first load).
+        if textures_connection then
+            for part, data in restores do
+                part["Color"] = data
+                restores[part] = nil
+            end
+
+            apply_textures()
+        end
     end))
 
     -- >> ( ambient )
@@ -21351,6 +22173,11 @@ do
     local apply_skybox = LPH_NO_VIRTUALIZE(function(skybox)
         local ids = skyboxes[skybox]
 
+        -- a custom sky that could not be loaded changes nothing
+        if not ids then
+            return
+        end
+
         sky["SkyboxBk"] = ids["SkyboxBk"]
         sky["SkyboxDn"] = ids["SkyboxDn"]
         sky["SkyboxFt"] = ids["SkyboxFt"]
@@ -21369,7 +22196,15 @@ do
         local value = value[1]
 
         if not skyboxes[value] then
-            local new_skybox = game:GetObjects(getcustomasset("neverlose recode/custom/"..value))[1]
+            local loaded, new_skybox = pcall(function()
+                return game:GetObjects(getcustomasset("neverlose recode/custom/"..value))[1]
+            end)
+
+            if not loaded or not new_skybox then
+                new_notification("failed to load skybox "..tostring(value), 3)
+                return
+            end
+
             skyboxes[value] = new_skybox
         end
 
@@ -21383,14 +22218,12 @@ do
     menu_references["tint"] = menu_references["lighting_section"]:create_element({["name"] = "tint"}, {["toggle"] = {["flag"] = "tint"}, ["colorpicker"] = {["color_flag"] = "tint_color", ["default_color"] = color_correction and color_correction["TintColor"] or color3_fromrgb(255, 255, 255), ["transparency_flag"] = "tint_transparency", ["default_transparency"] = 0}})
 
     create_connection(menu_references["tint"]["on_toggle_change"], function(value)
-        if color_correction then
-            color_correction["TintColor"] = value and flags["tint_color"] or color3_fromrgb(255,255,255)
-        end
+        set_color_correction("TintColor", value, flags["tint_color"])
     end)
 
     create_connection(menu_references["tint"]["on_color_change"], function(value)
-        if flags["tint"] and color_correction then
-            color_correction["TintColor"] = value
+        if flags["tint"] then
+            set_color_correction("TintColor", true, value)
         end
     end)
 end
@@ -21411,6 +22244,20 @@ do
         wait()
         local name = object["Name"]
         if name == "BULLET_RAYS" then
+            -- No scan for the beam while nothing listens (tracers and impacts off), nor for a shot whose owner is known and whose side has no listener.
+            local local_listened = #on_local_bullet_fired["callbacks"] > 0
+            local player_listened = #on_player_bullet_fired["callbacks"] > 0
+
+            if not local_listened and not player_listened then
+                return
+            end
+
+            local owner = get_attribute(object, "OwnerCharacter")
+
+            if owner ~= nil and (owner == local_name and not local_listened or owner ~= local_name and not player_listened) then
+                return
+            end
+
             -- A skin with a tracer of its own (SkinAssets.GunBeam) puts its beam in the shot as well, and it may not be the first one or have its
             -- end set yet: the first beam (anywhere in the shot) that has both ends is used, waiting up to twenty frames for one.
             local beam = nil
@@ -21520,8 +22367,22 @@ do
     do
         local text_chat_service = cloneref(game["GetService"](game, "TextChatService"))
 
+        -- What the chat window had before, put back when the option goes off (unloading turns it off too).
+        local chat_window_was = nil
+
         create_connection(menu_references["show_chat"]["on_toggle_change"], function(value)
-            text_chat_service["ChatWindowConfiguration"]["Enabled"] = value
+            local config = text_chat_service["ChatWindowConfiguration"]
+
+            if value then
+                if chat_window_was == nil then
+                    chat_window_was = config["Enabled"]
+                end
+
+                config["Enabled"] = true
+            elseif chat_window_was ~= nil then
+                config["Enabled"] = chat_window_was
+                chat_window_was = nil
+            end
         end)
     end
 
@@ -21681,6 +22542,9 @@ do
         end)
     end
 
+    -- What the target line shows now, so it is only rebuilt and written when something in it changed (it runs every frame).
+    local cp_target_cache = {}
+
     -- the line under the center panel's state: who is being killed, how sure the resolver is, and the score
     hide_manager["cp_target_update"] = function(anchor)
         local line = hide_manager["cp_target"]
@@ -21700,14 +22564,43 @@ do
         end
 
         local entry = hide_manager["score_of"](player)
-        local text = string.format("killing: %s(resolved:%.3f:%s) [%d-%d]", player["Name"], hide_manager["resolver_confidence"] or 0, tostring(hide_manager["resolver_active"] == true), entry["mine"], entry["theirs"])
+        local cache = cp_target_cache
 
-        if line["Text"] ~= text then
-            line["Text"] = text
+        -- a new line (the panel was turned off and on) starts with nothing written
+        if cache["line"] ~= line then
+            table.clear(cache)
+            cache["line"] = line
         end
 
-        line["Transparency"] = 0.7 * (1 - (flags["center_panel_secondary_transparency"] or 0))
-        line["Position"] = anchor["Position"] + vector2_new(0, 15)
+        local name = player["Name"]
+        local confidence = floor((hide_manager["resolver_confidence"] or 0) * 1000 + 0.5)
+        local active = hide_manager["resolver_active"] == true
+        local mine = entry["mine"]
+        local theirs = entry["theirs"]
+
+        if cache["name"] ~= name or cache["confidence"] ~= confidence or cache["active"] ~= active or cache["mine"] ~= mine or cache["theirs"] ~= theirs then
+            cache["name"] = name
+            cache["confidence"] = confidence
+            cache["active"] = active
+            cache["mine"] = mine
+            cache["theirs"] = theirs
+
+            line["Text"] = string.format("killing: %s(resolved:%.3f:%s) [%d-%d]", name, confidence / 1000, tostring(active), mine, theirs)
+        end
+
+        local transparency = 0.7 * (1 - (flags["center_panel_secondary_transparency"] or 0))
+
+        if cache["transparency"] ~= transparency then
+            cache["transparency"] = transparency
+            line["Transparency"] = transparency
+        end
+
+        local position = anchor["Position"] + vector2_new(0, 15)
+
+        if cache["position"] ~= position then
+            cache["position"] = position
+            line["Position"] = position
+        end
 
         if not line["Visible"] then
             line["Visible"] = true
@@ -21731,6 +22624,9 @@ do
         local center_panel_viewport_size_connection = nil
         local last_beat = clock()
         local linear = Enum["EasingStyle"]["Linear"]
+        -- the state the text shows, and the drawing it was written to (a new one is made showing "void")
+        local last_state = nil
+        local last_state_text = nil
 
         local update_center_panel = LPH_JIT_MAX(function(bypass)
             local screen_size = camera["ViewportSize"]/2
@@ -21794,11 +22690,18 @@ do
 
             hide_manager["cp_target_update"](text)
 
-            local old = text3["Text"]
+            if last_state_text ~= text3 then
+                last_state_text = text3
+                last_state = "void"
+            end
+
             local state = local_reloading and "reloading" or local_following and "following" or stomping and "stomping" or purchasing and "purchasing" or (in_void or in_void == nil) and "void" or (local_parts["ForceField"] and "invulnerable" or "unsafe")
-            local new = "ragebot: " .. state .. "..."
-            text3["Text"] = new
-            if old ~= new then
+
+            -- the text is only built and written when the state changes
+            if state ~= last_state then
+                last_state = state
+                text3["Text"] = "ragebot: " .. state .. "..."
+
                 local secondary = 1 - (flags["center_panel_secondary_transparency"] or 0)
 
                 tween(text3, {["Transparency"] = 0.6 * secondary}, linear, out, 0.09)
@@ -22149,15 +23052,14 @@ do
             local _cs = flags["drawing_crosshair_style"]
             local crosshair_style = (type(_cs) == "table" and _cs[1]) or (type(_cs) == "string" and _cs) or "classic"
 
-            local angles = {rot_rad, pi / 2 + rot_rad, pi + rot_rad, 3 * pi / 2 + rot_rad}
-
+            -- (the four arm angles are rot_rad + a quarter turn each, worked out in the loops: no table every frame)
             if crosshair_style == "symbol" then
                 -- symbol style: 4 sharp triangles pointing outward
                 -- base width scales with arm length for a proper pointed look
                 local half_base = len * 0.35 + 1.5  -- wide enough to see, scales with length
 
                 for i = 1, 4 do
-                    local angle   = angles[i]
+                    local angle   = rot_rad + (i - 1) * pi / 2
                     local perp    = angle + pi / 2
 
                     -- tip (sharp point at end of arm)
@@ -22186,17 +23088,17 @@ do
                     lines[idx_outline]["PointB"]  = vector2_new(oblx, obly)
                     lines[idx_outline]["PointC"]  = vector2_new(obrx, obry)
                     lines[idx_outline]["Color"]   = outline_color
-                    lines[idx_outline]["Filled"]  = true
-                    lines[idx_outline]["Visible"] = true
 
                     -- draw fill on top
                     lines[idx_fill]["PointA"]  = vector2_new(tx,  ty)
                     lines[idx_fill]["PointB"]  = vector2_new(blx, bly)
                     lines[idx_fill]["PointC"]  = vector2_new(brx, bry)
                     lines[idx_fill]["Color"]   = line_color
-                    lines[idx_fill]["Filled"]  = true
-                    lines[idx_fill]["Visible"] = true
                 end
+
+                -- (the triangles are made filled and visible; the dots are shown once, again when they were remade)
+                local show_dots = lines["dots_shown"] ~= lines[17]
+                lines["dots_shown"] = lines[17]
 
                 -- center dot
                 local dot_r = math.max(2, thickness)
@@ -22204,18 +23106,18 @@ do
                     lines[17]["Position"] = vector2_new(px - dot_r,     py - dot_r)
                     lines[17]["Size"]     = vector2_new(dot_r * 2,       dot_r * 2)
                     lines[17]["Color"]    = line_color
-                    lines[17]["Visible"]  = true
+                    if show_dots then lines[17]["Visible"] = true end
                 end
                 if lines[18] then
                     lines[18]["Position"] = vector2_new(px - dot_r - 1, py - dot_r - 1)
                     lines[18]["Size"]     = vector2_new(dot_r * 2 + 2,  dot_r * 2 + 2)
                     lines[18]["Color"]    = outline_color
-                    lines[18]["Visible"]  = true
+                    if show_dots then lines[18]["Visible"] = true end
                 end
             else
                 -- classic style (original)
                 for i = 1, 4 do
-                    local angle = angles[i]
+                    local angle = rot_rad + (i - 1) * pi / 2
                     local idx_base    = (i - 1) * 2 + 1
                     local idx_outline = idx_base + 1
 
@@ -22236,9 +23138,12 @@ do
                     lines[idx_outline]["Color"]= outline_color
                 end
 
-                -- hide dot drawings if any
-                if lines[17] then lines[17]["Visible"] = false end
-                if lines[18] then lines[18]["Visible"] = false end
+                -- hide dot drawings if any (once, not every frame)
+                if lines["dots_shown"] then
+                    lines["dots_shown"] = nil
+                    if lines[17] then lines[17]["Visible"] = false end
+                    if lines[18] then lines[18]["Visible"] = false end
+                end
             end
     
             if indicator_opacity then
@@ -22607,7 +23512,8 @@ do
         end)
 
         create_connection(menu_references["crosshair_animations"]["on_toggle_change"], function(value)
-            if flags["hide_game_crosshair"] then
+            -- Only turning this on turns the other one off: the other's off handler must not turn this one off again in turn.
+            if value and flags["hide_game_crosshair"] then
                 menu_references["hide_game_crosshair"]:set_toggle(false)
             end
 
@@ -23219,14 +24125,14 @@ do
         menu_references["d3_hit_marker_lifetime"] = menu_references["d3_hit_marker_settings"]:create_element({["name"] = "lifetime"}, {["slider"] = {["flag"] = "d3_hit_marker_lifetime", ["min"] = 0.1, ["max"] = 2, ["default"] = 0.7, ["decimals"] = 1, ["suffix"] = "s", ["prefix"] = ""}})
         menu_references["d3_hit_marker_thickness"] = menu_references["d3_hit_marker_settings"]:create_element({["name"] = "thickness"}, {["slider"] = {["flag"] = "d3_hit_marker_thickness", ["min"] = 0, ["max"] = 4, ["default"] = 2, ["decimals"] = 0, ["suffix"] = "px", ["prefix"] = ""}})
         menu_references["d3_hit_marker_color"] = menu_references["d3_hit_marker_settings"]:create_element({["name"] = "color"}, {["colorpicker"] = {["color_flag"] = "d3_hit_marker_color", ["transparency_flag"] = "d3_hit_marker_transparency", ["default_color"] = color3_fromrgb(133, 220, 255), ["default_transparency"] = 0}})
-        menu_references["d3_hit_marker_lethal_color"] = menu_references["d3_hit_marker_settings"]:create_element({["name"] = "lethal color"}, {["colorpicker"] = {["color_flag"] = "d3_hit_marker_lethal_color", ["transparency_flag"] = "d3_hit_marker_transparency", ["default_color"] = color3_fromrgb(255, 0, 0), ["default_transparency"] = 0}})
+        menu_references["d3_hit_marker_lethal_color"] = menu_references["d3_hit_marker_settings"]:create_element({["name"] = "lethal color"}, {["colorpicker"] = {["color_flag"] = "d3_hit_marker_lethal_color", ["transparency_flag"] = "d3_hit_marker_lethal_transparency", ["default_color"] = color3_fromrgb(255, 0, 0), ["default_transparency"] = 0}})
         menu_references["d3_hit_marker_outline_color"] = menu_references["d3_hit_marker_settings"]:create_element({["name"] = "outline color"}, {["colorpicker"] = {["color_flag"] = "d3_hit_marker_outline_color", ["transparency_flag"] = "d3_hit_marker_outline_transparency", ["default_color"] = color3_fromrgb(15, 15, 15), ["default_transparency"] = 0}})
     menu_references["d2_hit_marker"] = menu_references["game_section"]:create_element({["name"] = "2d hit marker"}, {["toggle"] = {["flag"] = "d2_hit_marker"}})
         menu_references["d2_hit_marker_settings"] = menu_references["d2_hit_marker"]:create_settings()
         menu_references["d2_hit_marker_lifetime"] = menu_references["d2_hit_marker_settings"]:create_element({["name"] = "lifetime"}, {["slider"] = {["flag"] = "d2_hit_marker_lifetime", ["min"] = 0.1, ["max"] = 2, ["default"] = 0.7, ["decimals"] = 1, ["suffix"] = "s", ["prefix"] = ""}})
         menu_references["d2_hit_marker_thickness"] = menu_references["d2_hit_marker_settings"]:create_element({["name"] = "thickness"}, {["slider"] = {["flag"] = "d2_hit_marker_thickness", ["min"] = 0, ["max"] = 4, ["default"] = 2, ["decimals"] = 0, ["suffix"] = "px", ["prefix"] = ""}})
         menu_references["d2_hit_marker_color"] = menu_references["d2_hit_marker_settings"]:create_element({["name"] = "color"}, {["colorpicker"] = {["color_flag"] = "d2_hit_marker_color", ["transparency_flag"] = "d2_hit_marker_transparency", ["default_color"] = color3_fromrgb(133, 220, 255), ["default_transparency"] = 0}})
-        menu_references["d2_hit_marker_lethal_color"] = menu_references["d2_hit_marker_settings"]:create_element({["name"] = "lethal color"}, {["colorpicker"] = {["color_flag"] = "d2_hit_marker_lethal_color", ["transparency_flag"] = "d2_hit_marker_transparency", ["default_color"] = color3_fromrgb(255, 0, 0), ["default_transparency"] = 0}})
+        menu_references["d2_hit_marker_lethal_color"] = menu_references["d2_hit_marker_settings"]:create_element({["name"] = "lethal color"}, {["colorpicker"] = {["color_flag"] = "d2_hit_marker_lethal_color", ["transparency_flag"] = "d2_hit_marker_lethal_transparency", ["default_color"] = color3_fromrgb(255, 0, 0), ["default_transparency"] = 0}})
         menu_references["d2_hit_marker_outline_color"] = menu_references["d2_hit_marker_settings"]:create_element({["name"] = "outline color"}, {["colorpicker"] = {["color_flag"] = "d2_hit_marker_outline_color", ["transparency_flag"] = "d2_hit_marker_outline_transparency", ["default_color"] = color3_fromrgb(15, 15, 15), ["default_transparency"] = 0}})
     menu_references["hit_skeleton"] = menu_references["game_section"]:create_element({["name"] = "hit skeleton"}, {["toggle"] = {["flag"] = "hit_skeleton"}})
         menu_references["hit_skeleton_settings"] = menu_references["hit_skeleton"]:create_settings()
@@ -23761,7 +24667,8 @@ do
 
         local do_hit_skeleton = LPH_NO_VIRTUALIZE(function(player)
             local data = player_data[player]
-            local character = data[3]
+            -- (a hit confirmed after the player left has no record)
+            local character = data and data[3]
 
             if not character then
                 return
@@ -24207,16 +25114,26 @@ local hit_sounds = {
     ["quake"] = read_asset("neverlose recode/assets/quake.ogg"),
 }
 
+    -- Each sound goes through a temp file to get an asset id. A step that fails (a workspace that refuses the write, an extension the executor
+    -- refuses, no delfile) only drops that sound: the rest of the engine still loads.
     for _, data in hit_sounds do
         local path = tostring({}):sub(math_random(8, 12))..".ogg"
-        writefile(path, data)
-        hit_sounds[_] = getcustomasset(path)
-        delfile(path)
+        local loaded, asset = pcall(function()
+            writefile(path, data)
+            return getcustomasset(path)
+        end)
+        hit_sounds[_] = loaded and asset or nil
+        pcall(delfile, path)
     end
 
     local hit_sound_data = hit_sounds["Visions hook"]
 
     local do_hit_sound = function()
+        -- a sound that could not be loaded plays nothing
+        if not hit_sound_data then
+            return
+        end
+
         delay(0, destroy, create_instance("Sound", {
             ["SoundId"] = hit_sound_data,
             ["Volume"] = flags["hit_sound_volume"],
@@ -24241,14 +25158,19 @@ local hit_sounds = {
         local new_value = value[1]
         hit_sound_data = hit_sounds[new_value]
 
+        -- A custom file. A built-in whose asset is missing has no custom file either; both just leave the hit sound silent.
         if new_value and not hit_sound_data then
             local path = tostring({}):sub(math_random(8, 12))..".ogg"
-            writefile(path, readfile("neverlose recode/custom/"..new_value))
-            local asset = getcustomasset(path)
-            hit_sounds[new_value] = asset
-            delfile(path)
+            local loaded, asset = pcall(function()
+                writefile(path, readfile("neverlose recode/custom/"..new_value))
+                return getcustomasset(path)
+            end)
+            pcall(delfile, path)
 
-            hit_sound_data = asset
+            if loaded and asset then
+                hit_sounds[new_value] = asset
+                hit_sound_data = asset
+            end
         end
     end)
 
@@ -24726,7 +25648,14 @@ local hit_sounds = {
         end
 
         local do_hit_particle = LPH_NO_VIRTUALIZE(function(player, part)
-            local lethal = player_data[player][18]
+            -- (a hit confirmed after the player left has no record)
+            local data = player_data[player]
+
+            if not data then
+                return
+            end
+
+            local lethal = data[18]
             local color = ColorSequence["new"](lethal and flags["hit_particle_lethal_color"] or flags["hit_particle_color"])
             local z_offset = flags["hit_particle_behind_walls"] and 1 or 0
             -- The picker's opacity, relative to its default: 0.2 is the look the emitters always had, so they keep it there (nothing read the value before).
@@ -24777,7 +25706,16 @@ local hit_sounds = {
             local found = value and hit_particles[value]; if found then hit_particle = found end
 
             if value and not found then
-                local new_particle = game:GetObjects(getcustomasset("neverlose recode/custom/"..value))[1]
+                local loaded, new_particle = pcall(function()
+                    return game:GetObjects(getcustomasset("neverlose recode/custom/"..value))[1]
+                end)
+
+                -- a file that is missing or broken keeps the particle in use
+                if not loaded or not new_particle then
+                    new_notification("failed to load hit particle "..tostring(value), 3)
+                    return
+                end
+
                 local children = get_children(new_particle)
                 local new_hit_particle = {}
                 for i = 1, #children do
@@ -24807,10 +25745,17 @@ local hit_sounds = {
     local hit_image = nil
     local last_hit = clock()
     local do_hit_overlay = function(player)
+        local player_record = player_data[player]
+
+        -- no picture (overlay off, or 1.png missing), or a hit confirmed after the player left
+        if not hit_image or not player_record then
+            return
+        end
+
         local new_last_hit = clock()
         last_hit = new_last_hit
 
-        local is_lethal = player_data[player][18]
+        local is_lethal = player_record[18]
         hit_image["Color"] = is_lethal and flags["hit_overlay_lethal_color"] or flags["hit_overlay_color"]
         hit_image["Size"] = camera["ViewportSize"]
 
@@ -24818,7 +25763,8 @@ local hit_sounds = {
         tween(hit_image, {Transparency = is_lethal and -flags["hit_overlay_lethal_transparency"]+1 or -flags["hit_overlay_transparency"]+1}, quad, out, (lifetime/5.25))
         wait(lifetime/5.15)
 
-        if new_last_hit ~= last_hit then
+        -- (turned off while this waited)
+        if new_last_hit ~= last_hit or not hit_image then
             return
         end
 
@@ -24836,7 +25782,10 @@ local hit_sounds = {
             hit_image = nil
         end
 
-        if value then
+        -- without its picture the overlay stays off
+        if value and not data then
+            new_notification("hit overlay picture (1.png) is missing", 3)
+        elseif value then
             hit_image = create_real_drawing("Image", {
                 ["Color"] = flags["hit_overlay_color"],
                 ["Transparency"] = 0,
@@ -24860,7 +25809,14 @@ local hit_sounds = {
         local create_drawing = (identifyexecutor() == "Swift" or identifyexecutor() == "Potassium") and create_fake_drawing or create_real_drawing
 
         local do_damage_number = LPH_JIT_MAX(function(player, part, damage, _, message)
-            local lethal = player_data[player][18]
+            -- (a hit confirmed after the player left has no record)
+            local record = player_data[player]
+
+            if not record then
+                return
+            end
+
+            local lethal = record[18]
             -- the lethal colour has an opacity of its own (nothing read it)
             local transparency = -(lethal and flags["damage_number_lethal_transparency"] or flags["damage_number_transparency"] or 0)+1
             local color = lethal and flags["damage_number_lethal_color"] or flags["damage_number_color"]
@@ -24883,6 +25839,8 @@ local hit_sounds = {
             local lifetime = flags["damage_number_lifetime"]
             local half = lifetime/1.6
             local new_half = lifetime/2
+            -- hidden while the point is off screen, shown again when it comes back
+            local hidden = false
 
             local new_function = function(dt)
                 elapsed_time+=dt
@@ -24903,7 +25861,13 @@ local hit_sounds = {
                     end
 
                     number["Position"] = vector2_new(position["X"] + 13, position["Y"])
-                else
+
+                    if hidden then
+                        hidden = false
+                        number["Visible"] = true
+                    end
+                elseif not hidden then
+                    hidden = true
                     number["Visible"] = false
                 end
             end
@@ -24953,20 +25917,31 @@ local hit_sounds = {
             local lines = {}
             local outlines = {}
             local thickness = flags["d3_hit_marker_thickness"]
-            local color = player_data[player][18] and flags["d3_hit_marker_lethal_color"] or d3_hit_marker_color
+            -- (a hit confirmed after the player left has no record)
+            local record = player_data[player]
+
+            if not record then
+                return
+            end
+
+            local lethal = record[18]
+            local color = lethal and flags["d3_hit_marker_lethal_color"] or flags["d3_hit_marker_color"] or d3_hit_marker_color
+            -- the pickers' opacities (nothing read them; the lines were always fully opaque)
+            local line_opacity = 1 - ((lethal and flags["d3_hit_marker_lethal_transparency"] or flags["d3_hit_marker_transparency"]) or 0)
+            local outline_opacity = 1 - (flags["d3_hit_marker_outline_transparency"] or 0)
 
             for i = 1, 4 do
                 lines[i] = create_real_drawing("Line", {
                     ["Thickness"] = thickness,
                     ["Color"] = color,
-                    ["Transparency"] = 1,
+                    ["Transparency"] = line_opacity,
                     ["ZIndex"] = 100,
                     ["Visible"] = true
                 })
                 outlines[i] = create_real_drawing("Line", {
                     ["Thickness"] = thickness + 2,
                     ["Color"] = d3_hit_marker_outline_color,
-                    ["Transparency"] = 1,
+                    ["Transparency"] = outline_opacity,
                     ["ZIndex"] = 99,
                     ["Visible"] = true
                 })
@@ -24992,11 +25967,11 @@ local hit_sounds = {
 
                     if elapsed_time > lifetime then
                         local elapsed_time = elapsed_time - lifetime
-                        local transparency = 1 + (0 - 1) * get_value(tween_service, elapsed_time / 0.3, quad, out)
+                        local remaining = 1 - get_value(tween_service, elapsed_time / 0.3, quad, out)
 
                         for i = 1, 4 do
-                            lines[i]["Transparency"] = transparency
-                            outlines[i]["Transparency"] = transparency
+                            lines[i]["Transparency"] = line_opacity * remaining
+                            outlines[i]["Transparency"] = outline_opacity * remaining
                         end
                     end
 
@@ -25077,20 +26052,31 @@ local hit_sounds = {
             local lines = {}
             local outlines = {}
             local thickness = flags["d2_hit_marker_thickness"]
-            local color = player_data[player][18] and flags["d2_hit_marker_lethal_color"] or d2_hit_marker_color
+            -- (a hit confirmed after the player left has no record)
+            local record = player_data[player]
+
+            if not record then
+                return
+            end
+
+            local lethal = record[18]
+            local color = lethal and flags["d2_hit_marker_lethal_color"] or flags["d2_hit_marker_color"] or d2_hit_marker_color
+            -- the pickers' opacities (nothing read them; the lines were always fully opaque)
+            local line_opacity = 1 - ((lethal and flags["d2_hit_marker_lethal_transparency"] or flags["d2_hit_marker_transparency"]) or 0)
+            local outline_opacity = 1 - (flags["d2_hit_marker_outline_transparency"] or 0)
 
             for i = 1, 4 do
                 lines[i] = create_real_drawing("Line", {
                     ["Thickness"] = thickness,
                     ["Color"] = color,
-                    ["Transparency"] = 1,
+                    ["Transparency"] = line_opacity,
                     ["ZIndex"] = 100,
                     ["Visible"] = true
                 })
                 outlines[i] = create_real_drawing("Line", {
                     ["Thickness"] = thickness + 2,
                     ["Color"] = d2_hit_marker_outline_color,
-                    ["Transparency"] = 1,
+                    ["Transparency"] = outline_opacity,
                     ["ZIndex"] = 99,
                     ["Visible"] = true
                 })
@@ -25113,11 +26099,11 @@ local hit_sounds = {
 
                 if elapsed_time > lifetime then
                     local elapsed_time = elapsed_time - lifetime
-                    local transparency = 1 + (0 - 1) * get_value(tween_service, elapsed_time / 0.2, quad, out)
+                    local remaining = 1 - get_value(tween_service, elapsed_time / 0.2, quad, out)
 
                     for i = 1, 4 do
-                        lines[i]["Transparency"] = transparency
-                        outlines[i]["Transparency"] = transparency
+                        lines[i]["Transparency"] = line_opacity * remaining
+                        outlines[i]["Transparency"] = outline_opacity * remaining
                     end
                 end
 
@@ -25207,6 +26193,28 @@ local hit_sounds = {
         })
         local only_last_hit = nil
         local last_model = nil
+
+        -- One copy per player every 0.15 s and no more than 6 alive (like the hit skeleton): every hit cloned the whole character and faded each part.
+        local live_hit_chams = 0
+        local last_hit_chams_at = setmetatable({}, {["__mode"] = "k"})
+
+        local claim_hit_chams = function(player)
+            local now = clock()
+
+            if live_hit_chams >= 6 or (last_hit_chams_at[player] and now - last_hit_chams_at[player] < 0.15) then
+                return false
+            end
+
+            last_hit_chams_at[player] = now
+            live_hit_chams += 1
+
+            -- counted until the copy is gone (its lifetime and the 0.25 s fade)
+            delay(hit_chams_lifetime + 0.25, function()
+                live_hit_chams -= 1
+            end)
+
+            return true
+        end
 
         local destroy_hit_chams_none = function(model)
             destroy(model)
@@ -25301,18 +26309,26 @@ local hit_sounds = {
         local destroy_hit_chams = destroy_hit_chams_new_fade
 
         local do_hit_chams = LPH_NO_VIRTUALIZE(function(player)
+            -- (a hit confirmed after the player left has no record)
+            local record = player_data[player]
+            local character = record and record[3]
+
+            if not character or not claim_hit_chams(player) then
+                return
+            end
+
             if last_model and only_last_hit then
                 destroy(last_model)
             end
 
             last_model = nil
 
-            local character = player_data[player][3]
-
             if character then
+                -- the character's own Archivable is put back afterwards
+                local was_archivable = character["Archivable"]
                 character["Archivable"] = true
                 local new_model = clone(character)
-                character["Archivable"] = false
+                character["Archivable"] = was_archivable
                 new_model["Name"] = "\0"
                 local children = get_children(new_model)
 
@@ -25360,18 +26376,26 @@ local hit_sounds = {
         end)
 
         local do_hit_chams_outline = LPH_NO_VIRTUALIZE(function(player)
+            -- (a hit confirmed after the player left has no record)
+            local record = player_data[player]
+            local character = record and record[3]
+
+            if not character or not claim_hit_chams(player) then
+                return
+            end
+
             if last_model and only_last_hit then
                 destroy(last_model)
             end
 
             last_model = nil
 
-            local character = player_data[player][3]
-
             if character then
+                -- the character's own Archivable is put back afterwards
+                local was_archivable = character["Archivable"]
                 character["Archivable"] = true
                 local new_model = clone(character)
-                character["Archivable"] = false
+                character["Archivable"] = was_archivable
                 new_model["Name"] = "\0"
                 local children = get_children(new_model)
 
@@ -25509,7 +26533,8 @@ local hit_sounds = {
         end
 
         create_connection(menu_references["hide_game_crosshair"]["on_toggle_change"], function(value)
-            if flags["crosshair_animations"] then
+            -- Only turning this on turns the other one off: the other's off handler must not turn this one off again in turn.
+            if value and flags["crosshair_animations"] then
                 menu_references["crosshair_animations"]:set_toggle(false)
 
                 wait()
@@ -25577,9 +26602,16 @@ local hit_sounds = {
             end
 
             local look_vector = camera["CFrame"]["lookVector"]
-            local new_blur_size = (look_vector - last_look_vector)["magnitude"] * blur_intensity * dt
 
-            smoothed_blur_size = (smoothed_blur_size + (new_blur_size - smoothed_blur_size)) * dt*30^2
+            if dt <= 0 then
+                return
+            end
+
+            -- The turn per second, scaled so 60 fps keeps the strength it had; then eased toward it. (The old line was not a lerp: it came out
+            -- as size * dt * 900 with dt already in the size, so the blur was strong at low fps and almost none at high fps.)
+            local new_blur_size = (look_vector - last_look_vector)["magnitude"] / dt * blur_intensity / 240
+
+            smoothed_blur_size = smoothed_blur_size + (new_blur_size - smoothed_blur_size) * math.min(dt * 30, 1)
         
             blur["Size"] = smoothed_blur_size
             last_look_vector = look_vector
@@ -25914,6 +26946,19 @@ do
                         destroy(fake)
                     end
 
+                    -- Every weld and mesh an earlier apply added (named "\0", which the game may read back as "") goes, not only the first mesh:
+                    -- the welds piled up with every equip.
+                    local default_children = get_children(default)
+                    for i = 1, #default_children do
+                        local child = default_children[i]
+                        local child_name = child["Name"]
+                        local class_name = child["ClassName"]
+
+                        if (child_name == "\0" or #child_name == 0) and (class_name == "Weld" or class_name == "MeshPart") then
+                            destroy(child)
+                        end
+                    end
+
                     if mesh then
                         local new_mesh = mesh["ClassName"] == "MeshPart" and mesh or nil
 
@@ -25970,10 +27015,12 @@ do
                         end
                     end
 
+                    -- the particle and sound clones are named "\0" (length 1), so both names are matched
                     local children = get_children(handle)
                     for i = 1, #children do
                         local child = children[i]
-                        if #child["Name"] == 0 then
+                        local child_name = child["Name"]
+                        if #child_name == 0 or child_name == "\0" then
                             destroy(child)
                         end
                     end
@@ -26094,13 +27141,27 @@ do
             knife_meshes[name] = nil
             local tool = skin["tool"]
             skins_list[tool][name] = nil
+            -- the list row of a skin that goes away (the rebuild below only removes the rows still in skins_list)
+            if tool == selected_weapon then
+                section:remove_item(name, false, true)
+            end
             if local_tool and local_tool["Name"]:lower():sub(2, -2) == tool then
                 apply_skin(local_tool)
             end
             custom_skins[name] = nil
         end
 
-        local skins = menu["get_skins_list"]() or {}
+        -- The custom folder's .skin files. (This asked the menu for them, and the menu here has no such list, so nothing ever loaded.)
+        local skins = {}
+        pcall(function()
+            for _, path in listfiles("neverlose recode/custom") do
+                local skin = tostring(path):match("([^/\\]+)%.skin$")
+
+                if skin then
+                    skins[#skins+1] = skin
+                end
+            end
+        end)
         for _, skin in skins do
             local s, data = pcall(function()
                 return http_service:JSONDecode(readfile("neverlose recode/custom/"..skin..".skin"))
@@ -26117,7 +27178,7 @@ do
                 end
 
                 if not skins_list[tool] then
-                    new_notification("failed to load skin "..name.." due to invalid weapon ("..tool..")", 3)
+                    new_notification("failed to load skin "..tostring(name).." due to invalid weapon ("..tostring(tool)..")", 3)
                     continue
                 end
 
@@ -26130,13 +27191,14 @@ do
                     end)
 
                     if not mesh_part or typeof(mesh_part) ~= "Instance" or not _ then
-                        new_notification("failed to load skin "..name.." due to invalid mesh ("..mesh_part..")", 3)
+                        new_notification("failed to load skin "..tostring(name).." due to invalid mesh ("..tostring(mesh_part)..")", 3)
                         continue
                     end
 
                     mesh_part["Name"] = tool
 
-                    local folder = create_instance("Folder", {
+                    -- (no local here: it hid the outer folder, so the skin never kept its mesh and a refresh never removed it)
+                    folder = create_instance("Folder", {
                         ["Name"] = name
                     })
 
@@ -26176,11 +27238,13 @@ do
                 local shoot_sound = data["shoot_sound"]
                 local sound = nil
 
-                if shoot_sound then
-                    sounds[tool][name] = create_instance("StringValue", {
+                -- (only weapons that have shoot sounds; the knife has none)
+                if shoot_sound and sounds[tool] then
+                    sound = create_instance("StringValue", {
                         ["Value"] = shoot_sound,
                         ["Name"] = name,
                     })
+                    sounds[tool][name] = sound
                 end
 
                 local handle_particle = data["handle_particle"]
@@ -26229,13 +27293,18 @@ do
                     animations[name] = {animation_track, data["animation_speed"] or 1}
                 end
 
-                --[[skins_list[tool][name] = {
-                    ["CFrame"] = data["cframe"] and cframe_new(unpack(data["cframe"])) or cframe_new(),
+                -- the skin's entry in the weapon's list (a bad cframe in the file falls back to none)
+                local has_cframe, skin_cframe = pcall(function()
+                    return data["cframe"] and cframe_new(unpack(data["cframe"])) or cframe_new()
+                end)
+
+                skins_list[tool][name] = {
+                    ["CFrame"] = has_cframe and skin_cframe or cframe_new(),
                     ["TextureID"] = data["texture"] or nil,
                     ["Rarity"] = "Common",
                     ["Tool"] = tool,
                     ["Name"] = name
-                }--]]
+                }
 
                 custom_skins[name] = {
                     ["tool"] = tool,
@@ -26248,7 +27317,7 @@ do
                     ["name"] = name
                 }
             else
-                new_notification("failed to load skin ("..data..")", 3)
+                new_notification("failed to load skin "..tostring(skin).." ("..tostring(data)..")", 3)
             end
         end
 
@@ -26269,11 +27338,15 @@ do
         ["sexy"] = read_asset("neverlose recode/assets/sexy.ogg")
     }
 
+    -- a step that fails only drops that sound (see the hit sounds)
     for _, data in sounds do
         local path = tostring({}):sub(math_random(8, 12))..".ogg"
-        writefile(path, data)
-        sounds[_] = getcustomasset(path)
-        delfile(path)
+        local loaded, asset = pcall(function()
+            writefile(path, data)
+            return getcustomasset(path)
+        end)
+        sounds[_] = loaded and asset or nil
+        pcall(delfile, path)
     end
 
     sounds["default"] = true
@@ -26288,12 +27361,19 @@ do
         local value = value[1]
         local_bullet_data = sounds[value]
 
+        -- A custom file. One that is missing (or a built-in whose asset is missing) leaves the gun's own sound.
         if not local_bullet_data then
             local path = tostring({}):sub(math_random(8, 12))..".ogg"
-            writefile(path, readfile("neverlose recode/custom/"..value))
-            local_bullet_data = getcustomasset(path)
-            sounds[value] = local_bullet_data
-            delfile(path)
+            local loaded, asset = pcall(function()
+                writefile(path, readfile("neverlose recode/custom/"..value))
+                return getcustomasset(path)
+            end)
+            pcall(delfile, path)
+
+            if loaded and asset then
+                local_bullet_data = asset
+                sounds[value] = asset
+            end
         end
 
         if local_bullet_sound then
@@ -26311,11 +27391,15 @@ do
         ["jaydes"] = read_asset("neverlose recode/assets/jaydes.png"),
     }
 
+    -- a step that fails only drops that picture (the default armor picture is used instead)
     for _, data in images do
         local path = tostring({}):sub(math_random(8, 12))..".png"
-        writefile(path, data)
-        images[_] = getcustomasset(path)
-        delfile(path)
+        local loaded, asset = pcall(function()
+            writefile(path, data)
+            return getcustomasset(path)
+        end)
+        images[_] = loaded and asset or nil
+        pcall(delfile, path)
     end
 
     images["default"] = "rbxassetid://3376128953"
@@ -26343,8 +27427,41 @@ do
             end
 
             pending[hrp] = true
-            local defense_gui = wait_for_child(hrp, "DefenseBBGUI", 9e9)
-            local vest = defense_gui and wait_for_child(defense_gui, "Vest", 9e9)
+            local defense_gui = find_first_child(hrp, "DefenseBBGUI")
+
+            -- Waits on the body's ChildAdded and gives up when the body leaves the game: a WaitForChild with no end was never resumed for a
+            -- player who died without armor, so one thread was left behind per life.
+            if not defense_gui and hrp:IsDescendantOf(game) then
+                local thread = coroutine.running()
+                local added = nil
+                local removed = nil
+
+                local finish = function(result)
+                    if added then
+                        added:Disconnect()
+                        removed:Disconnect()
+                        added = nil
+                        removed = nil
+                        spawn(thread, result)
+                    end
+                end
+
+                added = hrp["ChildAdded"]:Connect(function(child)
+                    if child["Name"] == "DefenseBBGUI" then
+                        finish(child)
+                    end
+                end)
+
+                removed = hrp["AncestryChanged"]:Connect(function()
+                    if not hrp:IsDescendantOf(game) then
+                        finish(nil)
+                    end
+                end)
+
+                defense_gui = coroutine.yield()
+            end
+
+            local vest = defense_gui and wait_for_child(defense_gui, "Vest", 10)
             pending[hrp] = nil
 
             if vest then
@@ -26378,10 +27495,13 @@ do
         armor_pop_data = images[value]
 
         if not armor_pop_data then
-            local new_data = getcustomasset("neverlose recode/custom/"..value)
+            local loaded, new_data = pcall(getcustomasset, "neverlose recode/custom/"..value)
 
-            images[value] = new_data
-            armor_pop_data = new_data
+            -- a file that is missing leaves armor_pop_data nil: the default picture is shown
+            if loaded and new_data then
+                images[value] = new_data
+                armor_pop_data = new_data
+            end
         end
 
         if flags["override_armor_pop"] then
@@ -26648,11 +27768,28 @@ end
             end
         end
 
+        -- One clock read per frame (it was one per player).
+        local now = clock()
+
+        -- The highlights are handed out again every half second (see esp_highlight_budget).
+        if do_highlight and now - (hide_manager["esp_highlight_checked"] or 0) >= 0.5 and hide_manager["esp_highlight_budget"] then
+            hide_manager["esp_highlight_checked"] = now
+            hide_manager["esp_highlight_budget"]()
+        end
+
         for player, data in player_data do
             local parts = data[4]
             local upper_torso = parts["UpperTorso"]
 
             if not upper_torso or not data[3] or not render_statuses[data[1]] then
+                -- A player drawn last frame whose torso (or character) is gone now: the drawings stayed on screen at the old spot until it came back.
+                if data[6] then
+                    for _, drawing in data[5] do
+                        drawing["Visible"] = false
+                    end
+                    data[6] = false
+                end
+
                 continue
             end
 
@@ -26676,20 +27813,22 @@ end
                 end
 
                 local offset_pos = world_to_viewport_point(camera, position - offset)
+                local offset_x = offset_pos["X"]
+                local offset_y = offset_pos["Y"]
 
-                local difference = offset_pos["Y"]-screen_pos["Y"]
+                local difference = offset_y-screen_pos["Y"]
                 local y_size = difference * 6
                 local x_size = difference * 4
+                local position_x = offset_x - x_size/2
+                local position_y = offset_y - y_size/2
 
-                local size = vector2_new(x_size, y_size)
-                local position = vector2_new(offset_pos["X"] - x_size/2, offset_pos["Y"] - y_size/2)
-
-                -- Nothing the drawings show has changed since the last frame (a player standing still while the camera is still): the 10 to 20 writes
-                -- are skipped. A full refresh every quarter second keeps a changed setting (an offset, a font) from waiting for the player to move.
-                local now = clock()
+                -- Nothing the drawings show has moved by half a pixel or more since they were last written (a player standing still, or moving
+                -- less than that since): the 10 to 20 writes are skipped. The compare is done on plain numbers before any Vector2 is made, and a
+                -- write always puts the drawings at the exact spot. A full refresh every quarter second keeps a changed setting (an offset, a font)
+                -- from waiting for the player to move.
                 local last = data["esp_last"]
 
-                if not refresh_all and last and last[1] == position and last[2] == size and last[3] == data[11] and last[4] == data[15] and last[5] == data[13] and now - last[6] < 0.25 then
+                if not refresh_all and last and abs(last[1] - position_x) < 0.5 and abs(last[2] - position_y) < 0.5 and abs(last[3] - x_size) < 0.5 and abs(last[4] - y_size) < 0.5 and last[5] == data[11] and last[6] == data[15] and last[7] == data[13] and now - last[8] < 0.25 then
                     continue
                 end
 
@@ -26698,7 +27837,10 @@ end
                     data["esp_last"] = last
                 end
 
-                last[1], last[2], last[3], last[4], last[5], last[6] = position, size, data[11], data[15], data[13], now
+                last[1], last[2], last[3], last[4], last[5], last[6], last[7], last[8] = position_x, position_y, x_size, y_size, data[11], data[15], data[13], now
+
+                local size = vector2_new(x_size, y_size)
+                local position = vector2_new(position_x, position_y)
 
                 if do_box then
                     local box = drawings[1]
@@ -26772,7 +27914,21 @@ end
 
                 if do_health_text then
                     local health_text = drawings[7]
-                    drawings[7]["Position"] = position - (armor_ignored and normal_health_text_offset or health_text_offset) - vector2_new(health_text["TextBounds"]["X"], 0)
+
+                    if health_text then
+                        -- TextBounds is read again only after the text, the font or the drawing changed (update_health_text and the font dropdown
+                        -- clear it), and at most every quarter second otherwise: not on every frame the box moves.
+                        local text_width = data["esp_text_width"]
+
+                        if not text_width or data["esp_text_object"] ~= health_text or now - data["esp_text_read"] >= 0.25 then
+                            text_width = health_text["TextBounds"]["X"]
+                            data["esp_text_width"] = text_width
+                            data["esp_text_object"] = health_text
+                            data["esp_text_read"] = now
+                        end
+
+                        health_text["Position"] = position - (armor_ignored and normal_health_text_offset or health_text_offset) - vector2_new(text_width, 0)
+                    end
                 end
 
                 if do_tool_text then
@@ -26810,6 +27966,21 @@ end
         local chams = data[12]
         local chams_transparency = highlight_transparencies[6]
 
+        -- A fade still running for this player (a death and then a quick respawn) is stopped: its last write came after the newer fade had
+        -- started and left the old end values.
+        local running = data["esp_fade"]
+
+        if running then
+            data["esp_fade"] = nil
+
+            for i = 1, #heartbeat do
+                if heartbeat[i] == running then
+                    remove(heartbeat, i)
+                    break
+                end
+            end
+        end
+
         if not data[6] then
             for name, drawing in drawings do
                 drawing["Transparency"] = showing and transparencies[name] or 0
@@ -26830,6 +28001,17 @@ end
 
         for name, drawing in drawings do
             old_transparencies[name] = drawing["Transparency"]
+        end
+
+        -- The highlight and the chams fade from where they are now, like the drawings: they started from the shown value, so the fade in of a
+        -- respawn jumped straight from hidden to shown.
+        if highlight then
+            highlight_fill_transparency = highlight["FillTransparency"]
+            highlight_outline_transparency = highlight["OutlineTransparency"]
+        end
+
+        if chams and chams[1] then
+            chams_transparency = chams[1]["Transparency"]
         end
 
         local elapsed_time = 0
@@ -26858,9 +28040,17 @@ end
             end
         end
 
+        data["esp_fade"] = heartbeat_function
         heartbeat[#heartbeat+1] = heartbeat_function
 
         delay(0.75, function()
+            -- A newer fade has taken over (it writes the end values).
+            if data["esp_fade"] ~= heartbeat_function then
+                return
+            end
+
+            data["esp_fade"] = nil
+
             local index = nil
             for i = 1, #heartbeat do
                 if heartbeat[i] == heartbeat_function then
@@ -26908,6 +28098,134 @@ end
         end
     end
 
+    -- Target colouring fades every drawing, cham and the highlight of a player together, in one heartbeat step (0.17 s, the same exponential
+    -- curve as tween). One tween per drawing and per cham put about 60 entries on the heartbeat list per player at each target switch, each one
+    -- spawned every frame and looked up in the list on its own.
+    hide_manager["esp_target_tween_stop"] = function(data)
+        local step = data["esp_tween"]
+
+        if step then
+            data["esp_tween"] = nil
+
+            for i = 1, #heartbeat do
+                if heartbeat[i] == step then
+                    remove(heartbeat, i)
+                    break
+                end
+            end
+        end
+    end
+
+    hide_manager["esp_target_tween"] = LPH_NO_VIRTUALIZE(function(data, colors, transparencies, alt_information)
+        hide_manager["esp_target_tween_stop"](data)
+
+        local drawings = data[5]
+        local chams = data[12]
+        local highlight = data[8]
+
+        -- Where each value starts: a drawing at [i] (colour) and [i + 20] (transparency), a cham at [100 + i] and [200 + i], the highlight at 301 to 304.
+        local from = {}
+
+        for i = 1, #colors do
+            local drawing = drawings[i]
+            if drawing then
+                from[i] = drawing["Color"]
+                from[i + 20] = drawing["Transparency"]
+            end
+        end
+
+        if chams then
+            for i = 1, #chams do
+                local cham = chams[i]
+                if cham then
+                    from[100 + i] = cham["Color3"]
+                    from[200 + i] = cham["Transparency"]
+                end
+            end
+        end
+
+        if highlight then
+            from[301] = highlight["FillColor"]
+            from[302] = highlight["FillTransparency"]
+            from[303] = highlight["OutlineColor"]
+            from[304] = highlight["OutlineTransparency"]
+        end
+
+        local cham_color = alt_information[5]
+        local cham_transparency = alt_information[6]
+        local fill_color = alt_information[1]
+        local fill_transparency = alt_information[2]
+        local outline_color = alt_information[3]
+        local outline_transparency = alt_information[4]
+
+        local start_time = clock()
+        local step = nil
+
+        step = function()
+            local t = math["min"]((clock() - start_time) / 0.17, 1)
+
+            -- Off the list before the last writes: a write that fails (an object destroyed meanwhile) must not leave the step running.
+            if t >= 1 then
+                if data["esp_tween"] == step then
+                    data["esp_tween"] = nil
+                end
+
+                for i = 1, #heartbeat do
+                    if heartbeat[i] == step then
+                        remove(heartbeat, i)
+                        break
+                    end
+                end
+            end
+
+            local e = t >= 1 and 1 or 1 - 2 ^ (-10 * t)
+            local ending = e >= 1
+
+            for i = 1, #colors do
+                local drawing = drawings[i]
+                if drawing then
+                    local color = colors[i]
+                    local transparency = transparencies[i]
+                    local from_color = from[i]
+                    local from_transparency = from[i + 20]
+
+                    drawing["Color"] = (from_color and not ending) and color3_lerp(from_color, color, e) or color
+                    drawing["Transparency"] = (from_transparency and not ending) and from_transparency + (transparency - from_transparency) * e or transparency
+                end
+            end
+
+            if chams then
+                for i = 1, #chams do
+                    local cham = chams[i]
+                    if cham then
+                        local from_color = from[100 + i]
+                        local from_transparency = from[200 + i]
+
+                        cham["Color3"] = (from_color and not ending) and color3_lerp(from_color, cham_color, e) or cham_color
+                        cham["Transparency"] = (from_transparency and not ending) and from_transparency + (cham_transparency - from_transparency) * e or cham_transparency
+                    end
+                end
+            end
+
+            if highlight then
+                if ending then
+                    highlight["FillColor"] = fill_color
+                    highlight["FillTransparency"] = fill_transparency
+                    highlight["OutlineColor"] = outline_color
+                    highlight["OutlineTransparency"] = outline_transparency
+                else
+                    highlight["FillColor"] = color3_lerp(from[301], fill_color, e)
+                    highlight["FillTransparency"] = from[302] + (fill_transparency - from[302]) * e
+                    highlight["OutlineColor"] = color3_lerp(from[303], outline_color, e)
+                    highlight["OutlineTransparency"] = from[304] + (outline_transparency - from[304]) * e
+                end
+            end
+        end
+
+        data["esp_tween"] = step
+        heartbeat[#heartbeat+1] = step
+    end)
+
     local update_esp = LPH_NO_VIRTUALIZE(function(data, status)
         local colors = colors[status]
         local transparencies = transparencies[status]
@@ -26930,13 +28248,19 @@ end
             end
         end
 
+        -- A target fade still running would write the old colours over these.
+        hide_manager["esp_target_tween_stop"](data)
+
         local chams = data[12]
         if chams then
             local color = alt_information[5]
             local transparency = alt_information[6]
+            -- Render statuses hide the chams (and the highlight, below) of a status that is not rendered, not only the drawings.
+            local chams_visible = render_statuses[status] ~= nil
             for i = 1, #chams do
                 chams[i]["Color3"] = color
                 chams[i]["Transparency"] = transparency
+                chams[i]["Visible"] = chams_visible
             end
         end
 
@@ -26948,26 +28272,40 @@ end
             highlight["OutlineTransparency"] = alt_information[4]
         end
 
+        if hide_manager["esp_highlight_budget"] then
+            hide_manager["esp_highlight_budget"]()
+        end
+
         -- The material took the colours of the old status and kept them until the player respawned.
         if material_refresh["apply"] then
             material_refresh["apply"](data, status)
         end
     end)
 
-    local last_target = nil
-    local update_esp_with_tween = nil; update_esp_with_tween = LPH_NO_VIRTUALIZE(function(data, revert_status, bypass)
+    -- The ragebot and the legitbot each keep their own target here: with one slot for both, a change of either put the other's target back to
+    -- its own colours. A player is coloured as a target while either of them holds it.
+    local last_target = {}
+    local update_esp_with_tween = nil; update_esp_with_tween = LPH_NO_VIRTUALIZE(function(data, revert_status, source)
         local status = revert_status or 3
-        if last_target then
-            local old_last_target = last_target
-            last_target = nil
-            update_esp_with_tween(old_last_target, old_last_target[1])
+
+        if not revert_status then
+            source = source or "ragebot"
+
+            local other_target = last_target[source == "ragebot" and "legitbot" or "ragebot"]
+            local old_last_target = last_target[source]
+            last_target[source] = data
+
+            if old_last_target and old_last_target ~= data and old_last_target ~= other_target then
+                update_esp_with_tween(old_last_target, old_last_target[1])
+            end
+
+            -- Already shown as a target (the same one again, or the other aimbot's).
+            if data == old_last_target or data == other_target then
+                return
+            end
         end
 
         if data then
-            if not revert_status then
-                last_target = data
-            end
-
             local old_status = data[1]
 
             if old_status ~= 3 then
@@ -26982,7 +28320,12 @@ end
                 hide_manager["esp_hide_off_screen"](data)
                 data[6] = false
 
+                -- A dead player only gets the colours, never the transparencies: this wrote the shown transparency to the chams and, without a
+                -- highlight, went on to the fade that also brought back the drawings' transparency, so the body of a target cleared after the
+                -- death fade showed its box and chams again.
                 if data[7] then
+                    hide_manager["esp_target_tween_stop"](data)
+
                     for i = 1, #colors do
                         local drawing = drawings[i]
                         if drawing then
@@ -26996,41 +28339,71 @@ end
 
                     if chams then
                         local color = alt_information[5]
-                        local transparency = alt_information[6]
                         for i = 1, #chams do
                             chams[i]["Color3"] = color
-                            chams[i]["Transparency"] = transparency
                         end
                     end
 
                     if highlight then
                         highlight["FillColor"] = alt_information[1]
                         highlight["OutlineColor"] = alt_information[3]
-
-                        return
                     end
+
+                    return
                 end
 
-                for i = 1, #colors do
-                    local drawing = drawings[i]
-                    if drawing then
-                        tween(drawing, {Color = colors[i], Transparency = transparencies[i]}, exponential, out, 0.17)
-                    end
-                end
+                hide_manager["esp_target_tween"](data, colors, transparencies, alt_information)
+            end
+        end
+    end)
 
-                if chams then
-                    local color = alt_information[5]
-                    local transparency = alt_information[6]
-                    for i = 1, #chams do
-                        tween(chams[i], {Color3 = color, Transparency = transparency}, exponential, out, 0.17)
-                    end
-                end
+    -- Roblox draws at most 31 Highlights at a time and leaves the rest out without a word, so on a full server some players had none. Every half
+    -- second (from do_esp), and when the statuses change, the highlights go to the rendered players, the aimbot targets first and then the
+    -- nearest, at most 28 of them (one is the character highlight, and the game can have its own).
+    hide_manager["esp_highlight_budget"] = LPH_NO_VIRTUALIZE(function()
+        local list = hide_manager["esp_highlight_list"]
 
-                if highlight then
-                    tween(highlight, {FillColor = alt_information[1], FillTransparency = alt_information[2], OutlineColor = alt_information[3], OutlineTransparency = alt_information[4]}, exponential, out, 0.17)
+        if not list then
+            list = {}
+            hide_manager["esp_highlight_list"] = list
+        end
+
+        local camera_position = camera["CFrame"]["Position"]
+
+        for player, data in player_data do
+            local highlight = data[8]
+
+            if highlight then
+                if render_statuses[data[1]] and data[3] then
+                    local root = data[4]["UpperTorso"] or data[4]["HumanoidRootPart"]
+                    local is_target = data == last_target["ragebot"] or data == last_target["legitbot"]
+
+                    data["hl_distance"] = is_target and -1 or root and (root["Position"] - camera_position)["Magnitude"] or 1e9
+                    list[#list+1] = data
+                elseif data["hl_enabled"] ~= false then
+                    highlight["Enabled"] = false
+                    data["hl_enabled"] = false
                 end
             end
         end
+
+        if #list > 28 then
+            table.sort(list, function(a, b)
+                return a["hl_distance"] < b["hl_distance"]
+            end)
+        end
+
+        for i = 1, #list do
+            local data = list[i]
+            local enabled = i <= 28
+
+            if data["hl_enabled"] ~= enabled then
+                data[8]["Enabled"] = enabled
+                data["hl_enabled"] = enabled
+            end
+        end
+
+        table.clear(list)
     end)
 
     local create_box = LPH_NO_VIRTUALIZE(function(data)
@@ -27202,12 +28575,14 @@ end
 
         local chams = {}
         local culling_mode = Enum["AdornCullingMode"]["Automatic"]
+        -- (a status that is not rendered gets its chams hidden)
+        local visible = render_statuses[data[1]] ~= nil
 
         for i = 1, #body_parts do
             local part = body_parts[i]
             local character_part = parts[part]
             chams[#chams+1] = create_instance("BoxHandleAdornment", {
-                ["Visible"] = true,
+                ["Visible"] = visible,
                 ["Adornee"] = character_part,
                 ["Transparency"] = transparency,
                 ["AdornCullingMode"] = culling_mode,
@@ -27223,14 +28598,39 @@ end
         data[12] = chams
     end)
 
-    local update_chams = LPH_NO_VIRTUALIZE(function(data)
+    -- A body part that arrives after the character-added signal (a character still loading) had no cham until the next respawn: while one is
+    -- missing the chams are bound again a second later, up to three times.
+    local update_chams = nil; update_chams = LPH_NO_VIRTUALIZE(function(data, _, retries)
         local chams = data[12]
         local parts = data[4]
+        local missing = false
+
+        if not chams then
+            return
+        end
+
         for i = 1, #body_parts do
             local cham = chams[i]
             local local_part = parts[body_parts[i]]
-            cham["Adornee"] = local_part
-            cham["Size"] = local_part and local_part["Size"] + chams_offset or chams_offset
+            if cham then
+                cham["Adornee"] = local_part
+                cham["Size"] = local_part and local_part["Size"] + chams_offset or chams_offset
+            end
+            if not local_part then
+                missing = true
+            end
+        end
+
+        retries = retries or 0
+
+        if missing and retries < 3 then
+            local character = data[3]
+
+            delay(1, function()
+                if data[12] == chams and data[3] == character then
+                    update_chams(data, character, retries + 1)
+                end
+            end)
         end
     end)
 
@@ -27245,6 +28645,8 @@ end
     local create_highlight = LPH_NO_VIRTUALIZE(function(data)
         local alt_information = alt_information[data[1]]
         local character = data[3]
+        -- (a status that is not rendered gets its highlight off; esp_highlight_budget keeps it in step after that)
+        local enabled = render_statuses[data[1]] ~= nil
 
         data[8] = create_instance("Highlight", {
             FillColor = alt_information[1],
@@ -27252,14 +28654,18 @@ end
             OutlineColor = alt_information[3],
             OutlineTransparency = alt_information[4],
             DepthMode = highlight_depth_mode,
-            Enabled = true,
+            Enabled = enabled,
             Adornee = character,
             Parent = hui
         })
+
+        data["hl_enabled"] = enabled
     end)
 
     local update_health_text = LPH_NO_VIRTUALIZE(function(data, health)
         local health_text = data[5] and data[5][7]; if health_text then health_text["Text"] = (hide_health_text_if_full and health >= data[10] or false) and "" or tostring(health) end
+        -- do_esp reads the new width on its next frame
+        data["esp_text_width"] = nil
     end)
 
     local create_health_text = LPH_NO_VIRTUALIZE(function(data)
@@ -27378,6 +28784,11 @@ end
     local remove_material = LPH_NO_VIRTUALIZE(function(data, character, parts, description)
         local character = character or data[3]
 
+        -- (the local material passes the character in place of a player record)
+        if type(data) == "table" then
+            data["material_on"] = nil
+        end
+
         if character then
             local parts = parts or data[4]
             local head = parts["Head"]
@@ -27408,40 +28819,54 @@ end
                         body_part["Color"] = part_color
                     end
                 end
+            end
 
-                local shirt = parts["Shirt"]
+            -- The clothes come back whether or not there is a HumanoidDescription (apply_material put them away either way): a character
+            -- without one stayed without clothes.
+            local shirt = parts["Shirt"]
 
-                -- Only what apply_material put away is given back: a shirt it never touched has no saved template, and was blanked here (clothes gone).
-                local saved_shirt = shirt and shirt:GetAttribute("a")
+            -- Only what apply_material put away is given back: a shirt it never touched has no saved template, and was blanked here (clothes gone).
+            local saved_shirt = shirt and shirt:GetAttribute("a")
 
-                if saved_shirt ~= nil then
-                    shirt["ShirtTemplate"] = tostring(saved_shirt)
-                    shirt:SetAttribute("a", nil)
-                end
+            if saved_shirt ~= nil then
+                shirt["ShirtTemplate"] = tostring(saved_shirt)
+                shirt:SetAttribute("a", nil)
+            end
 
-                local pants = parts["Pants"]
+            local pants = parts["Pants"]
 
-                local saved_pants = pants and pants:GetAttribute("a")
+            local saved_pants = pants and pants:GetAttribute("a")
 
-                if saved_pants ~= nil then
-                    pants["PantsTemplate"] = tostring(saved_pants)
-                    pants:SetAttribute("a", nil)
-                end
+            if saved_pants ~= nil then
+                pants["PantsTemplate"] = tostring(saved_pants)
+                pants:SetAttribute("a", nil)
+            end
 
-                local shirt_graphic = parts["Shirt Graphic"]
+            local shirt_graphic = parts["Shirt Graphic"]
 
-                local saved_graphic = shirt_graphic and shirt_graphic:GetAttribute("a")
+            local saved_graphic = shirt_graphic and shirt_graphic:GetAttribute("a")
 
-                if saved_graphic ~= nil then
-                    shirt_graphic["Graphic"] = tostring(saved_graphic)
-                    shirt_graphic:SetAttribute("a", nil)
-                end
+            if saved_graphic ~= nil then
+                shirt_graphic["Graphic"] = tostring(saved_graphic)
+                shirt_graphic:SetAttribute("a", nil)
             end
 
             for _, name in body_parts do
                 local part = parts[name]
 
                 if part then
+                    -- The colour the material put away: without a HumanoidDescription to take the colours from, it is what the part gets
+                    -- back (that character kept the material's colour).
+                    local saved_color = part:GetAttribute(material_attribute .. "c")
+
+                    if saved_color ~= nil then
+                        if not (description and head) then
+                            part["Color"] = saved_color
+                        end
+
+                        part:SetAttribute(material_attribute .. "c", nil)
+                    end
+
                     part["Material"] = plastic
                     if part["Transparency"] ~= 1 then
                         part["Transparency"] = 0
@@ -27500,6 +28925,15 @@ end
                 return
             end
 
+            -- A status that is not rendered gets no material, and loses one it had (render statuses hid only the drawings).
+            if not render_statuses[status or data[1]] then
+                if data["material_on"] == character then
+                    remove_material(data)
+                end
+
+                return
+            end
+
             local alt_information = alt_information[status or data[1]]
             local color = alt_information[7]
             local transparency = alt_information[8]
@@ -27509,6 +28943,11 @@ end
                 local part = parts[name]
 
                 if part then
+                    -- (the part's own colour, for a character without a HumanoidDescription: see remove_material)
+                    if part:GetAttribute(material_attribute .. "c") == nil then
+                        part:SetAttribute(material_attribute .. "c", part["Color"])
+                    end
+
                     part["Material"] = name == "Head" and forcefield or material
                     part["Color"] = color
                     if part["Transparency"] ~= 1 then
@@ -27559,6 +28998,8 @@ end
                 shirt_graphic:SetAttribute("a", shirt_graphic["Graphic"])
                 shirt_graphic["Graphic"] = ""
             end
+
+            data["material_on"] = character
         end
     end)
 
@@ -27734,6 +29175,10 @@ end
                     local part = local_parts[name]
 
                     if part then
+                        if part:GetAttribute(material_attribute .. "c") == nil then
+                            part:SetAttribute(material_attribute .. "c", part["Color"])
+                        end
+
                         part["Material"] = name == "Head" and forcefield or local_material_type
                         part["Color"] = local_material_color
                         if part["Transparency"] ~= 1 then
@@ -27744,11 +29189,17 @@ end
 
                 for name, part in local_parts do
                     if part["ClassName"] == "Accessory" then
-                        local handle = part["Handle"]
+                        -- (an accessory can have no Handle yet while the character loads: indexing it threw and stopped the rest)
+                        local handle = find_first_child(part, "Handle")
 
                         if handle and handle["ClassName"] == "MeshPart" then
-                            if not handle:GetAttribute(material_attribute) then
+                            -- Saved like apply_material does, so taking the material off gives back the accessory's own colour, transparency
+                            -- and material (every local accessory came back grey plastic).
+                            if handle:GetAttribute(material_attribute) == nil then
                                 handle:SetAttribute(material_attribute, handle["TextureID"])
+                                handle:SetAttribute(material_attribute .. "c", handle["Color"])
+                                handle:SetAttribute(material_attribute .. "t", handle["Transparency"])
+                                handle:SetAttribute(material_attribute .. "m", handle["Material"]["Name"])
                             end
 
                             handle["Material"] = local_material_type
@@ -27880,6 +29331,23 @@ end
                     end
 
                     data[6] = not visible and false or visible and data[6]
+
+                    -- The chams, the highlight and the material follow the render statuses too (they stayed on for a status that is not rendered).
+                    local chams = data[12]
+
+                    if chams then
+                        for i = 1, #chams do
+                            chams[i]["Visible"] = visible ~= nil
+                        end
+                    end
+                end
+
+                if hide_manager["esp_highlight_budget"] then
+                    hide_manager["esp_highlight_budget"]()
+                end
+
+                if do_material then
+                    material_refresh["run"]()
                 end
             end
         end)
@@ -27891,6 +29359,10 @@ end
                     break
                 end
             end
+
+            -- The drawings are made again with the status colours: the next target change colours the target again.
+            last_target["ragebot"] = nil
+            last_target["legitbot"] = nil
 
             for player, data in player_data do
                 local drawings = data[5]
@@ -28000,8 +29472,12 @@ end
                 player_added_connection = create_connection(signals["on_player_added"], create_esp_with_tween)
                 character_added_connection = create_connection(signals["on_player_character_added"], tween_esp)
                 player_status_changed_connection = create_connection(signals["on_player_status_changed"], update_esp)
-                player_ragebot_target_connection = create_connection(signals["on_ragebot_target_changed"], update_esp_with_tween)
-                player_legitbot_target_connection = create_connection(signals["on_legitbot_target_changed"], update_esp_with_tween)
+                player_ragebot_target_connection = create_connection(signals["on_ragebot_target_changed"], function(target)
+                    update_esp_with_tween(target, nil, "ragebot")
+                end)
+                player_legitbot_target_connection = create_connection(signals["on_legitbot_target_changed"], function(target)
+                    update_esp_with_tween(target, nil, "legitbot")
+                end)
 
                 if do_health_bar then
                     health_bar_player_health_changed_connection = create_connection(signals["on_player_health_changed"], update_health_bar)
@@ -28062,6 +29538,7 @@ end
 
                     if health_text then
                         health_text["Font"] = small_font
+                        data["esp_text_width"] = nil
                     end
 
                     local tool_text = drawings[8]
@@ -29114,10 +30591,20 @@ end
 
     local name_hide_nametags_on_character_added = nil
     local health_always_off = Enum["HumanoidHealthDisplayType"]["AlwaysOff"]
+    -- What each humanoid had before its nametag was hidden (weak keys: a humanoid that is gone drops out), so turning the option off gives that
+    -- back, and only to the humanoids it changed: every humanoid was set to DisplayWhenDamaged, whatever the game had.
+    hide_manager["hidden_nametags"] = hide_manager["hidden_nametags"] or setmetatable({}, {["__mode"] = "k"})
+
     local hide_nametag = LPH_NO_VIRTUALIZE(function(data)
         local humanoid = data[4]["Humanoid"]
 
         if humanoid then
+            local hidden = hide_manager["hidden_nametags"]
+
+            if not hidden[humanoid] then
+                hidden[humanoid] = {humanoid["DisplayName"], humanoid["HealthDisplayType"]}
+            end
+
             humanoid["DisplayName"] = "‎"
             humanoid["HealthDisplayType"] = health_always_off
         end
@@ -29129,13 +30616,12 @@ end
             name_hide_nametags_on_character_added = nil
         end
 
-        for player, data in player_data do
-            local humanoid = data[4]["Humanoid"]
+        local hidden = hide_manager["hidden_nametags"]
 
-            if humanoid then
-                humanoid["DisplayName"] = player["DisplayName"]
-                humanoid["HealthDisplayType"] = Enum["HumanoidHealthDisplayType"]["DisplayWhenDamaged"]
-            end
+        for humanoid, original in hidden do
+            hidden[humanoid] = nil
+            humanoid["DisplayName"] = original[1]
+            humanoid["HealthDisplayType"] = original[2]
         end
 
         if value then
@@ -29247,6 +30733,12 @@ do
         end
 
         local description = description or last_description
+
+        -- Nothing loaded (a missing file, one without a HumanoidDescription, a user id that could not be looked up): the accessories were taken
+        -- off below and then the description indexed nil, on every respawn.
+        if not description then
+            return
+        end
 
         if humanoid and head then
             humanoid:RemoveAccessories()
@@ -29468,16 +30960,7 @@ do
     end)
 
     create_connection(menu_references["custom_character"]["on_toggle_change"], function(value)
-        local description = not value and (last_description and players_service:GetHumanoidDescriptionFromUserId(local_player["UserId"]) or nil) or nil
-
-        if value then
-            description = flags["custom_character_model_type"][1] ~= "user id" and get_file_description() or get_user_description()
-        end
-
-        if description then
-            apply_description(description)
-        end
-
+        -- The respawn hook goes first: the web call below can fail, and the custom look then came back on every respawn with the toggle off.
         if apply_connection then
             apply_connection:Disconnect()
             apply_connection = nil
@@ -29485,6 +30968,28 @@ do
 
         if scale_connection then
             scale_connection:Disconnect()
+        end
+
+        local description = nil
+
+        if not value and last_description then
+            local ok, own_description = pcall(function()
+                return players_service:GetHumanoidDescriptionFromUserId(local_player["UserId"])
+            end)
+
+            if ok then
+                description = own_description
+            else
+                new_notification("custom character: could not get your own look back (" .. tostring(own_description) .. "), it comes back when you respawn", 4)
+            end
+        end
+
+        if value then
+            description = flags["custom_character_model_type"][1] ~= "user id" and get_file_description() or get_user_description()
+        end
+
+        if description then
+            apply_description(description)
         end
 
         if value then
@@ -29531,10 +31036,10 @@ do
 
     menu_references["animated_gun"] = menu_references["local_character_section"]:create_element({["name"] = "animated tools"}, {toggle = {flag = "animated_tools", default = false}})
         menu_references["animated_gun_settings"] = menu_references["animated_gun"]:create_settings()
-        menu_references["animated_gun_horizontal"] = menu_references["animated_gun_settings"]:create_element({["name"] = "horizontal"}, {dropdown = {flag = "animated_gun_horizontal", options = {"character spin", "sine spin", "random", "spin"}, default = {"sine spin"}, multi = false, requires_one = false}})
+        menu_references["animated_gun_horizontal"] = menu_references["animated_gun_settings"]:create_element({["name"] = "horizontal"}, {dropdown = {flag = "animated_gun_horizontal", options = {"sine spin", "random", "jitter", "spin"}, default = {"sine spin"}, multi = false, requires_one = false}})
         menu_references["animated_gun_horizontal_speed"] = menu_references["animated_gun_settings"]:create_element({["name"] = "horizontal speed"}, {slider = {flag = "animated_gun_horizontal_speed", min = 0, max = 100, default = 10, suffix = "%"}})
 
-        menu_references["animated_gun_vertical"] = menu_references["animated_gun_settings"]:create_element({["name"] = "vertical"}, {dropdown = {flag = "animated_gun_vertical", options = {"character spin", "sine spin", "random", "spin"}, default = {"sine spin"}, multi = false, requires_one = false}})
+        menu_references["animated_gun_vertical"] = menu_references["animated_gun_settings"]:create_element({["name"] = "vertical"}, {dropdown = {flag = "animated_gun_vertical", options = {"sine spin", "random", "jitter", "spin"}, default = {"sine spin"}, multi = false, requires_one = false}})
         menu_references["animated_gun_vertical_speed"] = menu_references["animated_gun_settings"]:create_element({["name"] = "vertical speed"}, {slider = {flag = "animated_gun_vertical_speed", min = 0, max = 100, default = 10, suffix = "%"}})
 
     do
@@ -29569,14 +31074,20 @@ do
             elseif vertical_animation == "random" then
                 vertical = (math_random() * 2 - 1) * 180
             elseif vertical_animation == "jitter" then
-                vertical = math_random(-horizontal_multiplier, vertical_multiplier)
+                vertical = math_random(-10, 10)
             elseif vertical_animation == "spin" then
                 vertical = 45
             end
         
-            for gun, data in local_guns do
-                local gun = gun["Parent"]
+            for handle, data in local_guns do
+                local gun = handle["Parent"]
                 if gun then
+                    -- A gun got after the toggle went on (a respawn, a purchase) has its grip put away before it is first turned: it was only
+                    -- put away on equip, already turned, and turning the option off gave back a skewed grip.
+                    if not old_grips[handle] then
+                        old_grips[handle] = gun["Grip"]
+                    end
+
                     gun["Grip"] *= angles(rad(vertical*dt*vertical_multiplier), rad(horizontal*dt*horizontal_multiplier), 0)
                 end
             end
@@ -29618,8 +31129,11 @@ do
 
             if value then
                 for gun, data in local_guns do
-                    local grip = gun["Parent"]["Grip"]
-                    old_grips[gun] = grip
+                    local tool = gun["Parent"]
+
+                    if tool then
+                        old_grips[gun] = tool["Grip"]
+                    end
                 end
 
                 add_tool(local_tool) 
@@ -29675,35 +31189,85 @@ do
         local material_tools_connection = nil
         local material = Enum["Material"]["Neon"]
 
+        -- The handle's own colour, transparency and material are put away on the tool by whichever of material tools and rainbow weapon chams
+        -- changes it first, beside the texture each one keeps. Taking one off gives them back, unless the other is still on that tool: then the
+        -- other's look is put back on. Only the texture was kept before, and the gun stayed tinted until it was got again.
+        hide_manager["tool_look_save"] = function(tool, handle)
+            if tool:GetAttribute("VIS_M") == nil then
+                tool:SetAttribute("VIS_C", handle["Color"])
+                tool:SetAttribute("VIS_T", handle["Transparency"])
+                tool:SetAttribute("VIS_M", handle["Material"]["Name"])
+            end
+        end
+
+        hide_manager["tool_look_restore"] = function(tool, handle, texture)
+            local saved_color = tool:GetAttribute("VIS_C")
+            local saved_material_name = tool:GetAttribute("VIS_M")
+            local saved_material = saved_material_name and Enum["Material"]:FromName(saved_material_name) or nil
+
+            if texture ~= nil then
+                handle["TextureID"] = texture
+            end
+
+            if saved_color ~= nil then
+                handle["Color"] = saved_color
+            end
+
+            handle["Transparency"] = tool:GetAttribute("VIS_T") or 0
+            handle["Material"] = saved_material or Enum["Material"]["Plastic"]
+
+            tool:SetAttribute("VIS_C", nil)
+            tool:SetAttribute("VIS_T", nil)
+            tool:SetAttribute("VIS_M", nil)
+        end
+
+        -- Only a tool this was put on is touched (every gun used to be set to Plastic).
+        local function remove_tool_material(tool)
+            local handle = find_first_child(tool, "Default")
+            local texture = tool:GetAttribute("AAAAAAAAAA")
+
+            if not handle or texture == nil then
+                return
+            end
+
+            tool:SetAttribute("AAAAAAAAAA", nil)
+
+            if tool:GetAttribute("RWC_TEX") ~= nil and hide_manager["rwc_apply"] then
+                hide_manager["rwc_apply"](tool)
+            else
+                hide_manager["tool_look_restore"](tool, handle, texture)
+            end
+        end
+
         local apply_material = LPH_JIT_MAX(function(tool, tool2)
             if tool then
                 local handle = find_first_child(tool, "Default")
 
                 if handle then
+                    if not tool:GetAttribute("AAAAAAAAAA") then
+                        -- (the texture rainbow weapon chams put away when it got there first: the handle's own is already gone)
+                        tool:SetAttribute("AAAAAAAAAA", tool:GetAttribute("RWC_TEX") or handle["TextureID"])
+                    end
+
+                    hide_manager["tool_look_save"](tool, handle)
+
+                    -- Rainbow weapon chams is on this tool and writes its look every frame: the tool is left to it, and this look comes back
+                    -- when it goes.
+                    if tool:GetAttribute("RWC_TEX") ~= nil then
+                        return
+                    end
+
                     handle["Material"] = material
                     handle["Color"] = flags["material_tools_color"]
                     handle["Transparency"] = flags["material_tools_transparency"]
-                    if not tool:GetAttribute("AAAAAAAAAA") then
-                        tool:SetAttribute("AAAAAAAAAA", handle["TextureID"])
-                    end
                     handle["TextureID"] = ""
                 end
             elseif tool2 then
-                local handle = find_first_child(tool2, "Default")
-
-                if handle then
-                    local attribute = tool2:GetAttribute("AAAAAAAAAA")
-
-                    if attribute then
-                        handle["TextureID"] = tool2:GetAttribute("AAAAAAAAAA")
-                        handle["Transparency"] = 0
-                    end
-                    handle["Material"] = Enum["Material"]["Plastic"]
-                end
-
-                tool2:SetAttribute("AAAAAAAAAA", nil)
+                remove_tool_material(tool2)
             end
         end)
+
+        hide_manager["material_tools_apply"] = apply_material
 
         create_connection(menu_references["material_tools"]["on_toggle_change"], function(value)
             if material_tools_connection then
@@ -29713,18 +31277,9 @@ do
 
             for handle, gun in local_guns do
                 local tool = handle["Parent"]
-                local handle = find_first_child(tool, "Default")
 
-                if handle then
-                    local attribute = tool:GetAttribute("AAAAAAAAAA")
-
-                    if attribute then
-                        handle["TextureID"] = tool:GetAttribute("AAAAAAAAAA")
-                        handle["Transparency"] = 0
-                    end
-                    handle["Material"] = Enum["Material"]["Plastic"]
-
-                    tool:SetAttribute("AAAAAAAAAA", nil)
+                if tool then
+                    remove_tool_material(tool)
                 end
             end
 
@@ -29744,7 +31299,8 @@ do
                 if local_tool then
                     local handle = find_first_child(local_tool, "Default")
 
-                    if handle then
+                    -- (not while rainbow weapon chams has the tool)
+                    if handle and local_tool:GetAttribute("RWC_TEX") == nil then
                         handle["Material"] = material
                     end
                 end
@@ -29756,7 +31312,7 @@ do
                 if local_tool then
                     local handle = find_first_child(local_tool, "Default")
 
-                    if handle then
+                    if handle and local_tool:GetAttribute("RWC_TEX") == nil then
                         handle["Color"] = value
                     end
                 end
@@ -29768,7 +31324,7 @@ do
                 if local_tool then
                     local handle = find_first_child(local_tool, "Default") or find_first_child(local_tool, "Handle")
 
-                    if handle then
+                    if handle and local_tool:GetAttribute("RWC_TEX") == nil then
                         handle["Transparency"] = value
                     end
                 end
@@ -29799,8 +31355,10 @@ do
             local handle = rwc_get_handle(tool)
             if not handle then return end
             if not tool:GetAttribute("RWC_TEX") then
-                tool:SetAttribute("RWC_TEX", handle["TextureID"])
+                -- (the texture material tools put away when it got there first)
+                tool:SetAttribute("RWC_TEX", tool:GetAttribute("AAAAAAAAAA") or handle["TextureID"])
             end
+            hide_manager["tool_look_save"](tool, handle)
             handle["TextureID"] = ""
             local mat = flags["rainbow_weapon_chams_material"]
             handle["Material"] = (type(mat) == "table" and mat[1] or mat) == "forcefield" and Enum["Material"]["ForceField"] or Enum["Material"]["Neon"]
@@ -29811,13 +31369,18 @@ do
             local handle = rwc_get_handle(tool)
             if not handle then return end
             local tex = tool:GetAttribute("RWC_TEX")
-            if tex then
-                handle["TextureID"] = tex
-                tool:SetAttribute("RWC_TEX", nil)
+            -- Only a tool this was put on is touched, and it gets back its own colour, transparency and material, or the material tools look
+            -- when that is still on it.
+            if tex == nil then return end
+            tool:SetAttribute("RWC_TEX", nil)
+            if tool:GetAttribute("AAAAAAAAAA") ~= nil and hide_manager["material_tools_apply"] then
+                hide_manager["material_tools_apply"](tool)
+            else
+                hide_manager["tool_look_restore"](tool, handle, tex)
             end
-            handle["Material"] = Enum["Material"]["Plastic"]
-            handle["Transparency"] = 0
         end
+
+        hide_manager["rwc_apply"] = rwc_apply
 
         local function rwc_render()
             local tool = local_tool
@@ -29926,7 +31489,7 @@ do
 
             local light = create_instance("PointLight", {
                 ["Color"]      = flags["china_hat_light_color"] or color3_fromrgb(133, 220, 225),
-                ["Brightness"] = flags["china_hat_light_brightness"] or 5,
+                ["Brightness"] = (flags["china_hat_light_brightness"] or 5) * (1 - (flags["china_hat_light_transparency"] or 0)),
                 ["Range"]      = 12,
                 ["Shadows"]    = true,
                 ["Parent"]     = cone,
@@ -29966,6 +31529,14 @@ do
             end
         end)
 
+        -- The light colour's transparency dims the light (it did nothing): fully transparent is no light.
+        create_connection(menu_references["china_hat_light_color"]["on_transparency_change"], function(value)
+            if china_hat_cone then
+                local light = china_hat_cone:FindFirstChildOfClass("PointLight")
+                if light then light["Brightness"] = (flags["china_hat_light_brightness"] or 5) * (1 - (tonumber(value) or 0)) end
+            end
+        end)
+
         create_connection(menu_references["china_hat_scale"]["on_slider_change"], function(value)
             if china_hat_cone then
                 local mesh = china_hat_cone:FindFirstChildOfClass("SpecialMesh")
@@ -29976,7 +31547,7 @@ do
         create_connection(menu_references["china_hat_light_brightness"]["on_slider_change"], function(value)
             if china_hat_cone then
                 local light = china_hat_cone:FindFirstChildOfClass("PointLight")
-                if light then light["Brightness"] = value end
+                if light then light["Brightness"] = value * (1 - (flags["china_hat_light_transparency"] or 0)) end
             end
         end)
     end
@@ -29986,7 +31557,7 @@ do
 
     menu_references["particle_aura"] = menu_references["local_character_section"]:create_element({["name"] = "particle aura"}, {["toggle"] = {["flag"] = "particle_aura"}})
         menu_references["particle_aura_settings"] = menu_references["particle_aura"]:create_settings()
-        menu_references["particle_aura_color"] = menu_references["particle_aura_settings"]:create_element({["name"] = "color"}, {["colorpicker"] = {["color_flag"] = "particle_aura_color", ["transparency_flag"] = "particle_aura_transparency", ["default_color"] = color3_fromrgb(133, 220, 255), ["default_transparency"] = 0.2}})
+        menu_references["particle_aura_color"] = menu_references["particle_aura_settings"]:create_element({["name"] = "color"}, {["colorpicker"] = {["color_flag"] = "particle_aura_color", ["transparency_flag"] = "particle_aura_transparency", ["default_color"] = color3_fromrgb(133, 220, 255), ["default_transparency"] = 0}})
         menu_references["particle_aura_particle"] = menu_references["particle_aura_settings"]:create_element({["name"] = "particle"}, {["dropdown"] = {["flag"] = "particle_aura_particle", ["default"] = {"angel"}, ["options"] = {"starlight", "heavenly", "ribbon", "lightning", "sakura", "angel", "wind", "flow", "star", "angel wing", "blue heat", "heal aura", "ambient", "nimb", "tornado"}, ["use_custom_extensions"] = {"rbxm", "rbmx"}, ["multi"] = true, ["requires_one"] = true}})
 
     do
@@ -30413,16 +31984,26 @@ do
             return model
         end
 
+        -- Each preset is fetched on its own: one that fails (an asset taken down, a refused request) only drops that aura. A failed fetch threw
+        -- out of the engine body, and nothing after it was defined.
+        local function load_aura(id)
+            local ok, object = pcall(function()
+                return game:GetObjects(id)[1]
+            end)
+
+            return ok and object or nil
+        end
+
         local particle_auras = {
-            ["starlight"] = game:GetObjects("rbxassetid://134645216613107")[1],
-            ["lightning"] = game:GetObjects("rbxassetid://88833232287502")[1],      
-            ["heavenly"] = game:GetObjects("rbxassetid://139300897520961")[1],
-            ["ribbon"] = game:GetObjects("rbxassetid://132069507632161")[1],
-            ["sakura"] = game:GetObjects("rbxassetid://81755778619404")[1],
-            ["angel"] = game:GetObjects("rbxassetid://97658130917593")[1],
-            ["wind"] = game:GetObjects("rbxassetid://80694081850877")[1],
-            ["flow"] = game:GetObjects("rbxassetid://119913533725648")[1],
-            ["star"] = game:GetObjects("rbxassetid://73754563740680")[1],
+            ["starlight"] = load_aura("rbxassetid://134645216613107"),
+            ["lightning"] = load_aura("rbxassetid://88833232287502"),      
+            ["heavenly"] = load_aura("rbxassetid://139300897520961"),
+            ["ribbon"] = load_aura("rbxassetid://132069507632161"),
+            ["sakura"] = load_aura("rbxassetid://81755778619404"),
+            ["angel"] = load_aura("rbxassetid://97658130917593"),
+            ["wind"] = load_aura("rbxassetid://80694081850877"),
+            ["flow"] = load_aura("rbxassetid://119913533725648"),
+            ["star"] = load_aura("rbxassetid://73754563740680"),
             ["angel wing"] = build_angel_wing_aura(),
             ["blue heat"] = build_blue_heat_aura(),
             ["heal aura"] = build_heal_aura(),
@@ -30436,11 +32017,61 @@ do
         local selected_auras = {"angel"}  -- default
         local particles = {}
 
+        -- The colour and transparency picked for the aura go onto each copy as it is put on the character, and onto the live copies when they
+        -- change; the templates keep what their files had. The transparency fades what the file had towards invisible (0 leaves it as made).
+        local aura_color = flags["particle_aura_color"] or color3_fromrgb(133, 220, 255)
+        local aura_transparency = tonumber(flags["particle_aura_transparency"]) or 0
+        local aura_base_transparency = {}
+
+        local function paint_aura(object, color_sequence)
+            local class_name = object["ClassName"]
+
+            if class_name == "PointLight" then
+                object["Color"] = aura_color
+            elseif class_name == "ParticleEmitter" or class_name == "Beam" or class_name == "Trail" then
+                object["Color"] = color_sequence
+
+                local base = aura_base_transparency[object]
+
+                if not base then
+                    base = object["Transparency"]
+                    aura_base_transparency[object] = base
+                end
+
+                if aura_transparency > 0 then
+                    local keypoints = base["Keypoints"]
+                    local faded = table.create(#keypoints)
+
+                    for i = 1, #keypoints do
+                        local keypoint = keypoints[i]
+                        faded[i] = NumberSequenceKeypoint.new(keypoint["Time"], 1 - (1 - keypoint["Value"]) * (1 - aura_transparency), keypoint["Envelope"])
+                    end
+
+                    object["Transparency"] = NumberSequence.new(faded)
+                else
+                    object["Transparency"] = base
+                end
+            end
+        end
+
+        local function paint_aura_tree(root)
+            local color_sequence = ColorSequence["new"](aura_color)
+            paint_aura(root, color_sequence)
+
+            local descendants = root:GetDescendants()
+
+            for i = 1, #descendants do
+                paint_aura(descendants[i], color_sequence)
+            end
+        end
+
         local function clear_particles()
             for i = 1, #particles do
                 pcall(function() particles[i]:Destroy() end)
                 particles[i] = nil
             end
+
+            table.clear(aura_base_transparency)
         end
 
         local do_particle_aura = LPH_NO_VIRTUALIZE(function()
@@ -30454,6 +32085,7 @@ do
                 local aura_obj = particle_auras[aura_name]
                 if aura_obj then
                     local cloned = clone(aura_obj)
+                    paint_aura_tree(cloned)
                     local children = get_children(cloned)
 
                     for i = 1, #children do
@@ -30528,7 +32160,16 @@ do
                     local path = "neverlose recode/custom/"..aura_name
 
                     if isfile(path) then
-                        local obj = game:GetObjects(getcustomasset(path))[1]
+                        -- A file that cannot be read as a model (a broken .rbxm) threw out of this handler, and the aura was not put back on.
+                        local loaded, obj = pcall(function()
+                            return game:GetObjects(getcustomasset(path))[1]
+                        end)
+
+                        if not loaded then
+                            new_notification("particle aura: " .. tostring(aura_name) .. " could not be loaded", 3)
+                            obj = nil
+                        end
+
                         if obj then
                             local children = get_children(obj)
                             local valid = true
@@ -30590,49 +32231,41 @@ do
             end
         end)
 
-        create_connection(menu_references["particle_aura_color"]["on_color_change"], function(value)
-            local color = ColorSequence["new"](value)
+        -- A colour drag fires on every mouse move: only the live copies are painted (not every template), once, a twentieth of a second after
+        -- the last change.
+        local aura_paint_scheduled = false
 
-            for particle, folder in particle_auras do
-                if folder and type(folder) ~= "string" then
-                    local descendants = folder:GetDescendants()
-                    for i = 1, #descendants do
-                        local part = descendants[i]
-                        local class_name = part["ClassName"]
-                        if class_name == "PointLight" then
-                            part["Color"] = value
-                        elseif class_name == "ParticleEmitter" or class_name == "Beam" or class_name == "Trail" then
-                            part["Color"] = color
-                        end
-                    end
-                end
+        local function repaint_aura()
+            if aura_paint_scheduled then
+                return
             end
 
-            local count = #particles
-            if count > 0 then
-                for i = 1, count do
+            aura_paint_scheduled = true
+
+            delay(0.05, function()
+                aura_paint_scheduled = false
+
+                for i = 1, #particles do
                     local part = particles[i]
-                    if part then
-                        local class_name = part["ClassName"]
-                        if class_name == "PointLight" then
-                            part["Color"] = value
-                        elseif class_name == "ParticleEmitter" or class_name == "Beam" or class_name == "Trail" then
-                            part["Color"] = color
-                        end
 
-                        local descendants = part:GetDescendants()
-                        for j = 1, #descendants do
-                            local d = descendants[j]
-                            local cn = d["ClassName"]
-                            if cn == "PointLight" then
-                                d["Color"] = value
-                            elseif cn == "ParticleEmitter" or cn == "Beam" or cn == "Trail" then
-                                d["Color"] = color
-                            end
-                        end
+                    if part then
+                        pcall(paint_aura_tree, part)
                     end
                 end
+            end)
+        end
+
+        create_connection(menu_references["particle_aura_color"]["on_color_change"], function(value)
+            if value then
+                aura_color = value
             end
+
+            repaint_aura()
+        end)
+
+        create_connection(menu_references["particle_aura_color"]["on_transparency_change"], function(value)
+            aura_transparency = tonumber(value) or 0
+            repaint_aura()
         end)
 
         delay(0, function()
@@ -30700,7 +32333,7 @@ end
         menu_references["target_statuses"] = menu_references["target_selection_settings"]:create_element({["name"] = "target statuses"}, {["dropdown"] = {["flag"] = "target_statuses", ["options"] = {"friendly", "neutral", "enemy"}, ["default"] = {"neutral"}, ["multi"] = true, ["requires_one"] = true}})
         menu_references["target_players"] = menu_references["target_selection_settings"]:create_element({["name"] = "target players"}, {["dropdown"] = {["flag"] = "target_players", ["options"] = {}, ["default"] = {}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["target_selection_prioritize_by"] = menu_references["target_selection_settings"]:create_element({["name"] = "prioritize by"}, {["dropdown"] = {["flag"] = "prioritize_by", ["options"] = {"closest to character", "closest to mouse", "highest wanted", "lowest health", "random"}, ["default"] = {"closest to mouse"}}})
-        menu_references["target_selection_ignore_if"] = menu_references["target_selection_settings"]:create_element({["name"] = "ignore if"}, {["dropdown"] = {["flag"] = "ignore_if", ["options"] = {"knocked", "in void"}, ["default"] = {}, ["multi"] = true}})
+        menu_references["target_selection_ignore_if"] = menu_references["target_selection_settings"]:create_element({["name"] = "ignore if"}, {["dropdown"] = {["flag"] = "ignore_if", ["options"] = {"in void"}, ["default"] = {}, ["multi"] = true}})
         menu_references["target_selection_target_distance"] = menu_references["target_selection_settings"]:create_element({["name"] = "target distance"}, {["slider"] = {["flag"] = "target_selection_target_distance", ["default"] = 250, ["max_text"] = "infinite", ["min"] = 5, ["max"] = 250, ["suffix"] = " studs"}})
     menu_references["visualization_section"] = menu["groups"]["main"]:create_section("ragebot", "visualization", 1, 0.3, 0.7)
         --menu_references["information_panel"] = menu_references["visualization_section"]:create_element({["name"] = "information panel"}, {["toggle"] = {["flag"] = "information_panel"}})
@@ -30892,9 +32525,6 @@ end
     -- hide_manager.pace_slow_guns = false puts the old behaviour back.
     hide_manager["pace_slow_guns"] = true
     hide_manager["gun_ammo_sent"] = setmetatable({}, {["__mode"] = "k"})
-    -- Sends in a row after which the ammo had not moved (the server took nothing): a gun that keeps being turned away (a shotgun past its
-    -- SecurityTolerance is locked out for the rest of the server; any gun while the target is out of reach) is only tried now and then.
-    hide_manager["gun_refused"] = setmetatable({}, {["__mode"] = "k"})
 
     -- One Tap: which gun goes at this target now so that it is knocked in as few shots as possible, from what the hub and the game's armor rule say.
     -- Armor takes the whole value of a hit and the health 22.5% of it while there is any; the Rifle (99) takes all the armor that is left whatever its
@@ -31148,20 +32778,8 @@ end
                 return true
             end
 
-            if true then
-                return elapsed >= wait_time + 0.0095
-            end
-
-            -- Fast Retry (BASED Hub's Da Hood ragebot asks again every 0.04 s until the ammo count moves, which it does about 0.03 s after the server took
-            -- a shot, and says a refused shot costs nothing): one round trip and a little more. Off by default: an account here was locked out of shooting
-            -- after a run of refused sends, and Bullet Manipulation's pulls cannot go faster than the gun script's own ToleranceCooldown (0.6 s) anyway, so
-            -- this only changes the shots sent directly. The back-off after a run of refusals above still applies. Policed guns (shotguns) never get here.
-            if flags["auto_fire_fast_retry"] == true then
-                return elapsed >= math.max(local_ping / 1000 + 0.06, 0.1)
-            end
-
-            -- A refused send is a violation the server counts, so it is not asked again straight away.
-            return elapsed >= math.max(local_ping / 1000 + 0.15, 0.4)
+            -- Force Fire: otherwise a whole cooldown (+ 0.0095, the game's own slack), with no longer back-off after a refusal.
+            return elapsed >= wait_time + 0.0095
         end
 
         if tool:GetAttribute("Cooldown") then
@@ -32251,6 +33869,16 @@ end
         -- Void While Reloading (Auto Reload's gear, on by default): off, the reload is sent where the character stands, with no void hide
         local void_reload = flags["auto_reload_void"] ~= false
 
+        -- Auto Stomp first (hide_manager.stomp_due): the void runner keeps the character out of the void while a target can be stomped, so a
+        -- reload hide held then only stops Follow Target and sends nothing. It waits for the stomp like Prioritize Over Reloading.
+        if wants and void_reload then
+            local stomp_due = hide_manager["stomp_due"]
+
+            if stomp_due and stomp_due() then
+                wants = false
+            end
+        end
+
         set_hide_reason("reload", wants and void_reload, true)
 
         if not wants then
@@ -32793,6 +34421,16 @@ end
 
             if now - cache["at"] < 0.1 and cache["origin"] and (cache["origin"] - origin)["Magnitude"] < 2 and (cache["position"] - position)["Magnitude"] < 2 and cache["range"] == range then
                 return cache["out_origin"], cache["out_claim"]
+            end
+
+            -- a search that found nothing is not run again for a fifth of a second while the target stays put, wherever the body moved (a strafing
+            -- follow moves the origin past two studs every frame, and each failed search costs a few hundred rays); only the straight line is checked again
+            if cache["out_claim"] == nil and now - cache["at"] < 0.2 and cache["position"] and (cache["position"] - position)["Magnitude"] < 2 and cache["range"] == range then
+                if hide_manager["walls_clear"](origin, position) then
+                    return origin, position
+                end
+
+                return nil, nil
             end
 
             local out_origin, out_claim = nil, nil
@@ -33372,7 +35010,9 @@ end
         -- holds while nobody else can be hit. A target chosen with the target key is never swapped out.
         if target and hrp and (automatic or target_list["count"] > 0) then
 
-            if get_target_phase(target) ~= nil and not wait_out_protection(target) then
+            -- A full player scan, so it is asked at most every 0.1 s (not every frame) while the target can't be hit.
+            if get_target_phase(target) ~= nil and not wait_out_protection(target) and tick - (hide_manager["standin_at"] or -1) >= 0.1 then
+                hide_manager["standin_at"] = tick
                 local standin = hide_manager["find_standin"](dt, hrp)
 
                 if standin then
@@ -33416,11 +35056,32 @@ end
             local phase = get_target_phase(target)
             update_hide_episode(target, phase)
 
-            if (ragebot_untarget_when_dead and target[7] and not should_hold_target(target)) or (ragebot_untarget_when_knocked and target[18]) or (ragebot_untarget_when_flung and torso and hide_episode_target ~= target and torso["Velocity"]["Magnitude"] > 100) then
+            -- Flung: a replicated Velocity over 100 is not enough on its own, velocity desync (ours and other scripts') puts one on a body that is
+            -- standing still. The body has to be really travelling as well: faster than anyone runs (80 studs/s) over at least 0.2 s, outside the void.
+            local flung = false
+
+            if ragebot_untarget_when_flung and torso and hide_episode_target ~= target and torso["Velocity"]["Magnitude"] > 100 then
+                local check = hide_manager["fling_check"]
+                local fling_position = torso["Position"]
+
+                if not check or check[1] ~= target or tick - check[3] > 1 then
+                    hide_manager["fling_check"] = {target, fling_position, tick}
+                elseif tick - check[3] >= 0.2 then
+                    local speed = (fling_position - check[2])["Magnitude"] / (tick - check[3])
+                    flung = speed == speed and speed > 80 and fling_position["Magnitude"] < 9e5 and check[2]["Magnitude"] < 9e5
+                    hide_manager["fling_check"] = {target, fling_position, tick}
+                end
+            end
+
+            if (ragebot_untarget_when_dead and target[7] and not should_hold_target(target)) or (ragebot_untarget_when_knocked and target[18]) or flung then
                 set_ragebot_target(nil, "ragebot target set to nobody due to condition met")
-            elseif ragebot_untarget_when_better_target and hide_episode_target ~= target and not target[18] and not target[7] then
+            elseif ragebot_untarget_when_better_target and hide_episode_target ~= target and not target[18] and not target[7]
+                and get_ragebot_target ~= get_random and tick - (hide_manager["better_pick_at"] or -1) >= 0.1 then
                 -- A knocked or dead target is never replaced here: the pickers skip knocked players, so it would always lose
                 -- to any other player (or to nobody) and auto stomp would lose the target it is about to stomp.
+                -- Prioritize By random has no better target (each pick draws someone new, so the target changed on every frame), and the
+                -- re-pick is a full player scan, so it runs at most every 0.1 s.
+                hide_manager["better_pick_at"] = tick
                 local target = pick_ragebot_target(dt, hrp, true)
                 if target and ragebot_target ~= target then
                     set_ragebot_target(target, "ragebot target set to "..target[2]["Name"].." due to better target")
@@ -33433,7 +35094,8 @@ end
                 target_last_position = nil
                 torso = nil
                 last_refresh = clock()
-            elseif torso then
+            elseif torso and ragebot_target == target then
+                -- (a target switched above starts its velocity reading from its own positions, not the old target's)
                 if clock() - last_refresh > resolver_rate then
                     local torso_position = torso["Position"]
 
@@ -33473,7 +35135,8 @@ end
                 end
             end
 
-            if hitbox then
+            -- Untargeted or switched above: the old target's hitbox is not aimed at for the new one (or for nobody) this step.
+            if hitbox and ragebot_target == target then
                 local hitbox_position = hitbox["Position"]
 
                 -- A target in the void whose spot there jumps about (a new random place far out on every update, as one opponent's script does) can
@@ -33617,10 +35280,15 @@ end
                     if clock() - hide_manager["follow_started_at"] < settle then
                         aim_valid = false
                     elseif hide_manager["follow_burst_due"] then
-                        hide_manager["follow_burst_due"] = false
-                        last_fire = -math.huge
-                        hide_manager["last_sent_at"] = nil
-                        follow_burst = true
+                        -- Kept until the burst's first shot has gone (cleared where the shot is sent), so a Shot Lock that forms on this frame and
+                        -- holds the shot for its own round trip does not use the burst up. Given up a second after the settle.
+                        if clock() - hide_manager["follow_started_at"] < settle + 1 then
+                            last_fire = -math.huge
+                            hide_manager["last_sent_at"] = nil
+                            follow_burst = true
+                        else
+                            hide_manager["follow_burst_due"] = false
+                        end
                     end
                 end
 
@@ -33710,7 +35378,7 @@ end
                         -- asked again after its own wait, so the gap is there to be tried).
                         local all_guns = auto_fire_always_fire == true -- Fire All Guns is part of Always Fire
                         local volley_gap = getgenv()["neverlose_gun_gap"] or (all_guns and (tonumber(flags["auto_fire_gun_gap"]) or 140)/1000 or 0.15)
-                        local switch_slow = {["[Deagle]"] = true, ["[Rifle]"] = true, ["[Glock]"] = true, ["[Silencer]"] = true}
+                        local switch_slow = hide_manager["switch_slow"]
                         local gap_between = function(from_name, to_name)
                             if switch_slow[from_name] and switch_slow[to_name] then
                                 return math.max(0.52, volley_gap)
@@ -33784,7 +35452,7 @@ end
                             local candidate = new_local_guns[i]
                             local tool = candidate[1]["Parent"]
 
-                            if plan_tool and tool ~= plan_tool and (tool["Name"] == "[Rifle]" or tool["Name"] == "[Double-Barrel SG]") then
+                            if tool and plan_tool and tool ~= plan_tool and (tool["Name"] == "[Rifle]" or tool["Name"] == "[Double-Barrel SG]") then
                                 -- the plan names the other of the two: this one waits
                                 continue
                             end
@@ -33874,12 +35542,7 @@ end
                             if ammo > 0 and handle["Parent"] and hide_manager["gun_ready"](handle["Parent"], ammo) then
                                 last_fire = clock()
                                 hide_manager["gun_fired_at"][handle["Parent"]] = last_fire
-
-                                if hide_manager["gun_ammo_sent"][handle["Parent"]] == ammo then
-                                    hide_manager["gun_refused"][handle["Parent"]] = (hide_manager["gun_refused"][handle["Parent"]] or 0) + 1
-                                else
-                                    hide_manager["gun_refused"][handle["Parent"]] = 0
-                                end
+                                hide_manager["follow_burst_due"] = false
 
                                 hide_manager["gun_ammo_sent"][handle["Parent"]] = ammo
                                 hide_manager["last_sent_gun"] = handle["Parent"]
@@ -35270,7 +36933,8 @@ end
         end
 
         create_connection(workspace["DescendantAdded"], function(item)
-            if item:IsA("Sound") and quiet_now() then
+            -- quiet_now first: it is cheaper than IsA and false whenever the ragebot has no target
+            if quiet_now() and item:IsA("Sound") then
                 local target_character = ragebot_target and ragebot_target[3]
 
                 if target_character and item:IsDescendantOf(target_character) then
@@ -35469,12 +37133,38 @@ end
                 setconstant(old, index, patched_value(constants[index]))
             end
 
-            for i, upvalue in getupvalues(old) do
-                if type(upvalue) == "number" and upvalue ~= 0 and upvalue ~= 0.05 and upvalue < 10 then
-                    record["upvalue"] = {i, upvalue}
-                    setupvalue(old, i, patched_value(upvalue))
-                    break
+            -- The upvalue by the same rule: the number closest to the gun's own cooldown (within a quarter of a second), otherwise the first small
+            -- number, so a spread, recoil or burst number the script keeps before the cooldown is not overwritten.
+            local upvalues = getupvalues(old)
+            local upvalue_index = nil
+
+            if gun_cooldown then
+                local best_gap = 0.25
+
+                for i, upvalue in upvalues do
+                    if type(upvalue) == "number" and upvalue ~= 0 and upvalue ~= 0.05 and upvalue < 10 then
+                        local gap = math["abs"](upvalue - gun_cooldown)
+
+                        if gap < best_gap then
+                            best_gap = gap
+                            upvalue_index = i
+                        end
+                    end
                 end
+            end
+
+            if not upvalue_index then
+                for i, upvalue in upvalues do
+                    if type(upvalue) == "number" and upvalue ~= 0 and upvalue ~= 0.05 and upvalue < 10 then
+                        upvalue_index = i
+                        break
+                    end
+                end
+            end
+
+            if upvalue_index then
+                record["upvalue"] = {upvalue_index, upvalues[upvalue_index]}
+                setupvalue(old, upvalue_index, patched_value(upvalues[upvalue_index]))
             end
 
             if record["constant"] or record["upvalue"] then
@@ -35608,7 +37298,7 @@ end
                 local old_angular_velocity = hrp["AssemblyAngularVelocity"]
 
                 -- "limit": math_random(-2^63, 2^63-1) returns the same number on every call on this executor, so a random value in the 32-bit range (the size of the constant it returned) is used instead.
-                local velocity = velocity_desync_type == "high y" and vector3_new(0, 16384, 0) or velocity_desync_type == "limit" and vector3_new(math_random(-2147483647, 2147483647), math_random(-2147483647, 2147483647), math_random(-2147483647, 2147483647)) or velocity_desync_type == "low" and vector3_new(math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300) or velocity_desync_type == "high" and vector3_new(math_random(1,2) == 1 and -16384 or 16384, math_random(1,2) == 1 and -14384 or 16384, math_random(1,2) == 1 and -16384 or 16384) or velocity_desync_type == "zero" and vector3_zero or vector3_zero
+                local velocity = velocity_desync_type == "high y" and vector3_new(0, 16384, 0) or velocity_desync_type == "limit" and vector3_new(math_random(-2147483647, 2147483647), math_random(-2147483647, 2147483647), math_random(-2147483647, 2147483647)) or velocity_desync_type == "low" and vector3_new(math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300) or velocity_desync_type == "high" and vector3_new(math_random(1,2) == 1 and -16384 or 16384, math_random(1,2) == 1 and -16384 or 16384, math_random(1,2) == 1 and -16384 or 16384) or velocity_desync_type == "zero" and vector3_zero or vector3_zero
 
                 hrp["AssemblyLinearVelocity"] = velocity
 
@@ -35919,7 +37609,8 @@ end
 
             local sparkTimer = 0
 
-            vfxConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
+            -- Through create_connection: an unload disconnects it too, not only switching the indicator off (removeGhost).
+            vfxConn = create_connection(game:GetService("RunService").Heartbeat, function(dt)
                 if not ghostModel or not ghostModel.Parent then return end
                 local t = tick()
                 local pulse = math.abs(math.sin(t * 2))
@@ -35967,14 +37658,7 @@ end
                             end
                         end
                     end
-                    for _, v in ipairs(ghostModel:GetDescendants()) do
-                        if v:IsA("BasePart") then
-                            v.CanCollide = false
-                            v.CanTouch = false
-                            v.CanQuery = false
-                            v.Anchored = true
-                        end
-                    end
+                    -- The ghost's parts were made anchored and non-colliding when it was built; they were set again here every 0.05 s for nothing.
                 end
             end)
         end
@@ -36045,6 +37729,13 @@ end
 
         local stop_sitting = LPH_JIT_MAX(function(character)
             local humanoid = local_parts["Humanoid"]
+
+            -- No humanoid yet (respawning): nothing to watch, and the index below threw.
+            if not humanoid then
+                sitting = false
+                return
+            end
+
             sitting = humanoid["Sit"]
 
             if refresh_connection3 then
@@ -36103,8 +37794,18 @@ end
                 if local_character then
                     stop_sitting(local_character)
                 end
-                
-                do_refresh()
+
+                -- Switched on while seated: the hook waits for the character to stand up (the Sit watcher above runs do_refresh then).
+                if sitting then
+                    if do_notify then
+                        new_notification(
+                            "fake position disabled (you are sitting)",
+                            2
+                        )
+                    end
+                else
+                    do_refresh()
+                end
             else
                 disable_fake_position()
 
@@ -36505,10 +38206,11 @@ end
                 if (humanoid["Health"]/humanoid["MaxHealth"] < threshold) then
                     last_attempt = tick
                     
-                    if local_cash > 5000 and not popcorn then
+                    if not popcorn then
                         popcorn = find_first_child(local_player["Backpack"], "[Popcorn]")
 
-                        if not popcorn then
+                        -- Only the purchase needs the cash: popcorn already in the bag is eaten when low on cash too.
+                        if not popcorn and local_cash > 5000 then
                             purchase_item("popcorn")
                         end
                     end
@@ -36573,8 +38275,11 @@ end
 
         local do_auto_mask = LPH_JIT_MAX(function(dt, hrp)
             local mask = local_parts["In-gameMask"]
+            local humanoid = local_parts["Humanoid"]
 
-            if mask or local_knocked or purchasing or local_cash < 5000 then
+            -- The disable options put a mask in hand back as well (it stayed out next to the guns), and a missing humanoid (respawning) waits.
+            -- The cash check only gates the purchase below: a mask already in the bag is still put on when low on cash.
+            if mask or local_knocked or purchasing or not humanoid or (disable_auto_mask_when_not_full_health and humanoid["Health"] < humanoid["MaxHealth"]) or (disable_auto_mask_when_target_alive and ragebot_target and not ragebot_target[7]) then
                 if current_mask then
                     setscriptable(current_mask, "Parent", true)
                     current_mask["Parent"] = local_player["Backpack"]
@@ -36583,15 +38288,11 @@ end
                 return
             end
 
-            if (disable_auto_mask_when_not_full_health and local_parts["Humanoid"]["Health"] < local_parts["Humanoid"]["MaxHealth"]) or (disable_auto_mask_when_target_alive and ragebot_target and not ragebot_target[7]) then
-                return
-            end
-            
             current_mask = find_first_child(local_player["Backpack"], "[Mask]") or local_parts["[Mask]"]
 
             local tick = clock()
 
-            if not current_mask and (tick-cooldown > 1) then
+            if not current_mask and (tick-cooldown > 1) and local_cash >= 5000 then
                 purchase_item("ninja mask")
                 cooldown = tick
             elseif current_mask then
@@ -37181,21 +38882,20 @@ end
         -- or has left does not hold the stomp up. The players picked in the Target List are the targets when there are any, otherwise the
         -- ones the auto stomp is going for.
         local any_target_standing = LPH_NO_VIRTUALIZE(function(targets)
-            local group = targets
-
+            -- The Target List is walked in place (no list built for it every call).
             if target_list["count"] > 0 then
-                group = {}
-
                 for player, _ in target_list["players"] do
                     local data = player_data[player]
 
-                    if data then
-                        group[#group+1] = data
+                    if data and data[3] and not data[18] and not data[7] then
+                        return true
                     end
                 end
+
+                return false
             end
 
-            for _, data in group do
+            for _, data in targets do
                 if data[3] and not data[18] and not data[7] then
                     return true
                 end
@@ -37204,9 +38904,19 @@ end
             return false
         end)
 
-        -- The players the auto stomp is going for this frame.
+        -- The players the auto stomp is going for this frame. Asked up to three times a frame (stomp_due, stomp_priority and the stomp itself):
+        -- one scan per drawn frame is shared between them, redone every 50 ms when no frames are drawn. The callers only read the list.
+        local gathered_targets, gathered_frame, gathered_at = nil, nil, -1
+
         local gather_stomp_targets = LPH_NO_VIRTUALIZE(function()
+            local frame, now = hide_manager["rendered_at"], clock()
+
+            if gathered_targets and frame == gathered_frame and now - gathered_at < 0.05 then
+                return gathered_targets
+            end
+
             local targets = auto_stomp_target_target and {ragebot_target} or {}
+            gathered_targets, gathered_frame, gathered_at = targets, frame, now
 
             for player, data in player_data do
                 local status = data[1]
@@ -37565,11 +39275,13 @@ end
                         if void_type == "bait" then
                             local bait_range = flags["void_hide_bait_distance"]
                             local difference = tick - last_bait
-                            if difference > 0.5 then
+                            -- The same bait as without Spam: the Bait Cooldown slider, and the body really goes to the bait spot for the bait time.
+                            if difference > flags["void_hide_bait_cooldown"] then
                                 last_bait = tick
                                 bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
                             elseif difference < flags["void_hide_bait_time"] and bait_position then
                                 fake_in_void = false
+                                hrp["CFrame"] = bait_position + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset))
                             else
                                 fake_in_void = true
                             end
@@ -37763,6 +39475,8 @@ end
     do
         local auto_equip_guns = {"[Rifle]", "[Double-Barrel SG]"}
         local fake_local_guns = {}
+        -- The guns this feature took out (weak keys: a gun that is gone drops out by itself). Only these are put back by it.
+        local drawn_guns = setmetatable({}, {__mode = "k"})
         local auto_equip_unequip_when_when_no_target = true
         local auto_equip_unequip_when_when_no_target_connection = nil
 
@@ -37797,24 +39511,24 @@ end
                     local is_gun = false
                     for i = 1, #auto_equip_guns do
                         if name == auto_equip_guns[i] then
-                            setscriptable(gun, "Parent", true)
-                            gun["Parent"] = local_character
                             is_gun = true
                         end
                     end
                     -- Prioritize DB: the Double-Barrel comes out whether or not it is in the list
                     if not is_gun and name == "[Double-Barrel SG]" and flags["auto_equip_prioritize_db"] == true then
-                        setscriptable(gun, "Parent", true)
-                        gun["Parent"] = local_character
                         is_gun = true
                     end
                     -- Distance Check: the Rifle comes out while the target is past the DB's range (it goes back once the check is off again)
                     if not is_gun and name == "[Rifle]" and hide_manager["distance_check_active"] == true then
-                        setscriptable(gun, "Parent", true)
-                        gun["Parent"] = local_character
                         is_gun = true
                     end
-                    if not is_gun and gun["Parent"] == local_character then
+                    if is_gun then
+                        setscriptable(gun, "Parent", true)
+                        gun["Parent"] = local_character
+                        drawn_guns[gun] = true
+                    elseif drawn_guns[gun] and gun["Parent"] == local_character then
+                        -- Only a gun this loop took out goes back: one the player drew, and the popcorn or mask of other features, are left alone.
+                        drawn_guns[gun] = nil
                         setscriptable(gun, "Parent", true)
                         gun["Parent"] = backpack
                     end
@@ -37848,6 +39562,13 @@ end
         end
 
         local remove_tool = function(gun)
+            -- A gun this feature took out leaves the bag for the hand: it stays tracked, so the loop can put it back once it is no longer
+            -- wanted (the Distance Check's Rifle, a gun taken off the list, Prioritize DB switched off).
+            if drawn_guns[gun] and gun["Parent"] == local_character then
+                return
+            end
+
+            drawn_guns[gun] = nil
             fake_local_guns[gun["Name"]] = nil
         end
 
@@ -37870,6 +39591,15 @@ end
             local children = get_children(backpack)
             for i = 1, #children do
                 add_tool(children[i])
+            end
+
+            -- The guns it took out that are still in hand are tracked again too.
+            if local_character then
+                for _, held in get_children(local_character) do
+                    if drawn_guns[held] then
+                        add_tool(held)
+                    end
+                end
             end
 
             auto_equip_connection_2 = create_connection(backpack["ChildAdded"], add_tool)
@@ -38056,8 +39786,9 @@ end
 
             local origin = nil
             if tracer_origin == "gun" and local_gun and local_tool then
-                local handle = local_tool["Handle"]
-                origin = world_to_viewport_point(camera, handle["Position"])
+                -- A tool without a Handle threw here every frame.
+                local handle = find_first_child(local_tool, "Handle")
+                origin = handle and world_to_viewport_point(camera, handle["Position"]) or nil
             elseif tracer_origin == "character" and hrp then
                 origin = world_to_viewport_point(camera, hrp["Position"])
             elseif tracer_origin == "server position" and local_server_position and local_server_position["p"]["Magnitude"] < 9e5 then
@@ -38596,6 +40327,18 @@ local get_silent_aim_position = nil
         end
 
         setrawmetatable(mouse, new)
+
+        -- An unload (or a re-run, which unloads this one first) gives the mouse its own metatable back: otherwise the next run hooked on top of
+        -- this hook, and this run's aim positions kept answering mouse.Hit.
+        local teardowns = getgenv()["neverlose_teardowns"]
+
+        if teardowns then
+            teardowns[#teardowns+1] = function()
+                if getrawmetatable(mouse) == new then
+                    setrawmetatable(mouse, old)
+                end
+            end
+        end
     end
 
     set_silent_aim_position = LPH_NO_VIRTUALIZE(function(position)
@@ -38744,6 +40487,22 @@ local get_silent_aim_position = nil
 
     local legitbot_field_of_view = false
 
+    -- A ray filter of only the instances that exist: the folders found at load (ignored, bush, vehicles), a target's tool and the hitbox box can
+    -- each be nil, and a hole in the list could end the filter there (the ray then hit whatever came after it).
+    hide_manager["ray_filter"] = LPH_NO_VIRTUALIZE(function(...)
+        local list = {}
+
+        for i = 1, select("#", ...) do
+            local value = select(i, ...)
+
+            if value ~= nil then
+                list[#list+1] = value
+            end
+        end
+
+        return list
+    end)
+
     local get_legitbot_target = nil; get_legitbot_target = LPH_NO_VIRTUALIZE(function(dt, getting, bypass)
         local camera_pos = camera["CFrame"]["p"]
         local mouse_pos = get_mouse_location(user_input_service)
@@ -38782,7 +40541,7 @@ local get_silent_aim_position = nil
                     if legitbot_untarget_when_not_visible then
                         local distance = hrp_position-camera_pos
 
-                        params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]}
+                        params["FilterDescendantsInstances"] = hide_manager["ray_filter"](data[3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"])
                         blocked = raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) ~= nil
 
                         if blocked then
@@ -38827,7 +40586,7 @@ local get_silent_aim_position = nil
                             if blocked == nil then
                                 local distance = hrp_position-camera_pos
 
-                                params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]}
+                                params["FilterDescendantsInstances"] = hide_manager["ray_filter"](data[3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"])
                                 blocked = raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) ~= nil
                             end
 
@@ -38906,7 +40665,7 @@ local get_silent_aim_position = nil
             if legitbot_ignore_if_not_visible then
                 local distance = target[4]-camera_pos
 
-                params["FilterDescendantsInstances"] = {target[1][3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"]}
+                params["FilterDescendantsInstances"] = hide_manager["ray_filter"](target[1][3], local_character, ignored, bush, vehicles, hide_manager["hitbox_box"])
 
                 if raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) then
                     continue
@@ -39072,7 +40831,8 @@ local get_silent_aim_position = nil
             get_legitbot_target(dt)
         end
 
-        if legitbot_target and local_hrp then
+        -- Switched off (or the hold key let go): the step stays scheduled for 0.15 s for the circle's fade, but no longer aims.
+        if flags["aim_assist"] and legitbot_target and local_hrp then
             local distance = legitbot_target[3]
             if distance <= aim_assist_field_of_view and distance >= aim_assist_dead_zone and not legitbot_dont_aim then
                 local data = legitbot_target[1]
@@ -39119,7 +40879,9 @@ local get_silent_aim_position = nil
                             end
 
                             if aim_assist_method == "mouse" then
-                                mousemoverel(move_position["X"]*aim_assist_horizontal_multiplier, move_position["Y"]*aim_assist_vertical_multiplier)
+                                -- At most the whole way to the point: the eased types gave a fixed step near the target (the ease shrinks with the distance
+                                -- left), which passed it and shook around it instead of settling.
+                                mousemoverel(move_position["X"]*clamp(aim_assist_horizontal_multiplier, 0, 1), move_position["Y"]*clamp(aim_assist_vertical_multiplier, 0, 1))
                             elseif camera then
                                 render_stepped_wait(render_stepped)
                                 local old = camera["CFrame"]
@@ -39410,7 +41172,8 @@ local get_silent_aim_position = nil
             if part and not data[18] and not data[7] then
                 local part_position = custom_silent_aim_position or part["Position"]
 
-                if local_gun and (silent_aim_max_distance == 2500 or (hrp["Position"]-part_position)["Magnitude"] <= (silent_aim_max_distance == 0 and (local_gun or 250) or silent_aim_max_distance)) then
+                -- No root (respawning): no aim, and the point is cleared below instead of the index throwing and leaving the last one set.
+                if local_gun and hrp and (silent_aim_max_distance == 2500 or (hrp["Position"]-part_position)["Magnitude"] <= (silent_aim_max_distance == 0 and (local_gun or 250) or silent_aim_max_distance)) then
                     if silent_aim_multipoint ~= 0 and not custom_silent_aim_position then
                         local part_cframe = part["CFrame"]
                         local cf = part_cframe:PointToObjectSpace(mouse["Hit"]["p"])
@@ -39873,7 +41636,13 @@ local get_silent_aim_position = nil
             local can_now, checked_at = false, 0
 
             create_connection(render_stepped, function()
-                local wanted = flags["silent_aim_manipulated_indicator"] ~= false
+                -- Only while something can manipulate a shot (the ragebot on a target, or silent aim with Bullet Manipulation or Force Hit): can_manipulate
+                -- answers false otherwise, after its wall rays.
+                local wanted = flags["silent_aim_manipulated_indicator"] ~= false and ((flags["ragebot"] and ragebot_target ~= nil) or (flags["silent_aim"] and (flags["silent_aim_force_hit"] == true or bullet_manipulation.enabled == true)))
+
+                if not wanted then
+                    can_now = false
+                end
 
                 -- looked at 20 times a second (it may cast a ray)
                 if wanted and clock() - checked_at >= 0.05 then
@@ -40027,7 +41796,7 @@ local get_silent_aim_position = nil
                 get_legitbot_target(dt)
             end
 
-            if legitbot_target and not legitbot_dont_aim and local_gun then
+            if legitbot_target and not legitbot_dont_aim and local_gun and hrp then
                 local ray = viewport_point_to_ray(camera, mouse_position["X"], mouse_position["Y"])
                 local data = legitbot_target[1]
                 local parts = data[4]
@@ -40035,7 +41804,7 @@ local get_silent_aim_position = nil
                 if not data[7] and not data[18] and not hide_manager["is_protected"](data) and target_hrp then
                     local max = (triggerbot_max_distance == 0 and (local_gun or 250) or triggerbot_max_distance)
                     if triggerbot_max_distance == 2500 or (hrp["Position"]-target_hrp["Position"])["Magnitude"] <= max then
-                        local ignore = {local_character, ignored, bush, vehicles, data[13], hide_manager["hitbox_box"]}
+                        local ignore = hide_manager["ray_filter"](local_character, ignored, bush, vehicles, data[13], hide_manager["hitbox_box"])
 
                         for name, part in parts do
                             if part["ClassName"] == "Accessory" then
@@ -40400,6 +42169,12 @@ do
                 return
             end
 
+            -- A purchase owns the hands while it runs (it put the guns in the bag on purpose), and so does Auto Heal while it eats: a gun drawn
+            -- now made the features fight over the hand.
+            if purchasing or hide_manager["healing"] then
+                return
+            end
+
             local now = clock()
 
             if now - last_check < 0.1 then
@@ -40419,6 +42194,12 @@ do
             end
 
             local held = find_first_child_of_class(character, "Tool")
+
+            -- The mask Auto Mask has out is its own until it is worn.
+            if held and held["Name"] == "[Mask]" and flags["auto_mask"] == true then
+                return
+            end
+
             local held_range = held and find_first_child(held, "Range")
             local held_gun = held_range and find_first_child(held, "Ammo") and true or false
             local extra = flags["range_enhancer"] == true and 15 or 0
@@ -40576,7 +42357,11 @@ do
         local steps = table.move(heartbeat, 1, #heartbeat, 1, {})
 
         for i = 1, #steps do
-            spawn(steps[i], dt, hrp)
+            local step = steps[i]
+
+            if table.find(heartbeat, step) then
+                spawn(step, dt, hrp)
+            end
         end
 
     end))
@@ -40597,7 +42382,11 @@ do
         local anti_aim_steps = table.move(anti_aim, 1, #anti_aim, 1, {})
 
         for i = 1, #anti_aim_steps do
-            spawn(anti_aim_steps[i], dt, hrp)
+            local step = anti_aim_steps[i]
+
+            if table.find(anti_aim, step) then
+                spawn(step, dt, hrp)
+            end
         end
 
         if hrp then
@@ -40606,6 +42395,18 @@ do
     end))
 
     local old_vehicle = nil
+
+    -- An unload gives the vehicle the game's metatable back, as sitting in another one does.
+    if getgenv()["neverlose_teardowns"] then
+        local teardowns = getgenv()["neverlose_teardowns"]
+
+        teardowns[#teardowns+1] = function()
+            if old_vehicle then
+                setrawmetatable(old_vehicle, getrawmetatable(game))
+                old_vehicle = nil
+            end
+        end
+    end
 
     create_connection(signals["on_vehicle_sat_in"], function(new_vehicle)
         if old_vehicle then
@@ -40627,9 +42428,7 @@ do
                     return old_index(self, index)
                 end)),
                 ["__newindex"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index, value)
-                    if checkcaller() and self and index == "CFrame" and (#anti_aim ~= 0 or purchasing) then
-                        return old_new_index(self, index, value)
-                    end
+                    -- Writes pass straight through (the check that was here led to the same call either way).
                     return old_new_index(self, index, value)
                 end))
             }
@@ -40963,7 +42762,12 @@ do
                 return
             end
 
-            if signal == "on_ragebot_target_changed" or signal == "on_legitbot_target_changed" or signal == "on_target_changed" then
+            -- "on_target_changed" has no signal of its own: it is the ragebot's.
+            if signal == "on_target_changed" then
+                signal = "on_ragebot_target_changed"
+            end
+
+            if signal == "on_ragebot_target_changed" or signal == "on_legitbot_target_changed" then
                 local fake = {
                     ["Connect"] = function(self, callback)
                         return signals[signal]:Connect(function(player, ...)
@@ -41116,10 +42920,31 @@ do
                 return
             end
 
-            if isfile("neverlose recode/configs/"..string..".cfg") then
-                menu["load_config"](string)
-            else
-                error("Visions hook: load_config expected string got "..type)
+            -- The engine's menu is a stand-in now and its load_config did nothing. Configs are the femmyhac.cc menu's (NeverLoseConfigs/<name>),
+            -- loaded with its own loader (the menu's session keeps it as Lib).
+            local session = getgenv()["__NeverLoseMenuSession"]
+            local lib = typeof(session) == "table" and session["Lib"] or nil
+            local path = "NeverLoseConfigs/"..string
+
+            if not lib or typeof(lib["LoadConfigData"]) ~= "function" then
+                error("Visions hook: load_config is not available (the menu is not loaded)")
+                return
+            end
+
+            if not isfile(path) then
+                error("Visions hook: load_config found no config named "..string)
+                return
+            end
+
+            local ok, err = pcall(lib["LoadConfigData"], lib, readfile(path))
+
+            if not ok then
+                error("Visions hook: load_config failed ("..tostring(err)..")")
+                return
+            end
+
+            if lib["ConfigState"] then
+                lib["ConfigState"]["Active"] = string
             end
         end),
         set_tab_text = function(text)
@@ -41494,15 +43319,29 @@ do
         1
     )
 
-    local overlay = core_gui["RobloxPromptGui"]["promptOverlay"]
+    -- A client without the prompt overlay (or with it renamed) stopped the engine right here, before "update data": cash, inventory and crew were
+    -- never read. Without it the kick screen has nothing to hook and listens to a signal that never fires.
+    local prompt_gui = find_first_child(core_gui, "RobloxPromptGui")
+    local overlay = prompt_gui and find_first_child(prompt_gui, "promptOverlay")
+    local overlay_child_added = overlay and overlay["ChildAdded"] or signal["new"]()
 
-    create_connection(overlay["ChildAdded"], LPH_JIT_MAX(function(error) -- >> genuinely if this ever gets leaked.. DONT ask
+    create_connection(overlay_child_added, LPH_JIT_MAX(function(error) -- >> genuinely if this ever gets leaked.. DONT ask
         if error["Name"] == "ErrorPrompt" then
             if flags["custom_kick_screen"] then
                 if not _G.did then
                     spawn(function()
                         local gui_service = cloneref(game:GetService("GuiService"))
-                        while wait(0.15) do
+                        -- An unload stops the loop (it ran on forever).
+                        local stopped = false
+                        local teardowns = getgenv()["neverlose_teardowns"]
+
+                        if teardowns then
+                            teardowns[#teardowns+1] = function()
+                                stopped = true
+                            end
+                        end
+
+                        while not stopped and wait(0.15) do
                             gui_service:ClearError()
                         end
                     end)
@@ -41697,19 +43536,29 @@ do
                                     tween(last_tweened, {["Transparency"] = 0.8}, circular, out, 0.2)
 
                                     text["Text"] = "finding server..."
-                                    local servers = http_service:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game["PlaceId"].."/servers/Public?sortOrder=Asc&limit=100"))["data"]
-                                    local lowest_ping = 9e9
-                                    local most_players = 0
+                                    -- A failed request or an empty list ends in "failed to find server" instead of an error that left "finding server..." up.
+                                    local ok, servers = pcall(function()
+                                        return http_service:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game["PlaceId"].."/servers/Public?sortOrder=Asc&limit=100"))["data"]
+                                    end)
                                     local best_server
-                                    local max_players = tonumber(servers[1]["maxPlayers"])
-                                    for i = 1, #servers do
-                                        local server = servers[i]
-                                        local players = tonumber(server["playing"])
-                                        local ping = tonumber(server["ping"])
-                                        if players ~= max_players and players > most_players and ping < lowest_ping then
-                                            lowest_ping = ping
-                                            most_players = players
-                                            best_server = server["id"]
+                                    local best_score = -9e9
+
+                                    if ok and type(servers) == "table" then
+                                        for i = 1, #servers do
+                                            local server = servers[i]
+                                            local players = tonumber(server["playing"]) or 0
+                                            local max_players = tonumber(server["maxPlayers"]) or 0
+                                            local ping = tonumber(server["ping"]) or 999
+
+                                            -- One score instead of needing more players and lower ping at once: players count most, 100 ms of ping weighs one player.
+                                            if server["id"] and server["id"] ~= game["JobId"] and players < max_players then
+                                                local score = players - ping/100
+
+                                                if score > best_score then
+                                                    best_score = score
+                                                    best_server = server["id"]
+                                                end
+                                            end
                                         end
                                     end
 
