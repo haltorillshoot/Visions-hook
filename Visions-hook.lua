@@ -8708,7 +8708,25 @@ local function onBulletRay(object)
 	end
 	task.wait()
 
-	local beam = object:FindFirstChildOfClass("Beam")
+	-- A skin with a tracer of its own (SkinAssets.GunBeam) puts its beam in the shot as well, and it may not be the first one or have its end set
+	-- yet: the first beam (anywhere in the shot) with both ends is used, waiting up to twenty frames for one.
+	local beam = nil
+
+	for _ = 1, 20 do
+		for _, item in ipairs(object:GetDescendants()) do
+			if item:IsA("Beam") and item.Attachment0 and item.Attachment1 then
+				beam = item
+				break
+			end
+		end
+
+		if beam or not object.Parent then
+			break
+		end
+
+		task.wait()
+	end
+
 	if not (Session.Alive and beam and beam.Attachment1) then
 		return
 	end
@@ -8759,7 +8777,11 @@ local function onBulletRay(object)
 	end
 
 	if (isLocal and Visual.LocalTracers) or (not isLocal and Visual.PlayerTracers) then
-		beam.Enabled = false
+		for _, item in ipairs(object:GetDescendants()) do
+			if item:IsA("Beam") then
+				item.Enabled = false
+			end
+		end
 		drawTracer(startPosition, endPosition, isLocal)
 	end
 
@@ -14689,6 +14711,28 @@ local function buildPlayerListTab()
 	scroll.ScrollBarImageColor3 = (NeverLose.Accent and NeverLose:Accent() or ACCENT_COLOR)
 	scroll.ScrollBarThickness = 3
 	scroll.Size = UDim2.new(1, 0, 0, 330)
+
+	-- Search: only the rows whose name or display name has the text in it
+	local searchBox = Instance.new("TextBox")
+	searchBox.Name = "PlayerSearch"
+	searchBox.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+	searchBox.BorderColor3 = STROKE_COLOR
+	searchBox.BorderSizePixel = 1
+	searchBox.ClearTextOnFocus = false
+	searchBox.Font = Enum.Font.SourceSans
+	searchBox.LayoutOrder = scroll.LayoutOrder
+	searchBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 120)
+	searchBox.PlaceholderText = "search players..."
+	searchBox.Size = UDim2.new(1, 0, 0, 24)
+	searchBox.Text = ""
+	searchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+	searchBox.TextSize = 15
+	searchBox.TextXAlignment = Enum.TextXAlignment.Left
+	local searchPadding = Instance.new("UIPadding")
+	searchPadding.PaddingLeft = UDim.new(0, 8)
+	searchPadding.Parent = searchBox
+	scroll.LayoutOrder = listSection.NextOrder()
+	searchBox.Parent = listSection.Body
 	scroll.Parent = listSection.Body
 
 	local layout = Instance.new("UIListLayout")
@@ -14707,6 +14751,38 @@ local function buildPlayerListTab()
 	emptyLabel.Parent = scroll
 
 	---------- the editor ----------
+	-- the picked player's avatar picture (their Roblox headshot)
+	local avatar = Instance.new("ImageLabel")
+	avatar.Name = "PlayerAvatar"
+	avatar.BackgroundColor3 = Color3.fromRGB(26, 26, 26)
+	avatar.BorderColor3 = STROKE_COLOR
+	avatar.BorderSizePixel = 1
+	avatar.Image = ""
+	avatar.LayoutOrder = editor.NextOrder()
+	avatar.ScaleType = Enum.ScaleType.Fit
+	avatar.Size = UDim2.fromOffset(96, 96)
+	avatar.Visible = false
+	avatar.Parent = editor.Body
+	local avatarFor = nil
+
+	local function showAvatar(player)
+		avatarFor = player
+		avatar.Visible = player ~= nil
+		avatar.Image = ""
+
+		if player then
+			task.spawn(function()
+				local ok, image = pcall(function()
+					return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+				end)
+
+				if ok and avatarFor == player and Session.Alive then
+					avatar.Image = image
+				end
+			end)
+		end
+	end
+
 	local selectedLabel = editor:AddLabel("Selected: nobody")
 	local wantedLabel = editor:AddLabel("Wanted: -")
 
@@ -14859,6 +14935,9 @@ local function buildPlayerListTab()
 
 	local function select(player)
 		selected = player
+		if avatarFor ~= player then
+			showAvatar(player)
+		end
 		describeSelected()
 
 		for other, row in pairs(rows) do
@@ -14930,9 +15009,12 @@ local function buildPlayerListTab()
 		end)
 
 		local keep = {}
+		local query = string.lower(searchBox.Text or "")
 		for index, player in ipairs(present) do
 			keep[player] = true
-			paintRow(player, rows[player] or addRow(player), index)
+			local row = rows[player] or addRow(player)
+			paintRow(player, row, index)
+			row.Button.Visible = query == "" or string.find(string.lower(player.Name), query, 1, true) ~= nil or string.find(string.lower(player.DisplayName), query, 1, true) ~= nil
 		end
 
 		for player, row in pairs(rows) do
@@ -14948,6 +15030,12 @@ local function buildPlayerListTab()
 			select(nil)
 		end
 	end
+
+	track((searchBox:GetPropertyChangedSignal("Text") or searchBox.Changed):Connect(function()
+		if Session.Alive then
+			refresh()
+		end
+	end))
 
 	track(Players.PlayerAdded:Connect(function()
 		task.defer(refresh)
@@ -20793,7 +20881,25 @@ do
         wait()
         local name = object["Name"]
         if name == "BULLET_RAYS" then
-            local beam = find_first_child_of_class(object, "Beam")
+            -- A skin with a tracer of its own (SkinAssets.GunBeam) puts its beam in the shot as well, and it may not be the first one or have its
+            -- end set yet: the first beam (anywhere in the shot) that has both ends is used, waiting up to twenty frames for one.
+            local beam = nil
+
+            for _ = 1, 20 do
+                for _, item in object:GetDescendants() do
+                    if item:IsA("Beam") and item["Attachment0"] and item["Attachment1"] then
+                        beam = item
+                        break
+                    end
+                end
+
+                if beam or not object["Parent"] then
+                    break
+                end
+
+                wait()
+            end
+
             if beam then
                 local cframe = beam["Attachment1"]["WorldCFrame"]
                 if get_attribute(object, "OwnerCharacter") == local_name then
@@ -39095,6 +39201,13 @@ local get_silent_aim_position = nil
         if handle and head and ammo and ammo["Value"] > 0 and legit and hide_manager["legit_rebuild"] and not hide_manager["is_protected"](legit) then
             local ok, rebuilt = pcall(hide_manager["legit_rebuild"], {"ShootGun", handle, head["Position"]})
 
+            -- Force Hit builds a shot even past the gun's Range: the server turns that one away, so it is not "manipulatable"
+            local range = find_first_child(tool, "Range")
+
+            if ok and type(rebuilt) == "table" and range and (rebuilt[2] - rebuilt[1])["Magnitude"] > range["Value"] + 2 then
+                return false
+            end
+
             if ok and type(rebuilt) == "table" then
                 -- Force Hit sends a shot even with no clear way; that one would not hit
                 hide_manager["walls_target"] = legit
@@ -39138,7 +39251,8 @@ local get_silent_aim_position = nil
                     can_now = ok and can == true
                 end
 
-                local shown = wanted and (can_now or clock() - (hide_manager["manipulated_at"] or -1) < 0.6)
+                -- only while the target can be hit by a manipulated shot right now (no longer for a moment after every shot as well)
+                local shown = wanted and can_now
 
                 if shown then
                     local mouse = get_mouse_location(user_input_service)
