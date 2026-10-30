@@ -7153,9 +7153,9 @@ function Session.addTarget()
 		found = owner
 	end
 
-	-- Otherwise the closest player to the cursor, as long as they are near it.
+	-- Otherwise the closest player to the cursor, as long as they are right by it (it was 250 px, which picked people nobody pointed at)
 	if not found then
-		local closest = 250
+		local closest = 60
 
 		for _, player in ipairs(Players:GetPlayers()) do
 			local root = player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -7175,23 +7175,24 @@ function Session.addTarget()
 		return
 	end
 
-	if table.find(selectedPlayers, found.Name) then
-		log("crosshairs", found.Name .. " is already in the Target List", 3)
-		return
-	end
+	-- The target key picks ONE player: the Target List becomes just them (it used to add them to whoever was already in it, so the list
+	-- filled up and the ragebot went on to those others after every kill). The same key on the player already picked clears the list.
+	local picked = {}
+	local only = #selectedPlayers == 1 and selectedPlayers[1] == found.Name
 
-	local picked = { [found.Name] = true }
-	for _, name in ipairs(selectedPlayers) do
-		picked[name] = true
+	if not only then
+		picked[found.Name] = true
 	end
 
 	-- The dropdown's callback applies the pick; if it did not run, apply it directly.
 	pcall(targetList.SetValue, targetList, picked)
-	if not table.find(selectedPlayers, found.Name) then
-		setSelection(picked)
-	end
+	setSelection(picked)
 
-	log("crosshairs", "Target added: " .. found.Name, 3)
+	if only then
+		log("crosshairs", "Target cleared: " .. found.Name, 3)
+	else
+		log("crosshairs", "Target: " .. found.Name, 3)
+	end
 end
 
 ---------- Keybind list ------------
@@ -33579,7 +33580,10 @@ end
             if player and flags["ragebot"] then
                 local data = player_data[player]
 
-                if data and (flags["target_selection_target_when_shot_at_force"] or ragebot_target == nil) and data[1] ~= 2 then
+                -- with players in the Target List, only one of them is taken this way (a stranger shooting after a kill no longer becomes the target)
+                local listed = target_list["count"] == 0 or target_list["players"][player] == true
+
+                if data and listed and (flags["target_selection_target_when_shot_at_force"] or ragebot_target == nil) and data[1] ~= 2 then
                     set_ragebot_target(data, "ragebot target set to "..player["Name"].." (shot at you)")
                 end
             end
