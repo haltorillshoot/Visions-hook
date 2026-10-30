@@ -16533,10 +16533,11 @@ local function buildInterface()
 		end,
 	})
 
-	-- studs added round the target's body on every side (X, Y and Z together)
+	-- studs added round the target's body on every side (X, Y and Z together); up to 10,000,000 (click the number to type one). The check is
+	-- worked out (a ray against the box), so any size counts; only the drawn box stops at 2048 studs, the largest a part can be.
 	addTextSlider(Raging:AddLabel("Lock Box Size"), {
 		Min = 0,
-		Max = 40,
+		Max = 10000000,
 		Rounding = 0,
 		Type = " studs",
 		Default = 10,
