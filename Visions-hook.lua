@@ -8100,6 +8100,7 @@ local VisualSettings = {
 	LocalTracerGradient = Color3.fromRGB(241, 133, 255),
 	LocalTracerLifetime = 0.8,
 	LocalTracerServerOrigin = true,
+	LocalTracerOneLine = false,
 	PlayerTracerStyle = "laser",
 	PlayerTracerColor = Color3.fromRGB(133, 220, 255),
 	PlayerTracerGradient = Color3.fromRGB(241, 133, 255),
@@ -8601,6 +8602,27 @@ local function onBulletRay(object)
 	local startPosition = (object:IsA("BasePart") and object.Position) or (beam.Attachment0 and beam.Attachment0.WorldPosition) or endPosition
 	local isLocal = object:GetAttribute("OwnerCharacter") == LocalPlayer.Name
 
+	if isLocal then
+		local now = os.clock()
+
+		-- One Line For Shotguns: a shotgun's pellets come in the same moment from the same muzzle; only the first is drawn
+		local last = sharedEnv.neverlose_last_ray
+		sharedEnv.neverlose_last_ray = { now, startPosition }
+
+		if VisualSettings.LocalTracerOneLine and Visual.LocalTracers and last and now - last[1] < 0.05 and (last[2] - startPosition).Magnitude < 3 then
+			beam.Enabled = false
+			return
+		end
+
+		-- The game draws the shot where the gun was pointed; a shot the ragebot or the silent aim sent somewhere else ends where it was sent
+		-- (its claim, kept by the shot hook) so the tracer goes to the target.
+		local claim = sharedEnv.neverlose_last_claim
+
+		if claim and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+			endPosition = claim[1]
+		end
+	end
+
 	-- From Server Position: a shot the gun made starts at the drawn body; while desynced the tracer starts where the server has the character
 	-- instead (a shot the ragebot forged already starts there, far from the drawn body, and is left alone).
 	if isLocal and VisualSettings.LocalTracerServerOrigin then
@@ -8901,6 +8923,12 @@ function buildGameSections(WorldTab)
 		Default = VisualSettings.LocalTracerServerOrigin,
 		Flag = "visual_local_tracer_server",
 		Callback = onVisualSetting("LocalTracerServerOrigin"),
+	})
+	-- the Double-Barrel's (or any shotgun's) five pellets drawn as one line
+	localTracerOptions:AddLabel("One Line For Shotguns"):AddToggle({
+		Default = VisualSettings.LocalTracerOneLine,
+		Flag = "visual_local_tracer_one_line",
+		Callback = onVisualSetting("LocalTracerOneLine"),
 	})
 
 	-- Other players' bullet tracers --
@@ -16773,6 +16801,9 @@ do
 
                         local first = old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
                         hide_manager["manipulated_at"] = clock()
+                        -- where this shot was claimed to hit (the local bullet tracers end there)
+                        hide_manager["last_claim"] = {pos, clock()}
+                        getgenv()["neverlose_last_claim"] = hide_manager["last_claim"]
 
                         -- Double Tap (flag auto_fire_salvo): the shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when). It is decided after the shot has
                         -- gone: a method call made in here before old_namecall (tool:GetAttribute, say) replaces the namecall method and the shot is never
@@ -16818,6 +16849,8 @@ do
                         if rebuild_ok and rebuilt then
                             local first = old_namecall(self, "ShootGun", args[2], rebuilt[1], rebuilt[2], rebuilt[3], rebuilt[4], unpack(args, 7))
                             hide_manager["manipulated_at"] = clock()
+                            hide_manager["last_claim"] = {rebuilt[2], clock()}
+                            getgenv()["neverlose_last_claim"] = hide_manager["last_claim"]
                             spawn(get_bullet_result, rebuilt[5], rebuilt[3])
                             return first
                         end
@@ -20646,6 +20679,26 @@ do
             if beam then
                 local cframe = beam["Attachment1"]["WorldCFrame"]
                 if get_attribute(object, "OwnerCharacter") == local_name then
+                    local now = clock()
+                    local start = beam["Attachment0"] and beam["Attachment0"]["WorldPosition"] or cframe["Position"]
+
+                    -- One Line For Shotguns: the pellets of one shotgun shot come in the same moment from the same muzzle; only the first is drawn
+                    local last = hide_manager["last_local_ray"]
+                    hide_manager["last_local_ray"] = {now, start}
+
+                    if flags["local_bullet_tracers_one_line"] and flags["local_bullet_tracers"] and last and now - last[1] < 0.05 and (last[2] - start)["Magnitude"] < 3 then
+                        destroy(object)
+                        return
+                    end
+
+                    -- The game draws the shot where the gun was pointed; a shot the ragebot or the silent aim claimed somewhere else ends at that
+                    -- claim (the target) instead, so the tracer shows where the bullet was sent.
+                    local claim = hide_manager["last_claim"]
+
+                    if claim and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+                        cframe = cframe_new(claim[1])
+                    end
+
                     on_local_bullet_fired:Fire(object, beam, cframe, true)
                 else
                     on_player_bullet_fired:Fire(object, beam, cframe, false)
@@ -22386,6 +22439,8 @@ do
         menu_references["local_bullet_tracers_outline_color"] = menu_references["local_bullet_tracers_settings"]:create_element({["name"] = "outline color"}, {["colorpicker"] = {["color_flag"] = "local_bullet_tracers_outline_color", ["transparency_flag"] = "local_bullet_tracers_outline_transparency", ["default_color"] = color3_fromrgb(15, 15, 15), ["default_transparency"] = 0}})
         menu_references["local_bullet_tracers_gradient_color"] = menu_references["local_bullet_tracers_settings"]:create_element({["name"] = "gradient color"}, {["colorpicker"] = {["color_flag"] = "local_bullet_tracers_gradient_color", ["transparency_flag"] = "local_bullet_tracers_gradient_transparency", ["default_color"] = color3_fromrgb(241, 133, 255), ["default_transparency"] = 0}})
         menu_references["local_bullet_tracers_lifetime"] = menu_references["local_bullet_tracers_settings"]:create_element({["name"] = "lifetime"}, {["slider"] = {["flag"] = "local_bullet_tracers_lifetime", ["min"] = 0.1, ["max"] = 1.5, ["decimals"] = 1, ["suffix"] = "s", ["prefix"] = "", ["default"] = 0.8}})
+        -- a shotgun's five pellets drawn as one line (the Double-Barrel's, the Shotgun's...)
+        menu_references["local_bullet_tracers_one_line"] = menu_references["local_bullet_tracers_settings"]:create_element({["name"] = "one line for shotguns"}, {["toggle"] = {["flag"] = "local_bullet_tracers_one_line"}})
     menu_references["shot_notifications"] = menu_references["game_section"]:create_element({["name"] = "shot notifications"}, {["toggle"] = {["flag"] = "shot_notifications"}})
         menu_references["shot_notifications_settings"] = menu_references["shot_notifications"]:create_settings()
         menu_references["shot_notifications_notify_when"] = menu_references["shot_notifications_settings"]:create_element({["name"] = "notify when"}, {["dropdown"] = {["options"] = {"shot failed", "shot hit"}, ["requires_one"] = false, ["multi"] = true, ["flag"] = "shot_notifications_notify_when", ["default"] = {"shot hit"}}})
