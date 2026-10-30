@@ -4130,6 +4130,32 @@ local function createJujuLib()
 				end)
 
 				label.Text = string.format('<font color="%s">Visions hook</font> | %s | %s | %d fps | %d ms | %s', accent_hex(), game_name, player_name, fps, ping, os.date("%H:%M:%S"))
+
+				-- The game's bars (MainScreenGui.Bar: energy, health, armor, and the car's when shown) move with the screen size, so the bar sits
+				-- 8 px above the top of the ones shown, not at a fixed height (it was drawn over them). Without them it stays 64 px from the bottom.
+				pcall(function()
+					local main = game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("MainScreenGui")
+					local bars = main and main:FindFirstChild("Bar")
+					local top = nil
+
+					if bars and bars.Visible and main.Enabled then
+						for _, child in ipairs(bars:GetChildren()) do
+							if child:IsA("GuiObject") and child.Visible and child.AbsoluteSize.Y > 0 then
+								top = top and math.min(top, child.AbsolutePosition.Y) or child.AbsolutePosition.Y
+							end
+						end
+					end
+
+					if top then
+						local inset = game:GetService("GuiService"):GetGuiInset().Y
+						-- AbsolutePosition is measured from below the top bar inset in every gui, whether it ignores the inset or not (measured: a
+						-- frame 100 px down reads 42 in a gui that ignores it, 100 in one that doesn't), so the inset is added back for the screen's
+						local screen_top = top + inset
+						frame.Position = UDim2.new(0.5, 0, 0, screen_top - 8 - (gui.IgnoreGuiInset and 0 or inset))
+					else
+						frame.Position = UDim2.new(0.5, 0, 1, -64)
+					end
+				end)
 			end
 
 			task.spawn(function()
@@ -7399,10 +7425,13 @@ end
 -- once and on every spawn. The sorter sends that same setting, worked out from the slots picked here and the order of the rest. No tool is moved:
 -- taking tools out of the backpack on this client (the first way this was done) left them looking fine but the server never took another shot
 -- from a gun moved like that. A layout is only sent when it differs from the saved one, at most every 1.5 s (the game's button waits 1 s).
+-- The layout holds the picked slots only. The hotbar puts anything the layout doesn't name in its first empty slot, so whatever sits in a slot
+-- that is "None", in the tenth slot or in a slot whose pick isn't owned is then moved to the inventory with the hotbar's own MoveToInventory
+-- (what dragging it there does; the tool stays in the backpack), in the "Order The Rest" order. A tool in hand is left until it is put away.
 Session.Sorter = (function()
 	local sorter = {
-		SLOTS = 6,
-		slots = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "[AUG]", "[Rifle]", "[Flintlock]" },
+		SLOTS = 9,
+		slots = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "[AUG]", "[Rifle]", "[Flintlock]", "None", "None", "None" },
 		orderRest = true,
 		enabled = false,
 		busy = false,
@@ -7521,34 +7550,23 @@ Session.Sorter = (function()
 				return a.index < b.index
 			end)
 		end
-		-- one slot a name (every food is one FOOD slot: the hotbar puts any food there), as many as the hotbar has. A picked slot keeps its
-		-- number even when a slot before it is "None" or names a tool not owned right now; the rest fill the numbers still free, in order.
-		local layout, named, taken = {}, {}, {}
+		-- one slot a name (every food is one FOOD slot: the hotbar puts any food there). A picked slot keeps its number even when a slot before
+		-- it is "None" or names a tool not owned right now; nothing else is put in the layout (the rest go to the inventory, below).
+		local layout, named = {}, {}
 		for slot = 1, sorter.SLOTS do
 			local tool = placed[slot]
 			if tool and slot <= HOTBAR then
 				local name = slotName(tool)
 				if not named[name] then
 					named[name] = true
-					taken[slot] = true
 					layout[tostring(slot)] = name
 				end
 			end
 		end
-		local free = 1
-		for _, entry in ipairs(rest) do
-			local name = slotName(entry.tool)
-			if not named[name] then
-				while taken[free] do
-					free += 1
-				end
-				if free > HOTBAR then
-					break
-				end
-				named[name] = true
-				taken[free] = true
-				layout[tostring(free)] = name
-			end
+
+		local okClear, clearError = pcall(sorter.clearHotbar, layout, rest)
+		if not okClear then
+			warn("[Visions hook] Auto Sorter: moving items out of the hotbar failed: " .. tostring(clearError))
 		end
 
 		local HttpService = game:GetService("HttpService")
@@ -7612,6 +7630,75 @@ Session.Sorter = (function()
 		end
 	end
 
+	-- The hotbar's own slots (PlayerScripts.BackpackUI): its Backpack.ChildAdded handler holds the hotbar size and placeNewTool, which holds the
+	-- slot list (slot objects with Tool and MoveToInventory), and adjustHotbar, which lays the bar out again.
+	local function gameSlots()
+		local bag = LocalPlayer:FindFirstChildOfClass("Backpack")
+		if not bag then
+			return nil
+		end
+		for _, connection in ipairs(getconnections(bag.ChildAdded)) do
+			local fn = connection.Function
+			if fn and not isexecutorclosure(fn) then
+				local okInfo, source = pcall(debug.info, fn, "s")
+				if okInfo and tostring(source):find("BackpackUI") then
+					local slots, size, adjust = nil, nil, nil
+					for _, up in pairs(getupvalues(fn)) do
+						if type(up) == "number" then
+							size = up
+						elseif type(up) == "function" then
+							local okName, name = pcall(debug.info, up, "n")
+							if okName and name == "adjustHotbar" then
+								adjust = up
+							end
+							for _, inner in pairs(getupvalues(up)) do
+								if type(inner) == "table" and type(inner[1]) == "table" and type(inner[1].MoveToInventory) == "function" then
+									slots = inner
+								end
+							end
+						end
+					end
+					if slots and size then
+						return slots, size, adjust
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	-- Every hotbar slot holding something the layout doesn't put there goes to the inventory, in the order of `rest`.
+	function sorter.clearHotbar(layout, rest)
+		local slots, size, adjust = gameSlots()
+		if not slots then
+			return
+		end
+
+		local rank = {}
+		for index, entry in ipairs(rest) do
+			rank[entry.tool] = index
+		end
+
+		local moving = {}
+		for index = 1, math.min(size, #slots) do
+			local slot = slots[index]
+			local tool = type(slot) == "table" and slot.Tool or nil
+			if tool and tool.Parent ~= LocalPlayer.Character and layout[tostring(index)] ~= slotName(tool) then
+				table.insert(moving, slot)
+			end
+		end
+		table.sort(moving, function(a, b)
+			return (rank[a.Tool] or math.huge) < (rank[b.Tool] or math.huge)
+		end)
+
+		for _, slot in ipairs(moving) do
+			pcall(slot.MoveToInventory, slot)
+		end
+		if #moving > 0 and adjust then
+			pcall(adjust)
+		end
+	end
+
 	-- a sort a moment from now (several items landing at once make one sort)
 	function sorter.request()
 		if not sorter.enabled then
@@ -7654,6 +7741,14 @@ Session.Sorter = (function()
 		sorter.slots[slot] = picked(value)
 		sorter.request()
 	end
+
+	-- the hotbar lays itself out again when the saved layout changes (after a sort is sent, or the game's own Save Layout): what it put back in
+	-- the free slots goes out again
+	track(LocalPlayer:GetAttributeChangedSignal("HotbarLayout"):Connect(function()
+		if sorter.enabled then
+			sorter.request()
+		end
+	end))
 
 	-- every spawn brings a new backpack
 	track(LocalPlayer.ChildAdded:Connect(function(child)
@@ -12426,11 +12521,14 @@ do
 		end
 
 		---Applies the configured skin to a tool the moment it is equipped.
+		-- The tools this run listens to are kept here, not in a "GlorySetup" attribute on the tool: the attribute stayed after an unload, so a
+		-- reloaded script never listened to those tools again (no skin on equip and no knife equip animation until a respawn brought new tools).
+		local setuptools = setmetatable({}, { __mode = "k" })
 		local function setuptool(tool)
-			if not tool:IsA("Tool") or tool:GetAttribute("GlorySetup") then
+			if not tool:IsA("Tool") or setuptools[tool] then
 				return
 			end
-			tool:SetAttribute("GlorySetup", true)
+			setuptools[tool] = true
 
 			local function applyskin(char)
 				Semi.Skins.applyTool(tool, char)
@@ -16669,7 +16767,7 @@ local function buildInterface()
 			})
 
 			local row = section:AddLabel("Auto Sorter")
-			row:ToolTip("Saves your hotbar layout (the game's own Save Layout) from these slots, and again whenever something new lands in the backpack")
+			row:ToolTip("Saves your hotbar layout (the game's own Save Layout) from these slots, and again whenever something new lands in the backpack. A slot set to None stays empty: what lands there moves to the inventory")
 			addBindableToggle(row, "Auto Sorter", {
 				Default = false,
 				Flag = "auto_sorter",
@@ -16692,7 +16790,7 @@ local function buildInterface()
 			end
 
 			local smart = options:AddLabel("Order The Rest")
-			smart:ToolTip("Items without a slot follow by kind: guns (longest range first), then melee, armor and food")
+			smart:ToolTip("Items without a slot (and slots set to None) go to the inventory, by kind: guns (longest range first), then melee, armor and food")
 			smart:AddToggle({
 				Default = true,
 				Flag = "auto_sorter_order_rest",
@@ -17312,7 +17410,9 @@ do
             ["__index"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index)
                 -- Position as well as CFrame, the way the vehicle hook does it: a read of either one shows where the body is said to be
                 if not checkcaller() and self and (index == "CFrame" or index == "Position") and (#anti_aim ~= 0 or purchasing) and not vehicle then
-                    return index == "CFrame" and local_client_position or local_client_position["Position"]
+                    -- (client_view: where the physics step left the body when no step moved it; see the Heartbeat)
+                    local shown = hide_manager["client_view"] or local_client_position
+                    return index == "CFrame" and shown or shown["Position"]
                 end
                 return old_index(self, index)
             end))
@@ -22313,6 +22413,7 @@ do
         menu_references["server_position_indicator"] = menu_references["hud_section"]:create_element({["name"] = "server position indicator"}, {["toggle"] = {["flag"] = "server_position_indicator"}})
         menu_references["server_position_indicator_settings"] = menu_references["server_position_indicator"]:create_settings()
         menu_references["smooth_server_position_indicator"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "smooth"}, {["toggle"] = {["flag"] = "smooth_server_position_indicator"}})
+        menu_references["server_position_indicator_always_show"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "always show"}, {["toggle"] = {["flag"] = "server_position_indicator_always_show"}})
         menu_references["server_position_indicator_icon_color"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "icon color"}, {["colorpicker"] = {["color_flag"] = "server_position_indicator_icon_color", ["default_color"] = color3_fromrgb(193, 247, 255), ["default_transparency"] = 0.89, ["transparency_flag"] = "server_position_indicator_icon_transparency"}})
         menu_references["server_position_indicator_glow_color"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "glow color"}, {["colorpicker"] = {["color_flag"] = "server_position_indicator_glow_color", ["default_color"] = color3_fromrgb(193, 247, 255), ["default_transparency"] = 0.9, ["transparency_flag"] = "server_position_indicator_glow_transparency"}})
         menu_references["server_position_ghost"] = menu_references["server_position_indicator_settings"]:create_element({["name"] = "ghost character"}, {["toggle"] = {["flag"] = "server_position_ghost"}})
@@ -23761,7 +23862,8 @@ do
     local do_smooth_server_position_indicator = nil
 
     local do_server_position_indicator = LPH_JIT_MAX(function(dt)
-        if local_client_position ~= local_server_position then
+        -- Always Show: drawn at the server's place all the time, not only while it differs from where the body is shown
+        if flags["server_position_indicator_always_show"] or local_client_position ~= local_server_position then
             local local_server_position = local_server_position["p"]
             
             local pos, on_screen = world_to_viewport_point(camera, local_server_position)
@@ -42427,7 +42529,8 @@ do
             local travel = hrp["AssemblyLinearVelocity"]["Magnitude"] * dt
 
             if (cframe["Position"] - local_client_position["Position"])["Magnitude"] <= math.max(4, travel * 3) then
-                local_client_position = cframe
+                -- kept apart from local_client_position, which the server position indicator and the ghost compare with the server's place
+                hide_manager["client_view"] = cframe
             end
         end
 
@@ -42457,6 +42560,8 @@ do
         if hrp then
             local_client_position = hrp["CFrame"]
         end
+
+        hide_manager["client_view"] = nil
 
         local anti_aim_steps = table.move(anti_aim, 1, #anti_aim, 1, {})
 
