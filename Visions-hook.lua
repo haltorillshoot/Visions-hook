@@ -5889,6 +5889,8 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["removespread_amount"] = {"reduce_shotgun_spread_amount", "reduce_shotgun_spread_amount"},
 	["remove_recoil"] = {"remove_recoil", "remove_recoil"},
 	["range_enhancer"] = {"range_enhancer", "range_enhancer"},
+	["quick_draw"] = {"quick_draw", "quick_draw"},
+	["ragebot_lead_fast"] = {"ragebot_lead_fast", "ragebot_lead_fast"},
 	["dt"] = {"rapid_fire", "rapid_fire"},
 	["rapid_fire_speed"] = {"rapid_fire_speed", "rapid_fire_speed"},
 	["rapid_fire_glory_patch"] = {"rapid_fire_glory_patch", "rapid_fire_glory_patch"},
@@ -6994,6 +6996,237 @@ function Session.updateTargetAutomation(active)
 		end
 	end
 end
+
+---------- Auto Sorter ------------
+-- Da Hood's hotbar (PlayerScripts.BackpackUI) has a saved layout: its Save Layout button sends MainEvent "UpdateSingleSetting" "HotbarLayout" with
+-- {["1"] = tool name, ...} (food as "FOOD"), the server puts it in the player's HotbarLayout attribute, and the hotbar swaps its slots to match, at
+-- once and on every spawn. The sorter sends that same setting, worked out from the slots picked here and the order of the rest. No tool is moved:
+-- taking tools out of the backpack on this client (the first way this was done) left them looking fine but the server never took another shot
+-- from a gun moved like that. A layout is only sent when it differs from the saved one, at most every 1.5 s (the game's button waits 1 s).
+Session.Sorter = (function()
+	local sorter = {
+		SLOTS = 6,
+		slots = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "[AUG]", "[Rifle]", "[Flintlock]" },
+		orderRest = true,
+		enabled = false,
+		busy = false,
+		pending = nil,
+		bag = nil,
+		bagConnection = nil,
+	}
+
+	local NONE = "None"
+	local KNOWN = {
+		"[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "[AUG]", "[Rifle]", "[Flintlock]", "[Shotgun]", "[Drum-Shotgun]", "[SMG]",
+		"[Silencer]", "[SilencerAR]", "[AK47]", "[AR]", "[LMG]", "[P90]", "[Glock]", "[RPG]", "[GrenadeLauncher]", "[Flamethrower]", "[Taser]",
+		"[Knife]", "[Bat]", "[Pitchfork]", "[Shovel]", "[StopSign]", "[Pepper Spray]", "[Grenade]", "[Flashbang]",
+	}
+	local MELEE = { ["Combat"] = true, ["[Knife]"] = true, ["[Bat]"] = true, ["[Pitchfork]"] = true, ["[Shovel]"] = true, ["[StopSign]"] = true }
+
+	function sorter.choices()
+		local list = { NONE }
+		for _, name in ipairs(KNOWN) do
+			table.insert(list, name)
+		end
+		-- whatever is owned right now and not in the list (a new gun, a skin's name) can be picked too
+		local bag = LocalPlayer:FindFirstChildOfClass("Backpack")
+		for _, tool in ipairs(bag and bag:GetChildren() or {}) do
+			if tool:IsA("Tool") and not table.find(list, tool.Name) then
+				table.insert(list, tool.Name)
+			end
+		end
+		return list
+	end
+
+	local function picked(value)
+		if type(value) == "table" then
+			for key, on in pairs(value) do
+				if type(key) == "number" then
+					return tostring(on)
+				elseif on == true then
+					return tostring(key)
+				end
+			end
+			return NONE
+		end
+		return value ~= nil and tostring(value) or NONE
+	end
+
+	-- the order for the tools that have no slot: guns by range (longest first), then melee, then armor, food and the rest, each by name
+	local function kindOf(tool)
+		local range = tool:FindFirstChild("Range")
+		if range and tool:FindFirstChild("Ammo") then
+			return 1, -(tonumber(range.Value) or 0)
+		elseif MELEE[tool.Name] then
+			return 2, 0
+		elseif tool.Name:lower():find("armor") then
+			return 3, 0
+		end
+		return 4, 0
+	end
+
+	local HOTBAR = 10
+	local lastSent = 0
+
+	local function slotName(tool)
+		if tool:FindFirstChild("Eat") or tool:FindFirstChild("Drink") or tool.Name == "[Lettuce]" then
+			return "FOOD"
+		end
+		return tool.Name
+	end
+
+	function sorter.sort(manual)
+		if sorter.busy or (not sorter.enabled and not manual) then
+			return
+		end
+
+		local tools = {}
+		local seen = {}
+		for _, holder in ipairs({ LocalPlayer:FindFirstChildOfClass("Backpack"), LocalPlayer.Character }) do
+			for _, tool in ipairs(holder and holder:GetChildren() or {}) do
+				if tool:IsA("Tool") and not seen[tool] then
+					seen[tool] = true
+					table.insert(tools, tool)
+				end
+			end
+		end
+		if #tools == 0 then
+			return
+		end
+
+		-- the order wanted: the slots first, then the rest (by kind, or as they are)
+		local order, used = {}, {}
+		for slot = 1, sorter.SLOTS do
+			local name = sorter.slots[slot]
+			if name and name ~= NONE then
+				for _, tool in ipairs(tools) do
+					if not used[tool] and tool.Name == name then
+						used[tool] = true
+						table.insert(order, tool)
+						break
+					end
+				end
+			end
+		end
+
+		local rest = {}
+		for index, tool in ipairs(tools) do
+			if not used[tool] then
+				table.insert(rest, { tool = tool, index = index })
+			end
+		end
+		if sorter.orderRest then
+			table.sort(rest, function(a, b)
+				local ka, ra = kindOf(a.tool)
+				local kb, rb = kindOf(b.tool)
+				if ka ~= kb then return ka < kb end
+				if ra ~= rb then return ra < rb end
+				if a.tool.Name ~= b.tool.Name then return a.tool.Name < b.tool.Name end
+				return a.index < b.index
+			end)
+		end
+		for _, entry in ipairs(rest) do
+			table.insert(order, entry.tool)
+		end
+
+		-- one slot a name (every food is one FOOD slot: the hotbar puts any food there), as many as the hotbar has
+		local layout, named, count = {}, {}, 0
+		for _, tool in ipairs(order) do
+			local name = slotName(tool)
+			if not named[name] then
+				named[name] = true
+				count += 1
+				if count > HOTBAR then
+					break
+				end
+				layout[tostring(count)] = name
+			end
+		end
+
+		local HttpService = game:GetService("HttpService")
+		local okEncode, encoded = pcall(HttpService.JSONEncode, HttpService, layout)
+		if not okEncode then
+			return
+		end
+
+		-- the same layout as the saved one: nothing to send
+		local okSaved, saved = pcall(HttpService.JSONDecode, HttpService, LocalPlayer:GetAttribute("HotbarLayout") or "[]")
+		if okSaved and type(saved) == "table" then
+			local same = true
+			for key, value in pairs(layout) do
+				if saved[key] ~= value then same = false break end
+			end
+			for key in pairs(saved) do
+				if layout[key] == nil then same = false break end
+			end
+			if same then
+				return
+			end
+		end
+
+		if os.clock() - lastSent < 1.5 then
+			sorter.request()
+			return
+		end
+		lastSent = os.clock()
+
+		local remote = game:GetService("ReplicatedStorage"):FindFirstChild("MainEvent")
+		if remote then
+			pcall(remote.FireServer, remote, "UpdateSingleSetting", "HotbarLayout", encoded)
+		end
+	end
+
+	-- a sort a moment from now (several items landing at once make one sort)
+	function sorter.request()
+		if not sorter.enabled then
+			return
+		end
+		local token = {}
+		sorter.pending = token
+		task.delay(0.6, function()
+			if sorter.pending ~= token or not Session.Alive then
+				return
+			end
+			sorter.pending = nil
+			pcall(sorter.sort, false)
+		end)
+	end
+
+	local function watch(bag)
+		if sorter.bagConnection then
+			pcall(sorter.bagConnection.Disconnect, sorter.bagConnection)
+			sorter.bagConnection = nil
+		end
+		sorter.bag = bag
+		if bag and sorter.enabled then
+			sorter.bagConnection = track(bag.ChildAdded:Connect(function(child)
+				if not sorter.busy and child:IsA("Tool") then
+					sorter.request()
+				end
+			end))
+			sorter.request()
+		end
+	end
+
+	function sorter.setEnabled(on)
+		sorter.enabled = on
+		watch(on and LocalPlayer:FindFirstChildOfClass("Backpack") or nil)
+	end
+
+	function sorter.setSlot(slot, value)
+		sorter.slots[slot] = picked(value)
+		sorter.request()
+	end
+
+	-- every spawn brings a new backpack
+	track(LocalPlayer.ChildAdded:Connect(function(child)
+		if child:IsA("Backpack") and sorter.enabled then
+			watch(child)
+		end
+	end))
+
+	return sorter
+end)()
 
 -- Hands the picked players to the engine. While anyone is picked its ragebot only goes for them
 -- and chooses one by itself, so there is nothing to press.
@@ -15522,6 +15755,16 @@ local function buildInterface()
 	})
 
 	-- A/D: while the ragebot has a target the character taps A and D back and forth (Interval in the gear)
+	-- Quick Draw: with a melee (or nothing) in hand, the gun that reaches the ragebot's target is taken out when it comes in reach, and the melee is
+	-- put back a second after it leaves (an opponent that flies past at 300 studs/s with a knife out and a Revolver for the shot only)
+	rows.quickDraw = Raging:AddLabel("Quick Draw")
+	rows.quickDraw:ToolTip("Holding a knife or nothing: takes out the gun that reaches the target when it comes in range, and puts the knife back after")
+	addBindableToggle(rows.quickDraw, "Quick Draw", {
+		Default = false,
+		Flag = "quick_draw",
+		Callback = onChanged("quick_draw"),
+	})
+
 	rows.adStrafe = Raging:AddLabel("A/D")
 	addBindableToggle(rows.adStrafe, "A/D", {
 		Default = false,
@@ -15562,6 +15805,16 @@ local function buildInterface()
 		Default = 2000,
 		Flag = "prediction_level",
 		Callback = onChanged("prediction_level"),
+	})
+
+	-- Lead Fast Targets: with Prediction off, a target flying fast and straight (over 60 studs/s, the same way for two readings) is still led by
+	-- the automatic amount; shots at a fly-by otherwise land 15 to 30 studs behind it
+	rows.leadFast = Raging:AddLabel("Lead Fast Targets")
+	rows.leadFast:ToolTip("With Prediction off, still leads a target flying fast in a straight line (fly-bys)")
+	addBindableToggle(rows.leadFast, "Lead Fast Targets", {
+		Default = true,
+		Flag = "ragebot_lead_fast",
+		Callback = onChanged("ragebot_lead_fast"),
 	})
 
 	addTextSlider(Raging:AddLabel("Shot Delay"), {
@@ -15867,6 +16120,62 @@ local function buildInterface()
 		Icon = "cube-vertexes",
 		Name = "Misc",
 	})
+
+	-- Misc > INVENTORY: the Auto Sorter (Session.Sorter). A problem there must never take the rest of the menu down with it.
+	do
+		local okSorter, sorterError = pcall(function()
+			local sorter = Session.Sorter
+			local section = MiscTab:AddSection({
+				Name = "INVENTORY",
+				Position = "right",
+			})
+
+			local row = section:AddLabel("Auto Sorter")
+			row:ToolTip("Saves your hotbar layout (the game's own Save Layout) from these slots, and again whenever something new lands in the backpack")
+			addBindableToggle(row, "Auto Sorter", {
+				Default = false,
+				Flag = "auto_sorter",
+				Callback = function(value)
+					sorter.setEnabled(value == true)
+				end,
+			})
+
+			local options = row:AddOption()
+
+			for slot = 1, sorter.SLOTS do
+				options:AddLabel("Slot " .. slot):AddDropdown({
+					Default = sorter.slots[slot],
+					Values = sorter.choices(),
+					Flag = "auto_sorter_slot_" .. slot,
+					Callback = function(value)
+						sorter.setSlot(slot, value)
+					end,
+				})
+			end
+
+			local smart = options:AddLabel("Order The Rest")
+			smart:ToolTip("Items without a slot follow by kind: guns (longest range first), then melee, armor and food")
+			smart:AddToggle({
+				Default = true,
+				Flag = "auto_sorter_order_rest",
+				Callback = function(value)
+					sorter.orderRest = value == true
+					sorter.request()
+				end,
+			})
+
+			section:AddButton({
+				Name = "Sort Now",
+				Callback = function()
+					sorter.sort(true)
+				end,
+			})
+		end)
+
+		if not okSorter then
+			warn("[Visions hook] The INVENTORY section failed: " .. tostring(sorterError))
+		end
+	end
 
 	Session.EngineTabs = {
 		Legit = Legit,
@@ -17092,7 +17401,7 @@ do
                     -- Range Enhancer on the gun's own shots: the game's ray stops at the gun's Range, so a player standing past it is looked for on the
                     -- same line, up to the Range + 15 studs the server takes; found, the shot names them and claims the hit on that line, pulled back
                     -- inside the Range (hide_manager.range_enhance). (Dot calls only: a method call in here would replace the namecall method.)
-                    if flags["range_enhancer"] == true and not checkcaller() and typeof(args[2]) == "Instance" and typeof(args[3]) == "Vector3" and typeof(args[4]) == "Vector3" then
+                    if (flags["range_enhancer"] == true or flags["legit_range_enhancer"] == true) and not checkcaller() and typeof(args[2]) == "Instance" and typeof(args[3]) == "Vector3" and typeof(args[4]) == "Vector3" then
                         local range_tool = args[2]["Parent"]
                         local range_value = range_tool and find_first_child(range_tool, "Range")
                         local shot_origin = args[3]
@@ -17115,7 +17424,7 @@ do
                             local owner = found_model and find_first_child_of_class(found_model, "Humanoid") and players_service["GetPlayerFromCharacter"](players_service, found_model)
 
                             if owner and owner ~= local_player then
-                                local claim = hide_manager["range_enhance"](shot_origin, found["Position"], range_value["Value"])
+                                local claim = hide_manager["range_enhance"](shot_origin, found["Position"], range_value["Value"], true)
                                 args[4] = claim
                                 args[5] = found_part
                                 args[6] = (shot_origin - claim)["Unit"]
@@ -32905,6 +33214,11 @@ end
                             velocity = vector3_zero
                         end
 
+                        -- the same way and about as fast as the reading before: a flight, not a desync hopping about (Lead Fast Targets)
+                        local previous = target_velocity
+                        hide_manager["velocity_steady"] = previous ~= nil and previous["Magnitude"] > 1 and velocity["Magnitude"] > 1
+                            and previous["Unit"]:Dot(velocity["Unit"]) > 0.8 and math.abs(velocity["Magnitude"] - previous["Magnitude"]) < previous["Magnitude"]*0.6
+
                         target_velocity = velocity
                     end
 
@@ -32956,7 +33270,15 @@ end
                         velocity = vector3_zero
                     end
 
-                    local raw = velocity*(prediction == 0 and 0 or prediction == 2 and local_ping/500 or prediction)
+                    local factor = prediction == 0 and 0 or prediction == 2 and local_ping/500 or prediction
+
+                    -- Lead Fast Targets: Prediction off still leads a fast, steady flight by the automatic amount (watched: an opponent's fly-bys at
+                    -- 150 to 300 studs/s took the character from full to dead in 0.8 s while every shot back would have landed behind it)
+                    if factor == 0 and flags["ragebot_lead_fast"] ~= false and velocity["Magnitude"] > 60 and hide_manager["velocity_steady"] then
+                        factor = local_ping/500
+                    end
+
+                    local raw = velocity*factor
                     local lead_length = raw["Magnitude"]
 
                     -- The lead is capped, so a bad velocity sample can never throw the aim far away from the target.
@@ -38136,6 +38458,7 @@ local get_silent_aim_position = nil
         menu_references["silent_aim_bullet_manipulation_settings"] = menu_references["silent_aim_bullet_manipulation"]:create_settings()
         menu_references["silent_aim_hit_checker"] = menu_references["silent_aim_bullet_manipulation_settings"]:create_element({["name"] = "hit checker"}, {["toggle"] = {["flag"] = "silent_aim_hit_checker", ["default"] = true}})
         menu_references["silent_aim_manipulated_indicator"] = menu_references["silent_aim_bullet_manipulation_settings"]:create_element({["name"] = "manipulated indicator"}, {["toggle"] = {["flag"] = "silent_aim_manipulated_indicator", ["default"] = true}})
+        menu_references["legit_range_enhancer"] = menu_references["silent_aim_section"]:create_element({["name"] = "range enhancer"}, {["toggle"] = {["flag"] = "legit_range_enhancer", ["default"] = false}})
 
     menu_references["triggerbot_section"] = menu["groups"]["main"]:create_section("legitbot", "trigger", 2, 0.09, 0)
         menu_references["triggerbot"] = menu_references["triggerbot_section"]:create_element({["name"] = "triggerbot"}, {["toggle"] = {["flag"] = "triggerbot"}})
@@ -38153,6 +38476,8 @@ local get_silent_aim_position = nil
         menu_references["reduce_shotgun_spread_amount"] = menu_references["reduce_shotgun_spread_settings"]:create_element({["name"] = "reduce amount"}, {["slider"] = {["flag"] = "reduce_shotgun_spread_amount", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["decimals"] = 0, ["suffix"] = "%", ["min_text"] = "none", ["max_text"] = "all"}})
         menu_references["remove_recoil"] = menu_references["legitbot_other_section"]:create_element({["name"] = "remove recoil"}, {["toggle"] = {["flag"] = "remove_recoil"}})
         menu_references["range_enhancer"] = menu_references["legitbot_other_section"]:create_element({["name"] = "range enhancer"}, {["toggle"] = {["flag"] = "range_enhancer"}})
+        menu_references["quick_draw"] = menu_references["legitbot_other_section"]:create_element({["name"] = "quick draw"}, {["toggle"] = {["flag"] = "quick_draw"}})
+        menu_references["ragebot_lead_fast"] = menu_references["legitbot_other_section"]:create_element({["name"] = "lead fast targets"}, {["toggle"] = {["flag"] = "ragebot_lead_fast", ["default"] = true}})
 
     -- >> ( legitbot master )
 
@@ -38258,7 +38583,8 @@ local get_silent_aim_position = nil
                         end
                     end
 
-                    if legitbot_max_distance == 2500 or (hrp_position-local_client_position["p"])["Magnitude"] < (legitbot_max_distance == 0 and (local_gun or 200) or legitbot_max_distance) then
+                    -- Max Distance 0 is the gun's own Range; with a Range Enhancer on, the 15 studs past it the server still takes (hide_manager.range_enhance)
+                    if legitbot_max_distance == 2500 or (hrp_position-local_client_position["p"])["Magnitude"] < (legitbot_max_distance == 0 and ((local_gun or 200) + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)) or legitbot_max_distance) then
                         local position, on_screen = world_to_viewport_point(camera, hrp_position)
 
                         if legitbot_untarget_when_off_screen and not on_screen then
@@ -38330,7 +38656,7 @@ local get_silent_aim_position = nil
                         local hrp_position = hrp["Position"]
                         local position, on_screen = world_to_viewport_point(camera, hrp_position)
 
-                        if on_screen and (legitbot_max_distance == 2500 or (hrp_position-local_client_position)["Magnitude"] < (legitbot_max_distance == 0 and (local_gun or 200) or legitbot_max_distance)) then
+                        if on_screen and (legitbot_max_distance == 2500 or (hrp_position-local_client_position)["Magnitude"] < (legitbot_max_distance == 0 and ((local_gun or 200) + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)) or legitbot_max_distance)) then
                             if legitbot_ignore_if_invulnerable and (hide_manager["is_protected"](data) or parts["GRABBING_CONSTRAINT"]) then
                                 continue
                             end
@@ -39094,7 +39420,7 @@ local get_silent_aim_position = nil
             return false
         end
 
-        if silent_aim_max_distance ~= 2500 and local_gun and distance > local_gun then
+        if silent_aim_max_distance ~= 2500 and local_gun and distance > local_gun + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0) then
             return false
         end
 
@@ -39220,7 +39546,10 @@ local get_silent_aim_position = nil
         local tool = handle["Parent"]
         local range = tool and find_first_child(tool, "Range")
 
-        if not force and range and distance > range["Value"] then
+        -- Range Enhancer: the server takes a target up to 15 studs past the Range when the claim is pulled back inside it (below)
+        local reach = range and range["Value"] + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)
+
+        if not force and range and distance > reach then
             return nil
         end
 
@@ -39243,7 +39572,7 @@ local get_silent_aim_position = nil
 
         -- Range Enhancer (hide_manager.range_enhance)
         if hide_manager["range_enhance"] and range then
-            position = hide_manager["range_enhance"](origin, position, range["Value"])
+            position = hide_manager["range_enhance"](origin, position, range["Value"], true)
         end
 
         return {origin, position, part, (origin - position)["Unit"], data[2]}
@@ -39749,8 +40078,13 @@ do
     -- out of the way, and (2) is then the limit: Tactical 115 (117 miss), DB 135 (137), AUG, Revolver, Flintlock 215 (217), Rifle 264 (267). Moving
     -- the origin towards the target as well gained nothing (the same 215 for the AUG). So the claim goes back only as far as a shot past the Range
     -- needs (3 studs of margin), never more than 20, and a shot within the Range is left exactly as it was.
-    hide_manager["range_enhance"] = function(origin, position, range)
-        if flags["range_enhancer"] ~= true or typeof(origin) ~= "Vector3" or typeof(position) ~= "Vector3" or type(range) ~= "number" then
+    -- The Rage tab's Range Enhancer covers every shot; the Legit tab's (Redirection) the silent aim / bullet manipulation shots and the gun's own.
+    hide_manager["range_enhancer_on"] = function(legit)
+        return flags["range_enhancer"] == true or (legit == true and flags["legit_range_enhancer"] == true)
+    end
+
+    hide_manager["range_enhance"] = function(origin, position, range, legit)
+        if not hide_manager["range_enhancer_on"](legit) or typeof(origin) ~= "Vector3" or typeof(position) ~= "Vector3" or type(range) ~= "number" then
             return position
         end
 
@@ -39763,6 +40097,104 @@ do
         end
 
         return position - offset["Unit"] * math.min(over, 20)
+    end
+
+    -- >> ( quick draw )
+    -- With a melee or nothing in hand (and Auto Equip off), the gun that reaches the ragebot's target is taken out as it comes in reach: the shortest
+    -- ranged one with a round in it that still reaches (the DB close, the Rifle far; 15 studs more with the Range Enhancer). Once the target has been
+    -- out of reach (or gone) for a second, what was in hand goes back. A gun taken out by the player is left alone. Checked 10 times a second.
+    do
+        local last_check = 0
+        local drawn = nil -- {gun = taken out, back = what was in hand, seen = last time the target was in its reach}
+
+        create_connection(run_service["Heartbeat"], function()
+            if flags["quick_draw"] ~= true or flags["auto_equip"] then
+                drawn = nil
+                return
+            end
+
+            local now = clock()
+
+            if now - last_check < 0.1 then
+                return
+            end
+
+            last_check = now
+
+            local character = local_character
+            local humanoid = character and find_first_child_of_class(character, "Humanoid")
+            local root = character and find_first_child(character, "HumanoidRootPart")
+            local backpack = find_first_child_of_class(local_player, "Backpack")
+
+            if not humanoid or not root or not backpack or humanoid["Health"] <= 0 or local_knocked then
+                drawn = nil
+                return
+            end
+
+            local held = find_first_child_of_class(character, "Tool")
+            local held_range = held and find_first_child(held, "Range")
+            local held_gun = held_range and find_first_child(held, "Ammo") and true or false
+            local extra = flags["range_enhancer"] == true and 15 or 0
+
+            local target = flags["ragebot"] and ragebot_target or nil
+            local target_root = target and not target[7] and not target[18] and target[4] and target[4]["HumanoidRootPart"]
+            local distance = target_root and (target_root["Position"] - root["Position"])["Magnitude"] or nil
+
+            if distance and distance == distance then
+                -- the gun already out still reaches: kept (an empty one too, so it can be reloaded, unless another loaded gun reaches)
+                local keep = held_gun and drawn and drawn.gun == held and distance <= held_range["Value"] + extra
+
+                if keep then
+                    drawn.seen = now
+
+                    if held["Ammo"]["Value"] > 0 then
+                        return
+                    end
+                end
+
+                -- the player took a gun out themselves
+                if held_gun and not drawn then
+                    return
+                end
+
+                local best, best_range = nil, nil
+
+                for _, tool in get_children(backpack) do
+                    local range = find_first_child(tool, "Range")
+                    local ammo = find_first_child(tool, "Ammo")
+
+                    if range and ammo and ammo["Value"] > 0 and distance <= range["Value"] + extra and (not best_range or range["Value"] < best_range) then
+                        best, best_range = tool, range["Value"]
+                    end
+                end
+
+                if best then
+                    if not drawn then
+                        drawn = {back = held}
+                    end
+
+                    drawn.gun = best
+                    drawn.seen = now
+                    pcall(humanoid["EquipTool"], humanoid, best)
+                    return
+                end
+
+                if keep then
+                    return
+                end
+            end
+
+            if drawn and now - (drawn.seen or 0) > 1 then
+                local back = drawn.back
+                drawn = nil
+
+                if back and back["Parent"] == backpack then
+                    pcall(humanoid["EquipTool"], humanoid, back)
+                else
+                    pcall(humanoid["UnequipTools"], humanoid)
+                end
+            end
+        end)
     end
 
     -- The ragebot's target is in the void and its spot there has jumped in the last half second (do_ragebot marks it).
