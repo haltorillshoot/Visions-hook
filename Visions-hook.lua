@@ -2649,10 +2649,22 @@ local function createJujuLib()
 					}, listHolder)
 					new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, searchBox)
 
-					searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+					-- (in some servers GetPropertyChangedSignal("Text") comes back as nil here, which broke the whole list: Changed is used then)
+					local textSignal = searchBox:GetPropertyChangedSignal("Text")
+					local function onSearch()
 						searchText = searchBox.Text
 						applyFilter()
-					end)
+					end
+
+					if textSignal then
+						textSignal:Connect(onSearch)
+					else
+						searchBox.Changed:Connect(function(property)
+							if property == "Text" then
+								onSearch()
+							end
+						end)
+					end
 				end
 
 				for order, name in ipairs(values) do
@@ -4753,6 +4765,11 @@ local function createJujuLib()
 				bind(b.MouseButton1Click, function()
 					call(item, not getValue(item))
 				end)
+				bind(b.MouseButton2Click, function()
+					if config.Flag and Lib.OpenBind then
+						pcall(Lib.OpenBind, config.Flag)
+					end
+				end)
 
 				sync(function()
 					local on = getValue(item) == true
@@ -5001,44 +5018,108 @@ local function createJujuLib()
 				swatch.LayoutOrder = 150
 				local shown = nil
 
-				-- hue, saturation and brightness as three bars under the row, opened by the swatch
-				local picker = new("Frame", { BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 0), Visible = false }, under)
-				new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3) }, picker)
+				-- The picker opens under the row: a square (saturation left to right, brightness top to bottom) in the picked hue, a hue bar on its
+				-- right, and the colour's hex code under them (type one in and press enter).
+				local picker = new("Frame", { BackgroundColor3 = T.Body, BorderSizePixel = 0, LayoutOrder = 3, Size = UDim2.fromOffset(196, 196), Visible = false }, under)
+				corner(picker, 4)
+				new("UIStroke", { Color = T.Line, Thickness = 1 }, picker)
 				local hsv = { 0, 0, 1 }
-				local bars = {}
 
-				for index, name in ipairs({ "H", "S", "V" }) do
-					local bar = box(picker, 10, 14)
-					bar.Size = UDim2.new(1, 0, 0, 14)
-					bar.LayoutOrder = index
-					local fill = new("Frame", { BackgroundColor3 = T.Accent, BorderSizePixel = 0, Size = UDim2.new(0, 0, 1, 0) }, bar)
-					corner(fill, 4)
-					textLabel(bar, name, { Position = UDim2.fromOffset(6, 0), Size = UDim2.new(1, -6, 1, 0), TextSize = 11, ZIndex = 2 })
-					bars[index] = fill
+				local square = new("Frame", { BackgroundColor3 = Color3.fromHSV(0, 1, 1), BorderSizePixel = 0, Position = UDim2.fromOffset(8, 8), Size = UDim2.fromOffset(150, 150), Active = true }, picker)
+				local whiteFade = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.fromScale(1, 1) }, square)
+				new("UIGradient", { Transparency = NumberSequence.new(0, 1) }, whiteFade)
+				local blackFade = new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, Size = UDim2.fromScale(1, 1) }, square)
+				new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0) }, blackFade)
+				local squareCursor = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.fromOffset(6, 6), ZIndex = 3 }, square)
+				new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }, squareCursor)
 
-					local holding = false
-					local function fromMouse(x)
-						hsv[index] = math.clamp((x - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
-						call(item, Color3.fromHSV(hsv[1], hsv[2], hsv[3]))
-					end
-
-					bind(bar.InputBegan, function(input)
-						if input.UserInputType == Enum.UserInputType.MouseButton1 then
-							holding = true
-							fromMouse(input.Position.X)
-						end
-					end)
-					bind(UserInputService.InputChanged, function(input)
-						if holding and input.UserInputType == Enum.UserInputType.MouseMovement then
-							fromMouse(input.Position.X)
-						end
-					end)
-					bind(UserInputService.InputEnded, function(input)
-						if input.UserInputType == Enum.UserInputType.MouseButton1 then
-							holding = false
-						end
-					end)
+				local hueBar = new("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Position = UDim2.fromOffset(166, 8), Size = UDim2.fromOffset(14, 150), Active = true }, picker)
+				local hueKeys = {}
+				for step = 0, 6 do
+					table.insert(hueKeys, ColorSequenceKeypoint.new(step / 6, Color3.fromHSV(step / 6 % 1, 1, 1)))
 				end
+				new("UIGradient", { Rotation = 90, Color = ColorSequence.new(hueKeys) }, hueBar)
+				local hueCursor = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Position = UDim2.new(0, -2, 0, 0), Size = UDim2.new(1, 4, 0, 3), ZIndex = 3 }, hueBar)
+				new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }, hueCursor)
+
+				local hexBox = new("TextBox", {
+					BackgroundColor3 = T.Element,
+					BorderSizePixel = 0,
+					ClearTextOnFocus = false,
+					Font = T.Font,
+					Position = UDim2.fromOffset(8, 164),
+					Size = UDim2.fromOffset(172, 24),
+					Text = "",
+					TextColor3 = T.Text,
+					TextSize = 12,
+				}, picker)
+				corner(hexBox, 4)
+
+				local function hexOf(color)
+					return string.format("#%02x%02x%02x", math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5))
+				end
+
+				local function drawPicker()
+					square.BackgroundColor3 = Color3.fromHSV(hsv[1], 1, 1)
+					squareCursor.Position = UDim2.fromScale(hsv[2], 1 - hsv[3])
+					hueCursor.Position = UDim2.new(0, -2, hsv[1], 0)
+					if not hexBox:IsFocused() then
+						hexBox.Text = hexOf(Color3.fromHSV(hsv[1], hsv[2], hsv[3]))
+					end
+				end
+
+				local function send()
+					local color = Color3.fromHSV(hsv[1], hsv[2], hsv[3])
+					shown = color
+					swatch.BackgroundColor3 = color
+					drawPicker()
+					call(item, color)
+				end
+
+				local dragging = nil
+				local function dragTo(position)
+					if dragging == "square" then
+						hsv[2] = math.clamp((position.X - square.AbsolutePosition.X) / math.max(square.AbsoluteSize.X, 1), 0, 1)
+						hsv[3] = 1 - math.clamp((position.Y - square.AbsolutePosition.Y) / math.max(square.AbsoluteSize.Y, 1), 0, 1)
+					elseif dragging == "hue" then
+						hsv[1] = math.clamp((position.Y - hueBar.AbsolutePosition.Y) / math.max(hueBar.AbsoluteSize.Y, 1), 0, 0.999)
+					end
+					send()
+				end
+
+				bind(square.InputBegan, function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = "square"
+						dragTo(input.Position)
+					end
+				end)
+				bind(hueBar.InputBegan, function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = "hue"
+						dragTo(input.Position)
+					end
+				end)
+				bind(UserInputService.InputChanged, function(input)
+					if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+						dragTo(input.Position)
+					end
+				end)
+				bind(UserInputService.InputEnded, function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = nil
+					end
+				end)
+
+				bind(hexBox.FocusLost, function()
+					local hex = string.match(hexBox.Text, "^%s*#?(%x%x%x%x%x%x)%s*$")
+					if hex then
+						local color = Color3.fromRGB(tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16))
+						hsv[1], hsv[2], hsv[3] = color:ToHSV()
+						send()
+					else
+						drawPicker()
+					end
+				end)
 
 				bind(swatch.MouseButton1Click, function()
 					picker.Visible = not picker.Visible
@@ -5046,13 +5127,11 @@ local function createJujuLib()
 
 				sync(function()
 					local color = getValue(item)
-					if typeof(color) == "Color3" and color ~= shown then
+					if typeof(color) == "Color3" and color ~= shown and not dragging then
 						shown = color
 						swatch.BackgroundColor3 = color
 						hsv[1], hsv[2], hsv[3] = color:ToHSV()
-						for index, fill in ipairs(bars) do
-							fill.Size = UDim2.new(hsv[index], 0, 1, 0)
-						end
+						drawPicker()
 					end
 				end)
 
@@ -5190,6 +5269,21 @@ local function createJujuLib()
 
 				local under = new("Frame", { Name = "Under", AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 0) }, rowFrame)
 				new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3) }, under)
+
+				-- right click on a row with a toggle: its key bind popup (the classic menu's own), when the toggle can be bound
+				for _, control in ipairs(rowRecord.Controls) do
+					if control.Kind == "AddToggle" and control.Config and control.Config.Flag then
+						local flag = control.Config.Flag
+						local function onRightClick(input)
+							if input.UserInputType == Enum.UserInputType.MouseButton2 and Lib.OpenBind then
+								pcall(Lib.OpenBind, flag)
+							end
+						end
+						bind(head.InputBegan, onRightClick)
+						bind(nameLabel.InputBegan, onRightClick)
+						break
+					end
+				end
 
 				local any = false
 				for _, control in ipairs(rowRecord.Controls) do
@@ -5407,7 +5501,7 @@ local function createJujuLib()
 			selectTab(reopen)
 		end
 
-		bind(search:GetPropertyChangedSignal("Text"), function()
+		bind(search:GetPropertyChangedSignal("Text") or search.Changed, function()
 			V.Query = string.lower(search.Text)
 		end)
 
@@ -6517,6 +6611,20 @@ local function addBindableToggle(label, name, config)
 	local entry = { Name = name, Flag = config.Flag, Toggle = toggle, Key = "None", Mode = "Toggle", Held = false }
 	Binds.Entries[config.Flag] = entry
 
+	-- the Visions look opens the bind popup of a row by its flag (a right click on the row there)
+	if NeverLose and not NeverLose.OpenBind then
+		NeverLose.OpenBind = function(flag)
+			local bindEntry = flag and Binds.Entries[flag]
+
+			if Session.Alive and bindEntry and not capturingEntry then
+				openBindPopup(bindEntry)
+				return true
+			end
+
+			return false
+		end
+	end
+
 	-- The key and the mode of the bind are part of every config: saving or overwriting one keeps them, loading one brings them back.
 	if config.Flag and NeverLose and type(NeverLose.Flags) == "table" then
 		NeverLose.Flags["bind:" .. tostring(config.Flag)] = {
@@ -6861,7 +6969,9 @@ end
 -- Picking someone should be enough to start killing them: the ragebot, automatic fire and follow
 -- target are switched on for as long as anyone is picked. Only the ones switched on here are
 -- switched off again, so options the user turned on themselves stay on.
-Session.TargetAutoFlags = { "Ragebot", "AutoFire", "auto_equip", "follow_target" }
+-- (the Ragebot switch itself is not in the list: picking a target with the target key or the Target List never turns the ragebot on, only the
+-- helpers, and only while the ragebot is already on)
+Session.TargetAutoFlags = { "AutoFire", "auto_equip", "follow_target" }
 Session.TargetAutoOwned = {}
 
 -- What a config stores for a toggle that is only on for a while: an option a Hold bind has on while its key is down, and the options picking a
@@ -6895,7 +7005,9 @@ function Session.updateTargetAutomation(active)
 	-- Only the step from nobody picked to somebody picked switches the options on. A second pick, or a picked player leaving, must not bring back
 	-- an option that was turned off in the meantime (Follow Target moves the character).
 	local holding = Session.Master and Session.Master.Active
-	local starting = active and not holding and not Session.TargetAutoOn
+	local ragebotSwitch = flagLib["Ragebot"]
+	local ragebotOn = ragebotSwitch and type(ragebotSwitch.GetValue) == "function" and ragebotSwitch:GetValue() == true
+	local starting = active and not holding and not Session.TargetAutoOn and ragebotOn
 
 	if not active then
 		Session.TargetAutoOn = false
@@ -14372,7 +14484,7 @@ local function buildSkinsTab()
 		end
 	end))
 
-	track(searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	track((searchBox:GetPropertyChangedSignal("Text") or searchBox.Changed):Connect(function()
 		view.search = searchBox.Text
 		filterSkinRows()
 	end))
