@@ -8733,7 +8733,8 @@ local function onBulletRay(object)
 		-- (its claim, kept by the shot hook) so the tracer goes to the target.
 		local claim = sharedEnv.neverlose_last_claim
 
-		if claim and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+		-- (a shotgun's pellets, the Double-Barrel's or the Tactical's, keep the ends the game gave them: the tracers show the spread)
+		if claim and not claim[3] and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
 			endPosition = claim[1]
 		end
 	end
@@ -16917,7 +16918,8 @@ do
                         local first = old_namecall(self, "ShootGun", handle, origin, pos, part, shot_direction, unpack(args, 7))
                         hide_manager["manipulated_at"] = clock()
                         -- where this shot was claimed to hit (the local bullet tracers end there)
-                        hide_manager["last_claim"] = {pos, clock()}
+                        local claim_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+                        hide_manager["last_claim"] = {pos, clock(), claim_tool ~= nil and hide_manager["pellets_of"] ~= nil and hide_manager["pellets_of"](claim_tool) > 1}
                         getgenv()["neverlose_last_claim"] = hide_manager["last_claim"]
 
                         -- Double Tap (flag auto_fire_salvo): the shot once more, for the server to hold behind this one (hide_manager.salvo_extra says when). It is decided after the shot has
@@ -16964,7 +16966,8 @@ do
                         if rebuild_ok and rebuilt then
                             local first = old_namecall(self, "ShootGun", args[2], rebuilt[1], rebuilt[2], rebuilt[3], rebuilt[4], unpack(args, 7))
                             hide_manager["manipulated_at"] = clock()
-                            hide_manager["last_claim"] = {rebuilt[2], clock()}
+                            local claim_tool = typeof(args[2]) == "Instance" and args[2]["Parent"] or nil
+                            hide_manager["last_claim"] = {rebuilt[2], clock(), claim_tool ~= nil and hide_manager["pellets_of"] ~= nil and hide_manager["pellets_of"](claim_tool) > 1}
                             getgenv()["neverlose_last_claim"] = hide_manager["last_claim"]
                             spawn(get_bullet_result, rebuilt[5], rebuilt[3])
                             return first
@@ -20810,7 +20813,8 @@ do
                     -- claim (the target) instead, so the tracer shows where the bullet was sent.
                     local claim = hide_manager["last_claim"]
 
-                    if claim and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+                    -- (not a shotgun's: its pellets keep the ends the game gave them, so the spread shows)
+                    if claim and not claim[3] and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
                         cframe = cframe_new(claim[1])
                     end
 
