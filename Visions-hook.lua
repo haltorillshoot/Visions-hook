@@ -2594,7 +2594,7 @@ local function createJujuLib()
 
 			local function build()
 				if listHolder then
-					listHolder:Destroy()
+					listHolder.Destroy(listHolder)
 				end
 
 				rowButtons = {}
@@ -2650,16 +2650,18 @@ local function createJujuLib()
 					new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, searchBox)
 
 					-- (in some servers GetPropertyChangedSignal("Text") comes back as nil here, which broke the whole list: Changed is used then)
-					local textSignal = searchBox:GetPropertyChangedSignal("Text")
+					-- (This list is rebuilt from the Target List's refresh, which can run while method calls are garbled, so ":Connect" and
+					-- ":GetPropertyChangedSignal" failed there in big servers; the methods are called through the dot instead, which avoids that.)
+					local textSignal = searchBox.GetPropertyChangedSignal(searchBox, "Text")
 					local function onSearch()
 						searchText = searchBox.Text
 						applyFilter()
 					end
 
 					if textSignal then
-						textSignal:Connect(onSearch)
+						textSignal.Connect(textSignal, onSearch)
 					else
-						searchBox.Changed:Connect(function(property)
+						searchBox.Changed.Connect(searchBox.Changed, function(property)
 							if property == "Text" then
 								onSearch()
 							end
@@ -2701,13 +2703,13 @@ local function createJujuLib()
 
 					rowButtons[key] = { Text = text, Mark = mark, Button = button, Label = rowLabel }
 
-					button.MouseEnter:Connect(function()
+					button.MouseEnter.Connect(button.MouseEnter, function()
 						button.BackgroundTransparency = 0.5
 					end)
-					button.MouseLeave:Connect(function()
+					button.MouseLeave.Connect(button.MouseLeave, function()
 						button.BackgroundTransparency = 1
 					end)
-					button.MouseButton1Click:Connect(function()
+					button.MouseButton1Click.Connect(button.MouseButton1Click, function()
 						if config.Multi then
 							value[key] = not value[key] or nil
 							boxText.Text = describe()
@@ -2730,7 +2732,7 @@ local function createJujuLib()
 			build()
 			boxText.Text = describe()
 
-			box.MouseButton1Click:Connect(function()
+			box.MouseButton1Click.Connect(box.MouseButton1Click, function()
 				if isOpen then
 					close()
 					return
@@ -6014,6 +6016,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["target_selection_cooldown"] = {"target_selection_cooldown", "target_selection_cooldown"},
 	["target_selection_target_when_shot_at_force"] = {"target_selection_target_when_shot_at_force", "target_selection_target_when_shot_at_force"},
 	["target_selection_wait_for_protection"] = {"target_selection_wait_for_protection", "target_selection_wait_for_protection"},
+	["target_selection_void_while_waiting"] = {"target_selection_void_while_waiting", "target_selection_void_while_waiting"},
 	["safe_purchasing_avoid_statuses"] = {"safe_purchasing_avoid_statuses", "safe_purchasing_avoid_statuses", "list"},
 	["auto_loadout_disable_when"] = {"auto_loadout_disable_when", "auto_loadout_disable_when", "list"},
 	["auto_loadout_guns"] = {"auto_loadout_guns", "auto_loadout_guns", "list"},
@@ -9754,6 +9757,8 @@ function Session.buildSettingsPanels(rows)
 	end)
 	forceRow = select(2, panelToggle(selection, "Force", "target_selection_target_when_shot_at_force", false))
 	panelToggle(selection, "Wait For Spawn Protection", "target_selection_wait_for_protection", true)
+	-- off: the character is not hidden in the void while the target respawns, loads or has its spawn protection
+	panelToggle(selection, "Void While Waiting", "target_selection_void_while_waiting", true)
 	forceRow:SetVisible(false)
 	panelList(selection, "Untarget When", "target_selection_untarget_when", { "better target", "knocked", "flung", "dead" }, { "dead" })
 	panelList(selection, "Target Statuses", "target_statuses", { "friendly", "neutral", "enemy" }, { "neutral" })
@@ -9892,14 +9897,15 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
 	panelSlider(autoFire, "Gun Gap", "auto_fire_gun_gap", 0, 300, 0, "ms", 140, { [0] = "at once" })
+	-- Distance Check (was in Auto Equip's gear; same option and flag): the target is past the Double-Barrel's range but within the Rifle's, so the
+	-- Rifle goes instead (until the DB can reach again)
+	panelToggle(autoFire, "Distance Check", "auto_equip_distance_check", false)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
 	panelList(equip, "Guns", "auto_equip_gun", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "rifle", "double-barrel sg" })
 	panelToggle(equip, "Prioritize DB", "auto_equip_prioritize_db", false)
-	-- Distance Check: the target is past the Double-Barrel's range but within the Rifle's, so the Rifle goes instead (until the DB can reach again)
-	panelToggle(equip, "Distance Check", "auto_equip_distance_check", false)
 
 	-- Prediction --
 	local predictionPanel = rows.prediction:AddOption()
@@ -30164,6 +30170,7 @@ end
         menu_references["target_selection_target_when_shot_at"] = menu_references["target_selection_settings"]:create_element({["name"] = "target when shot at"}, {["toggle"] = {["flag"] = "target_selection_target_when_shot_at"}})
         menu_references["target_selection_target_when_shot_at_force"] = menu_references["target_selection_settings"]:create_element({["name"] = "force"}, {["toggle"] = {["flag"] = "target_selection_target_when_shot_at_force"}})
         menu_references["target_selection_wait_for_protection"] = menu_references["target_selection_settings"]:create_element({["name"] = "wait for spawn protection"}, {["toggle"] = {["flag"] = "target_selection_wait_for_protection", ["default"] = true}})
+        menu_references["target_selection_void_while_waiting"] = menu_references["target_selection_settings"]:create_element({["name"] = "void while waiting"}, {["toggle"] = {["flag"] = "target_selection_void_while_waiting", ["default"] = true}})
         menu_references["target_selection_target_when_shot_at_force"]:set_visible(false)
         menu_references["target_selection_untarget_when"] = menu_references["target_selection_settings"]:create_element({["name"] = "untarget when"}, {["dropdown"] = {["flag"] = "target_selection_untarget_when", ["default"] = {"dead"}, ["options"] = {"better target", "knocked", "flung", "dead"}, ["multi"] = true}})
         menu_references["target_statuses"] = menu_references["target_selection_settings"]:create_element({["name"] = "target statuses"}, {["dropdown"] = {["flag"] = "target_statuses", ["options"] = {"friendly", "neutral", "enemy"}, ["default"] = {"neutral"}, ["multi"] = true, ["requires_one"] = true}})
@@ -31797,7 +31804,11 @@ end
             -- not waited for in the void (respawning always is: it can't be hit and is on its way back).
             local waiting = phase == "respawning" or (phase ~= nil and wait_out_protection(target))
 
-            local want_protected = not target[7] and not target[18] and ((phase == "protected" and waiting) or target[4]["GRABBING_CONSTRAINT"]) and true or false
+            -- Void While Waiting (Target Selection's gear, on by default): off, the character stays where it is while the target respawns, loads or
+            -- has its spawn protection (the ragebot still waits for it; it only does not hide in the void for it)
+            local void_wait = flags["target_selection_void_while_waiting"] ~= false
+
+            local want_protected = not target[7] and not target[18] and ((phase == "protected" and waiting and void_wait) or target[4]["GRABBING_CONSTRAINT"]) and true or false
 
             -- A new target starts from a clean slate, so a forcefield blink on the old one doesn't hold this one.
             local changed = hide_manager["hidden_for"] ~= target
@@ -31805,11 +31816,11 @@ end
 
             -- The reasons that start are set before the ones that end are cleared: moving on from respawning to loading to spawn protection
             -- never lets the character out of the void for a moment in between.
-            if phase == "respawning" then
+            if phase == "respawning" and void_wait then
                 set_hide_reason("respawning", true)
             end
 
-            if phase == "loading" and waiting then
+            if phase == "loading" and waiting and void_wait then
                 set_hide_reason("loading", true)
             end
 
@@ -31817,11 +31828,11 @@ end
                 set_invulnerable_void(true, changed)
             end
 
-            if phase ~= "respawning" then
+            if phase ~= "respawning" or not void_wait then
                 set_hide_reason("respawning", false)
             end
 
-            if phase ~= "loading" or not waiting then
+            if phase ~= "loading" or not waiting or not void_wait then
                 set_hide_reason("loading", false)
             end
 
