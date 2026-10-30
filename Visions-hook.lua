@@ -10785,7 +10785,7 @@ Session.installEngineTabs = function()
 			tab = "Players",
 			sections = {
 				{ key = { "players", "player esp" }, name = "PLAYER ESP", position = "left" },
-				{ key = { "players", "local character" }, into = "PlayersLocal", name = "LOCAL CHARACTER", position = "left", only = { "custom character" } },
+				{ key = { "players", "local character" }, into = "PlayersLocal", name = "LOCAL CHARACTER", position = "left", only = { "custom character", "skinny" } },
 			},
 		},
 	}
@@ -16498,6 +16498,56 @@ local function buildInterface()
 		Default = 180,
 		Flag = "ragebot_field_of_view",
 		Callback = onChanged("ragebot_field_of_view"),
+	})
+
+	-- Lock Box: the box drawn round the locked target (Semi Rage's silent aim FOV). The cursor has to be on it when the target is locked with the
+	-- key; once locked, every shot goes to the target wherever the camera points. These rows write into Semi Rage's own settings, so both menus
+	-- show the same box.
+	local function lockBoxConfig()
+		local semi = Session.Semi
+		local config = semi and semi.Config
+		return config and config["silent aimbot"] and config["silent aimbot"]["fov"]
+	end
+
+	local lockBox = Raging:AddLabel("Lock Box")
+	lockBox:ToolTip("The box round the target you lock. Off: a target is locked without your cursor on it")
+	addBindableToggle(lockBox, "Lock Box", {
+		Default = true,
+		Flag = "ragebot_lock_box",
+		Callback = function(value)
+			local fov = Session.Alive and lockBoxConfig()
+			if fov then
+				fov["enabled"] = value == true
+			end
+		end,
+	})
+
+	addBindableToggle(Raging:AddLabel("Show Lock Box"), "Show Lock Box", {
+		Default = true,
+		Flag = "ragebot_lock_box_visible",
+		Callback = function(value)
+			local fov = Session.Alive and lockBoxConfig()
+			if fov then
+				fov["visible"] = value == true
+			end
+		end,
+	})
+
+	-- studs added round the target's body on every side (X, Y and Z together)
+	addTextSlider(Raging:AddLabel("Lock Box Size"), {
+		Min = 0,
+		Max = 40,
+		Rounding = 0,
+		Type = " studs",
+		Default = 10,
+		Flag = "ragebot_lock_box_size",
+		Callback = function(value)
+			local fov = Session.Alive and lockBoxConfig()
+			local size = fov and fov["size"]
+			if size and tonumber(value) then
+				size["x"], size["y"], size["z"] = tonumber(value), tonumber(value), tonumber(value)
+			end
+		end,
 	})
 
 	-- How long after one attempt the next may come, down to 0.001 ms (auto fire tries once per frame at the most, which is the fastest a script
@@ -31015,7 +31065,166 @@ do
     local apply_connection = nil
     local scale_connection = nil
 
-    local apply_description = LPH_JIT_MAX(function(description, clone)
+    -- The custom head: a dynamic head's face is its mesh, and a MeshPart's mesh can not be changed while the game runs, so the description's own
+    -- head is welded over the real one and the real one is hidden on this client (other players keep seeing the real avatar).
+    local head_overlay = nil
+    local hidden_head = nil
+
+    local remove_head_overlay = function()
+        if head_overlay then
+            pcall(destroy, head_overlay)
+            head_overlay = nil
+        end
+
+        if hidden_head then
+            if hidden_head[1]["Parent"] then
+                hidden_head[1]["Transparency"] = hidden_head[2]
+            end
+
+            hidden_head = nil
+        end
+    end
+
+    -- The animations: the description names an animation package per slot (IdleAnimation and so on); each package is loaded and its
+    -- animation ids are written into the Animate script's slot of the same name. Animations played on this character replicate, so others see
+    -- them too. The ids each Animation had are kept so they can be put back.
+    local animation_packages = {}
+    local original_animations = setmetatable({}, {__mode = "k"})
+    local animation_slots = {IdleAnimation = "idle", WalkAnimation = "walk", RunAnimation = "run", JumpAnimation = "jump", FallAnimation = "fall", ClimbAnimation = "climb", SwimAnimation = "swim"}
+
+    local get_package_animations = function(id, slot)
+        if animation_packages[id] == nil then
+            local ok, objects = pcall(function()
+                return game:GetObjects("rbxassetid://" .. tostring(id))
+            end)
+
+            animation_packages[id] = ok and objects and objects[1] or false
+        end
+
+        local package = animation_packages[id]
+
+        if not package then
+            return nil
+        end
+
+        -- the slot's own folder when the package has one (a package often carries a StringValue named after the slot), else every animation in it
+        local holder = package["Name"] == slot and package or package:FindFirstChild(slot, true) or package
+        local ids = {}
+
+        for _, item in holder:GetDescendants() do
+            if item:IsA("Animation") and item["AnimationId"] ~= "" then
+                ids[#ids+1] = item["AnimationId"]
+            end
+        end
+
+        if holder:IsA("Animation") then
+            ids[#ids+1] = holder["AnimationId"]
+        end
+
+        return #ids > 0 and ids or nil
+    end
+
+    -- Da Hood writes its own animation pack into the Animate script on spawn and at other moments (watched: the custom idle and walk were back to
+    -- the game's within minutes, and after a respawn the game's pack went in after this one). While the custom character is on, a slot the game
+    -- rewrites is put back; what the game wrote is kept as the slot's original, so turning it off gives back the game's current pack.
+    local wanted_animations = setmetatable({}, {__mode = "k"}) -- Animation -> the custom id
+    local animation_guards = {}
+
+    local stop_animation_guards = function()
+        for _, connection in animation_guards do
+            connection:Disconnect()
+        end
+
+        animation_guards = {}
+        table.clear(wanted_animations)
+    end
+
+    local restore_animations = function()
+        stop_animation_guards()
+
+        local character = local_character
+        local animate = character and find_first_child(character, "Animate")
+
+        if not animate then
+            return
+        end
+
+        for _, item in animate:GetDescendants() do
+            if item:IsA("Animation") and original_animations[item] then
+                item["AnimationId"] = original_animations[item]
+            end
+        end
+    end
+
+    local apply_animations
+    apply_animations = function(description, character)
+        local animate = character and find_first_child(character, "Animate")
+
+        if not animate then
+            return
+        end
+
+        stop_animation_guards()
+
+        local changed = false
+
+        for property, slot in animation_slots do
+            local id = description[property]
+            local holder = find_first_child(animate, slot)
+            local ids = holder and id and id ~= 0 and get_package_animations(id, slot)
+
+            if ids then
+                local index = 0
+
+                for _, item in get_children(holder) do
+                    if item:IsA("Animation") then
+                        index += 1
+
+                        if original_animations[item] == nil then
+                            original_animations[item] = item["AnimationId"]
+                        end
+
+                        local wanted = ids[(index - 1) % #ids + 1]
+                        wanted_animations[item] = wanted
+                        item["AnimationId"] = wanted
+                        changed = true
+
+                        animation_guards[#animation_guards+1] = create_connection(item:GetPropertyChangedSignal("AnimationId"), function()
+                            local current = item["AnimationId"]
+
+                            if wanted_animations[item] and current ~= wanted_animations[item] then
+                                original_animations[item] = current
+                                item["AnimationId"] = wanted_animations[item]
+                            end
+                        end)
+                    end
+                end
+
+                -- the game swapping the Animation objects themselves: the slot is filled again a moment later
+                animation_guards[#animation_guards+1] = create_connection(holder["ChildAdded"], function(child)
+                    if child:IsA("Animation") and flags["custom_character"] then
+                        task["defer"](function()
+                            if flags["custom_character"] and local_character == character then
+                                apply_animations(description, character)
+                            end
+                        end)
+                    end
+                end)
+            end
+        end
+
+        -- what is playing now keeps the old animation until it is started again: stopped, so the Animate script starts the new one
+        local humanoid = find_first_child_of_class(character, "Humanoid")
+        local animator = humanoid and find_first_child_of_class(humanoid, "Animator")
+
+        if changed and animator then
+            for _, track in animator:GetPlayingAnimationTracks() do
+                track:Stop(0.1)
+            end
+        end
+    end
+
+    local apply_description = LPH_JIT_MAX(function(description, clone, restoring)
         local humanoid = local_parts["Humanoid"]
         local head = local_parts["Head"]
 
@@ -31127,11 +31336,47 @@ do
                     end
                 end
 
-                local new_face = find_first_child(dummy, "Head") and find_first_child(dummy["Head"], "face")
+                -- The face: a classic face on both heads is a decal and only its texture is copied; otherwise (a dynamic head on either side) the
+                -- description's head goes over the real one (remove_head_overlay above).
+                local new_head = find_first_child(dummy, "Head")
+                local new_face = new_head and find_first_child(new_head, "face")
                 local old_face = find_first_child(head, "face")
 
-                if new_face and old_face and new_face:IsA("Decal") and old_face:IsA("Decal") then
+                remove_head_overlay()
+
+                -- turning it off (restoring): the real head and the game's own animations come back as they were
+                if restoring then
+                    restore_animations()
+                elseif new_face and old_face and new_face:IsA("Decal") and old_face:IsA("Decal") then
                     old_face["Texture"] = new_face["Texture"]
+                elseif new_head and new_head:IsA("BasePart") then
+                    for _, item in new_head:GetDescendants() do
+                        if item:IsA("JointInstance") or item:IsA("WeldConstraint") then
+                            destroy(item)
+                        end
+                    end
+
+                    new_head["Name"] = "VisionsCustomHead"
+                    new_head["Anchored"] = false
+                    new_head["CanCollide"] = false
+                    new_head["CanQuery"] = false
+                    new_head["CanTouch"] = false
+                    new_head["Massless"] = true
+                    new_head["CFrame"] = head["CFrame"]
+
+                    local weld = Instance.new("Weld")
+                    weld["Part0"] = head
+                    weld["Part1"] = new_head
+                    weld["Parent"] = new_head
+                    new_head["Parent"] = character
+
+                    hidden_head = {head, head["Transparency"]}
+                    head["Transparency"] = 1
+                    head_overlay = new_head
+                end
+
+                if not restoring then
+                    apply_animations(description, character)
                 end
 
                 destroy(dummy)
@@ -31176,6 +31421,11 @@ do
             end
 
             signals["on_local_character_description_changed"]:Fire(description)
+
+            -- Skinny: the accessory welds just made sit at the full width
+            if flags["skinny"] and hide_manager["apply_skinny"] then
+                hide_manager["apply_skinny"]()
+            end
         end
     end)
 
@@ -31283,7 +31533,10 @@ do
         end
 
         if description then
-            apply_description(description)
+            apply_description(description, nil, not value)
+        elseif not value then
+            remove_head_overlay()
+            restore_animations()
         end
 
         if value then
@@ -31323,6 +31576,83 @@ do
             if description then
                 apply_description(description)
             end
+        end
+    end)
+
+    -- >> ( skinny )
+    -- The body parts made narrower on this client: every limb and the torso keep their height and lose width and depth, and each joint is pulled
+    -- in on the side of a part that was made narrower (an accessory's own side is left alone, so it stays where it sat). Setting the humanoid's
+    -- BodyWidthScale here does nothing, the body is only rebuilt from it on the server. Sizes and joints set on this client do not replicate,
+    -- so other players keep seeing the real build. Amount 100% keeps 30% of the width; what each part and joint had is kept and put back.
+    menu_references["skinny"] = menu_references["local_character_section"]:create_element({["name"] = "skinny"}, {["toggle"] = {["flag"] = "skinny", ["default"] = false}})
+    menu_references["skinny_settings"] = menu_references["skinny"]:create_settings()
+    menu_references["skinny_amount"] = menu_references["skinny_settings"]:create_element({["name"] = "amount"}, {["slider"] = {["flag"] = "skinny_amount", ["min"] = 10, ["max"] = 100, ["default"] = 60, ["suffix"] = "%"}})
+
+    local skinny_skip = {HumanoidRootPart = true, Head = true, COMPart = true, VisionsCustomHead = true}
+    local skinny_parts = setmetatable({}, {__mode = "k"}) -- part -> its own size
+    local skinny_joints = setmetatable({}, {__mode = "k"}) -- joint -> {C0, C1}
+
+    local skinny_cframe = function(cframe, keep)
+        local position = cframe["Position"]
+        return CFrame.new(position["X"] * keep, position["Y"], position["Z"] * keep) * (cframe - position)
+    end
+
+    local apply_skinny = function()
+        local character = local_character
+
+        if not character then
+            return
+        end
+
+        local keep = flags["skinny"] and 1 - (tonumber(flags["skinny_amount"]) or 60) / 100 * 0.7 or 1
+        local narrowed = {}
+
+        for _, part in get_children(character) do
+            if part:IsA("BasePart") and not skinny_skip[part["Name"]] and not string.find(part["Name"], "Fake") then
+                local size = skinny_parts[part]
+
+                if not size then
+                    size = part["Size"]
+                    skinny_parts[part] = size
+                end
+
+                part["Size"] = Vector3.new(size["X"] * keep, size["Y"], size["Z"] * keep)
+                narrowed[part] = true
+            end
+        end
+
+        for _, joint in character:GetDescendants() do
+            if joint:IsA("JointInstance") and joint["Name"] ~= "Root" and joint["Name"] ~= "Neck" and (narrowed[joint["Part0"]] or narrowed[joint["Part1"]]) then
+                local original = skinny_joints[joint]
+
+                if not original then
+                    original = {joint["C0"], joint["C1"]}
+                    skinny_joints[joint] = original
+                end
+
+                joint["C0"] = narrowed[joint["Part0"]] and skinny_cframe(original[1], keep) or original[1]
+                joint["C1"] = narrowed[joint["Part1"]] and skinny_cframe(original[2], keep) or original[2]
+            end
+        end
+    end
+
+    -- the custom character welds its accessories on after this has run; it calls this again so those welds are pulled in too
+    hide_manager["apply_skinny"] = apply_skinny
+
+    create_connection(menu_references["skinny"]["on_toggle_change"], function()
+        apply_skinny()
+    end)
+
+    create_connection(menu_references["skinny_amount"]["on_slider_change"], function()
+        if flags["skinny"] then
+            apply_skinny()
+        end
+    end)
+
+    -- a new character starts at its real build
+    create_connection(signals["on_local_character_added"], function()
+        if flags["skinny"] then
+            task["delay"](0.05, apply_skinny)
         end
     end)
 
