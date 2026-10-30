@@ -15585,13 +15585,15 @@ local function buildInterface()
 		Callback = onChanged("ragebot_field_of_view"),
 	})
 
+	-- How long after one attempt the next may come, down to 0.001 ms (auto fire tries once per frame at the most, which is the fastest a script
+	-- runs; the guns' own cooldowns and the server's window decide what is really sent)
 	addTextSlider(Raging:AddLabel("Fire Cooldown"), {
 		Min = 0,
 		Max = 300,
-		Rounding = 0,
+		Rounding = 3,
 		Type = "ms",
 		Nums = { [0] = "none" },
-		Default = 5,
+		Default = 0.001,
 		Flag = "fire_cooldown",
 		Callback = onChanged("fire_cooldown"),
 	})
@@ -30155,7 +30157,7 @@ end
         menu_references["velocity_source"] = menu_references["prediction_settings"]:create_element({["name"] = "velocity source"}, {["dropdown"] = {["flag"] = "velocity_source", ["options"] = {"delta", "estimator", "move direction", "look vector", "none"}, ["default"] = {"delta"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["shot_delay"] = menu_references["general_section"]:create_element({["name"] = "shot delay"}, {["slider"] = {["flag"] = "shot_delay", ["min"] = 0, ["max"] = 1000, ["suffix"] = "ms", ["default"] = 0, ["min_text"] = "none"}})
         menu_references["ragebot_field_of_view"] = menu_references["general_section"]:create_element({["name"] = "field of view"}, {["slider"] = {["flag"] = "ragebot_field_of_view", ["min"] = 5, ["max"] = 180, ["suffix"] = "°", ["default"] = 180, ["max_text"] = "full"}})
-        menu_references["fire_cooldown"] = menu_references["general_section"]:create_element({["name"] = "fire cooldown"}, {["slider"] = {["flag"] = "fire_cooldown", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 5, ["min_text"] = "none"}})
+        menu_references["fire_cooldown"] = menu_references["general_section"]:create_element({["name"] = "fire cooldown"}, {["slider"] = {["flag"] = "fire_cooldown", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 0.001, ["decimals"] = 3, ["min_text"] = "none"}})
         menu_references["target_selection"] = menu_references["general_section"]:create_element({["name"] = "target selection"}, {})
         menu_references["target_selection_settings"] = menu_references["target_selection"]:create_settings()
         menu_references["target_selection_notification"] = menu_references["target_selection_settings"]:create_element({["name"] = "notification"}, {["toggle"] = {["flag"] = "target_selection_notification", ["default"] = false}})
@@ -33179,7 +33181,17 @@ end
                                 continue
                             end
 
-                            if tool and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
+                            -- Bullet Manipulation: a gun only takes its turn while the target is within its Range plus 50 studs (from where the server
+                            -- has the body); a farther shot is turned away by the server, and a shotgun's refused calls count against its SecurityTolerance.
+                            -- Another gun in hand that does reach still goes.
+                            local within_reach = true
+
+                            if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and candidate[2] then
+                                local away = (ragebot_aim_position - local_server_position)["Magnitude"]
+                                within_reach = away == away and away <= candidate[2] + 50
+                            end
+
+                            if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
                                 local since = pick_time - sent_at
                                 local cooldown = find_first_child(tool, "ShootingCooldown")
                                 local window_over = sent_gun == nil or (sent_gun == tool and since >= (cooldown and cooldown["Value"] or 0.05) + 0.015) or (sent_gun ~= tool and since >= gap_between(sent_gun["Name"], tool["Name"]))
