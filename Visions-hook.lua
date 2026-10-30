@@ -10657,7 +10657,7 @@ Session.installEngineTabs = function()
 					key = { "general", "game" },
 					name = "GAME",
 					position = "right",
-					only = { "player bullet volume", "override armor pop", "shot notifications", "local bullet sound", "hit skeleton", "hit particle" },
+					only = { "player bullet volume", "mute gun sounds", "override armor pop", "shot notifications", "local bullet sound", "hit skeleton", "hit particle" },
 				},
 			},
 		},
@@ -24188,6 +24188,7 @@ do
 
     menu_references["game_section"] = menu["groups"]["visuals"]:create_section("general", "game", 2, 0.65, 0)
     menu_references["player_bullet_volume"] = menu_references["game_section"]:create_element({["name"] = "player bullet volume"}, {["slider"] = {["flag"] = "player_bullet_volume", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["suffix"] = "%", ["max_text"] = "default"}})
+    menu_references["mute_gun_sounds"] = menu_references["game_section"]:create_element({["name"] = "mute gun sounds"}, {["toggle"] = {["flag"] = "mute_gun_sounds"}})
     menu_references["player_bullet_tracers"] = menu_references["game_section"]:create_element({["name"] = "player bullet tracers"}, {["toggle"] = {["flag"] = "player_bullet_tracers"}})
         menu_references["player_bullet_tracers_settings"] = menu_references["player_bullet_tracers"]:create_settings()
         menu_references["player_bullet_tracers_type"] = menu_references["player_bullet_tracers_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["options"] = {"line", "beam"}, ["requires_one"] = true, ["flag"] = "player_bullet_tracers_type", ["default"] = {"beam"}}})
@@ -26924,6 +26925,11 @@ do
     local hooked_sound_play = LPH_JIT_MAX(function(handle, different)
         setthreadidentity(8)
         if local_guns[handle] then
+            -- Mute Gun Sounds: your own gun's shots make no sound (other players' guns are left alone)
+            if flags["mute_gun_sounds"] then
+                return
+            end
+
             local gun = handle["Parent"]["Name"]:lower():sub(2, -2)
 
             if defaults[gun] then
@@ -36932,12 +36938,13 @@ end
             return string.find(name, "shoot") ~= nil or (id ~= nil and shoot_ids[id] == true)
         end
 
-        -- Sounds: the guns' own (in the character or its backpack) and the ones a hit makes on the target (BloodSplatter in its head) are stopped as
-        -- they start while the ragebot has a target. The menu's own hit sound (SoundService) is left alone.
+        -- Sounds: with Mute Gun Sounds on, your own guns' sounds (in a tool in the character or its backpack) are stopped as they start. The sounds a
+        -- hit makes on the ragebot's target (BloodSplatter in its head) are stopped while the ragebot has one; the target's own gun shots are not, so
+        -- other players' shots are always heard. The menu's own hit sound (SoundService) is left alone.
         local watched_sounds = setmetatable({}, {["__mode"] = "k"})
 
-        local quiet_now = function()
-            return flags["ragebot"] and ragebot_target ~= nil
+        local quiet_now = function(sound)
+            return flags["mute_gun_sounds"] == true and sound:FindFirstAncestorOfClass("Tool") ~= nil
         end
 
         local watch_sound = function(sound)
@@ -36948,7 +36955,7 @@ end
             watched_sounds[sound] = true
 
             local hush = function()
-                if quiet_now() then
+                if quiet_now(sound) then
                     pcall(function()
                         sound:Stop()
                     end)
@@ -36978,7 +36985,7 @@ end
             create_connection(root["DescendantAdded"], function(item)
                 if item:IsA("Sound") then
                     -- the guns make a new sound for every shot (the AUG's "MG" in its Handle) that is already playing when it arrives: muted at once
-                    if quiet_now() then
+                    if quiet_now(item) then
                         pcall(function()
                             item["Volume"] = 0
                         end)
@@ -36990,11 +36997,12 @@ end
         end
 
         create_connection(workspace["DescendantAdded"], function(item)
-            -- quiet_now first: it is cheaper than IsA and false whenever the ragebot has no target
-            if quiet_now() and item:IsA("Sound") then
-                local target_character = ragebot_target and ragebot_target[3]
+            -- the target check first: it is cheaper than IsA and false whenever the ragebot has no target
+            local target_character = flags["ragebot"] and ragebot_target and ragebot_target[3]
 
-                if target_character and item:IsDescendantOf(target_character) then
+            if target_character and item:IsA("Sound") then
+                -- the target's gun shots (in its tool) are heard; only the sounds of our hits on it are stopped
+                if item:IsDescendantOf(target_character) and not item:FindFirstAncestorOfClass("Tool") then
                     pcall(function()
                         item["Volume"] = 0
                         item:Stop()
@@ -42409,6 +42417,20 @@ do
 
         local hrp = vehicle or local_parts["HumanoidRootPart"]
 
+        -- While a movement step is listed (Follow Target counts with no target), the game's own scripts read the body through the hook on its
+        -- CFrame/Position and are shown the place saved at Stepped, before the physics step. The camera is one of them, so it drew every frame one
+        -- physics step behind the body: unseen at a walk, 1.7 studs on average with speed on (measured), the lag on screen. When no step moved the
+        -- body this frame, the saved place is moved up to where the physics step left it; a move bigger than the body's own travel is a step's
+        -- teleport and stays hidden.
+        if hrp and hrp ~= vehicle and not purchasing and not hide_manager["body_moved"] then
+            local cframe = hrp["CFrame"]
+            local travel = hrp["AssemblyLinearVelocity"]["Magnitude"] * dt
+
+            if (cframe["Position"] - local_client_position["Position"])["Magnitude"] <= math.max(4, travel * 3) then
+                local_client_position = cframe
+            end
+        end
+
         -- Steps add and remove entries while they run (spawn runs them inline up to their first yield), which shifts the
         -- list under the loop: walk a copy and skip anything that is gone.
         local steps = table.move(heartbeat, 1, #heartbeat, 1, {})
@@ -42445,6 +42467,9 @@ do
                 spawn(step, dt, hrp)
             end
         end
+
+        -- whether a step moved the body this frame (they move it before their first wait, so it shows here): the Heartbeat uses it
+        hide_manager["body_moved"] = hrp ~= nil and (hrp["Position"] - local_client_position["Position"])["Magnitude"] > 0.01
 
         if hrp then
             spawn(update_server_position, hrp)
