@@ -9523,6 +9523,14 @@ local function onBulletRay(object)
 			claim.TracerUsed = true
 			endPosition = claim[1]
 		end
+
+		-- Remove Spread: the pellets were all sent at the claimed point, but the game still draws them spread out; their tracers end at the claim
+		-- (with less than 100% removed, the share of the spread that is left). Every pellet of the shot takes it, not only the first.
+		local engineFlags = _G.neverlose_flags
+		if claim and claim[3] and engineFlags and engineFlags.reduce_shotgun_spread == true and claim[2] <= arrived + 0.05 and now - claim[2] < 0.5 and typeof(claim[1]) == "Vector3" then
+			local keep = 1 - math.clamp((tonumber(engineFlags.reduce_shotgun_spread_amount) or 100) / 100, 0, 1)
+			endPosition = claim[1] + (endPosition - claim[1]) * keep
+		end
 	end
 
 	-- From Server Position: a shot the gun made starts at the drawn body; while desynced the tracer starts where the server has the character
@@ -27923,6 +27931,11 @@ end
         menu_references["enemy_tool_icon_color"] = menu_references["tool_icon_settings"]:create_element({["name"] = "enemy color"}, {["colorpicker"] = {["color_flag"] = "enemy_tool_icon_color", ["transparency_flag"] = "enemy_tool_icon_transparency", ["default_color"] = color3_fromrgb(255, 255, 255), ["default_transparency"] = 0}})
         menu_references["friendly_tool_icon_color"] = menu_references["tool_icon_settings"]:create_element({["name"] = "friendly color"}, {["colorpicker"] = {["color_flag"] = "friendly_tool_icon_color", ["transparency_flag"] = "friendly_tool_icon_transparency", ["default_color"] = color3_fromrgb(255, 255, 255), ["default_transparency"] = 0}})
 
+    -- how far each player is from your character (not from the camera), under the box in the name's colour
+    menu_references["distance"] = menu_references["esp_section"]:create_element({["name"] = "distance"}, {["toggle"] = {["flag"] = "esp_distance"}})
+        menu_references["distance_settings"] = menu_references["distance"]:create_settings()
+        menu_references["distance_unit"] = menu_references["distance_settings"]:create_element({["name"] = "unit"}, {["dropdown"] = {["flag"] = "esp_distance_unit", ["options"] = {"studs", "meters"}, ["default"] = {"studs"}, ["requires_one"] = true}})
+
     menu_references["highlight"] = menu_references["esp_section"]:create_element({["name"] = "highlight"}, {["toggle"] = {["flag"] = "highlight"}})
         menu_references["highlight_settings"] = menu_references["highlight"]:create_settings()
         menu_references["highlight_behind_walls"] = menu_references["highlight_settings"]:create_element({["name"] = "behind walls"}, {["toggle"] = {["flag"] = "highlight_behind_walls", ["default"] = true}})
@@ -27999,6 +28012,10 @@ end
     local do_tool_text = false
         local tool_text_function = string["lower"]
     local do_tool_icon = false
+
+    -- Distance: from this character's root part to theirs (never from the camera, which moves away when it zooms out); 1 stud is 0.28 m
+    local do_distance = false
+        local distance_in_meters = false
 
     local do_health_text = false
         local normal_health_text_offset = vector2_new(8, 1)
@@ -28094,6 +28111,18 @@ end
             alt_information[i] = new_alt_information
             transparencies[i] = new_transparencies
             colors[i] = new_colors
+        end
+
+        -- Drawing 15, the distance text, has no colour of its own: it reads the name's (3) for every status, wherever a drawing's colour or
+        -- transparency is looked up by its number (the fades, a status change).
+        for status = 1, 3 do
+            for _, list in {colors[status], transparencies[status]} do
+                setmetatable(list, {__index = function(_, index)
+                    if index == 15 then
+                        return rawget(list, 3)
+                    end
+                end})
+            end
         end
     end
 
@@ -28285,6 +28314,25 @@ end
                 if do_tool_icon then
                     if data[13] then
                         drawings[9]["Position"] = position + vector2_new((x_size-24)/2, y_size + (do_tool_text and small_size or 0) + 2)
+                    end
+                end
+
+                -- under the box, below the tool text and icon when those show
+                if do_distance then
+                    local distance_text = drawings[15]
+                    local own_root = local_parts["HumanoidRootPart"]
+                    local their_root = data[4] and data[4]["HumanoidRootPart"]
+
+                    if distance_text then
+                        if own_root and their_root then
+                            local studs = (their_root["Position"] - own_root["Position"])["Magnitude"]
+                            distance_text["Text"] = distance_in_meters and string.format("%dm", math.floor(studs*0.28 + 0.5)) or string.format("%d studs", math.floor(studs + 0.5))
+                        else
+                            distance_text["Text"] = ""
+                        end
+
+                        local below = (do_tool_text and data[13] and small_size or 0) + (do_tool_icon and data[13] and 12 or 0)
+                        distance_text["Position"] = position + vector2_new(x_size/2, y_size + below + 2)
                     end
                 end
             elseif data[6] then
@@ -29067,6 +29115,21 @@ end
         })
     end)
 
+    local create_distance = LPH_NO_VIRTUALIZE(function(data)
+        local status = data[1]
+
+        data[5][15] = create_real_drawing("Text", {
+            Color = colors[status][3],
+            Center = true,
+            Outline = true,
+            Transparency = transparencies[status][3],
+            Size = small_size,
+            Font = small_font,
+            Text = "",
+            Visible = data[6]
+        })
+    end)
+
     local update_tool_text = LPH_NO_VIRTUALIZE(function(data, tool)
         if data[2] and data[5][8] then
             data[5][8]["Text"] = tool and tool_text_function(tool["Name"]:gsub("[^%w]", "")) or ""
@@ -29405,6 +29468,9 @@ end
         end
         if do_tool_icon then
             create_tool_icon(data)
+        end
+        if do_distance then
+            create_distance(data)
         end
         if do_armor_bar then
             create_armor_bar(data)
@@ -30252,6 +30318,37 @@ end
 
         create_connection(menu_references["tool_text_casing"]["on_dropdown_change"], LPH_NO_VIRTUALIZE(function(value)
             tool_text_function = value[1] == "uppercase" and string["upper"] or string["lower"]
+        end))
+
+        create_connection(menu_references["distance"]["on_toggle_change"], LPH_NO_VIRTUALIZE(function(value)
+            do_distance = value
+
+            for player, data in player_data do
+                local drawings = data[5]
+                local distance_text = drawings[15]
+
+                if distance_text then
+                    distance_text:Destroy()
+                    drawings[15] = nil
+                end
+
+                -- the box writes the text on its next refresh
+                data["esp_last"] = nil
+            end
+
+            if value and flags["esp"] then
+                for player, data in player_data do
+                    create_distance(data)
+                end
+            end
+        end))
+
+        create_connection(menu_references["distance_unit"]["on_dropdown_change"], LPH_NO_VIRTUALIZE(function(value)
+            distance_in_meters = value[1] == "meters"
+
+            for player, data in player_data do
+                data["esp_last"] = nil
+            end
         end))
 
         create_connection(menu_references["tool_icon"]["on_toggle_change"], LPH_NO_VIRTUALIZE(function(value)
@@ -35753,6 +35850,8 @@ end
                             and previous["Unit"]:Dot(velocity["Unit"]) > 0.8 and math.abs(velocity["Magnitude"] - previous["Magnitude"]) < previous["Magnitude"]*0.6
 
                         target_velocity = velocity
+                        -- the position change as measured, before a Velocity Source replaces it (the fast-movement check compares against it)
+                        hide_manager["target_delta_velocity"] = velocity
                     end
 
                     -- Velocity Source other than delta: the velocity read above is replaced
@@ -35760,6 +35859,14 @@ end
 
                     if source and source ~= "delta" then
                         target_velocity = hide_manager["source_velocity"](source, target, torso) or target_velocity
+
+                        -- Up and down always come from the measured movement: the estimator read 0 studs/s vertically through falls of 90 to 230
+                        -- studs/s (and move direction and look vector have none), so a falling or flying target had no vertical lead at all
+                        local measured = hide_manager["target_delta_velocity"]
+
+                        if source ~= "none" and measured and target_velocity then
+                            target_velocity = vector3_new(target_velocity["X"], measured["Y"], target_velocity["Z"])
+                        end
                     end
 
                     target_last_position = torso_position
@@ -35795,12 +35902,31 @@ end
                 -- Prediction: the lead from the target's measured velocity. It is worked out on its own, whatever the resolver does, so the two work
                 -- together: the resolver says WHERE the target really is, the prediction where it will be by the time the shot lands.
                 local lead = vector3_zero
+                local trusted_fast = false
 
                 if target_velocity then
                     local velocity = target_velocity
 
-                    -- With the resolver on, a "velocity" faster than anyone runs is the target's desync jumping about, not movement: no lead from it
-                    if flags["auto_fire_defensive"] and velocity["Magnitude"] > 80 then
+                    -- Real fast movement: the body's replicated velocity (the closest reading to where a live player goes next, measured) agrees
+                    -- with how its position really changed. A desync or a faked velocity does not: one of the two jumps about without the other.
+                    -- (against the measured position change, not the Velocity Source's reading: the estimator called real falls of 90 to 150
+                    -- studs/s stationary or inconsistent, so they were never trusted and the resolver then took their lead away)
+                    local replicated = torso and torso["AssemblyLinearVelocity"]
+                    local measured = hide_manager["target_delta_velocity"] or target_velocity
+
+                    if replicated then
+                        local replicated_speed = replicated["Magnitude"]
+
+                        if replicated_speed == replicated_speed and replicated_speed > 30 and replicated_speed < 600
+                            and (replicated - measured)["Magnitude"] <= math.max(15, replicated_speed*0.35) then
+                            velocity = replicated
+                            trusted_fast = true
+                        end
+                    end
+
+                    -- With the resolver on, a "velocity" faster than anyone runs that does not agree with the movement is the target's desync jumping
+                    -- about: no lead from it (real fast movement used to be zeroed here too, so fliers and fallers got no lead at all)
+                    if flags["auto_fire_defensive"] and velocity["Magnitude"] > 80 and not trusted_fast then
                         velocity = vector3_zero
                     end
 
@@ -35812,18 +35938,61 @@ end
                         factor = local_ping/500
                     end
 
-                    -- Prediction Strength (100% = as worked out): the share of that lead which is used
+                    -- Speed compensation, whatever the Prediction setting: what this client shows of another player is about the ping + 0.16 s old
+                    -- (measured: 220 to 250 ms at a 54 ms ping), and the server checks the claim against where it has the head. A fast target was
+                    -- claimed that far behind (36 studs at 150 studs/s, past the 25 the server takes), up and down as much as sideways.
+                    -- Prediction Strength (100% = as worked out): the share of the prediction's lead which is used. The speed compensation is not
+                    -- scaled by it (at 50% a 230 studs/s fall was led 20 studs instead of 45): it is the delay itself, not a setting.
                     local strength = tonumber(flags["prediction_strength"]) or 100
-                    local raw = velocity*factor*(strength/100)
+                    local lead_time = factor*(strength/100)
+
+                    if trusted_fast then
+                        lead_time = math.max(lead_time, math.clamp(local_ping/1000 + 0.16, 0.12, 0.45))
+                    end
+                    local raw = velocity*lead_time
+
+                    -- Up and down: a target in the air falls back while the shot is on its way, so its vertical lead bends with gravity instead of
+                    -- going on in a straight line (5.6 studs too high after a quarter of a second)
+                    if math.abs(velocity["Y"]) > 1.5 and lead_time > 0 then
+                        raw = raw - vector3_new(0, 0.5*workspace["Gravity"]*lead_time*lead_time, 0)
+                    end
+
                     local lead_length = raw["Magnitude"]
 
-                    -- The lead is capped, so a bad velocity sample can never throw the aim far away from the target.
+                    -- The lead is capped, so a bad velocity sample can never throw the aim far away from the target (further for a movement both
+                    -- readings agree on: a 300 studs/s flier needs about 90 studs).
                     if lead_length == lead_length then
-                        lead = lead_length > 60 and raw["Unit"]*60 or raw
+                        local cap = trusted_fast and 150 or 60
+                        lead = lead_length > cap and raw["Unit"]*cap or raw
+                    end
+
+                    -- never below the floor under the target: a faller's lead stops where it lands
+                    if lead["Y"] < -2 then
+                        local floor_params = hide_manager["floor_params"]
+
+                        if not floor_params then
+                            floor_params = RaycastParams["new"]()
+                            floor_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+                            hide_manager["floor_params"] = floor_params
+                        end
+
+                        floor_params["FilterDescendantsInstances"] = {target[3], local_character, find_first_child(workspace, "Ignored")}
+
+                        local below = workspace["Raycast"](workspace, hitbox_position, vector3_new(0, lead["Y"] - 6, 0), floor_params)
+
+                        if below then
+                            local lowest = below["Position"]["Y"] + 3.5
+
+                            if hitbox_position["Y"] + lead["Y"] < lowest then
+                                lead = vector3_new(lead["X"], math.min(0, lowest - hitbox_position["Y"]), lead["Z"])
+                            end
+                        end
                     end
                 end
 
                 ragebot_aim_position = hitbox_position + lead
+                -- what the lead was made of this step (read when testing; no cost beyond the three writes)
+                hide_manager["aim_lead"], hide_manager["aim_trusted"], hide_manager["aim_velocity"] = lead, trusted_fast, target_velocity
 
                 local local_server_position = local_server_position["p"]
                 if flags["auto_fire_defensive"] then
@@ -35849,7 +36018,8 @@ end
                         local moves_like_a_player = hitbox_position["Magnitude"] < 9e5 and target_velocity ~= nil and target_velocity["Magnitude"] <= 80
                             and clock() - (hide_manager["target_jumped_at"] or -1) > 0.75
 
-                        if moves_like_a_player or (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
+                        -- (a fast movement the replicated velocity and the position change agree on is real too: aimed with its lead, not at the spot)
+                        if moves_like_a_player or trusted_fast or (resolved - hitbox_position)["Magnitude"] <= ue_resolver_radius then
                             ragebot_aim_position = hitbox_position + lead
                         else
                             ragebot_aim_position = resolved
