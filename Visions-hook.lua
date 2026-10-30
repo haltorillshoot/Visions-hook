@@ -28417,7 +28417,7 @@ do
     menu_references["custom_character_settings"] = menu_references["custom_character"]:create_settings()
     menu_references["custom_character_model_type"] = menu_references["custom_character_settings"]:create_element({["name"] = "model type"}, {["dropdown"] = {["flag"] = "custom_character_model_type", ["options"] = {"user id", "file"}, ["default"] = {"file"}, ["requires_one"] = true}})
 
-    menu_references["custom_character_userid"] = menu_references["custom_character_settings"]:create_element({["name"] = "player userid"}, {["textbox"] = {["flag"] = "custom_character_userid"}})
+    menu_references["custom_character_userid"] = menu_references["custom_character_settings"]:create_element({["name"] = "user id or username"}, {["textbox"] = {["flag"] = "custom_character_userid"}})
     menu_references["custom_character_files"] = menu_references["custom_character_settings"]:create_element({["name"] = "files"}, {["dropdown"] = {["flag"] = "custom_character_file", ["default"] = {"character.rbxm"}, ["requires_one"] = true, ["options"] = {}, ["use_custom_extensions"] = {"rbxm", "rbmx"}}})
     menu_references["custom_character_files"]:set_visible(true)
     menu_references["custom_character_userid"]:set_visible(false)
@@ -28441,15 +28441,22 @@ do
         if humanoid and head then
             humanoid:RemoveAccessories()
 
-            local local_description = local_parts["Humanoid"]["HumanoidDescription"]
+            -- (Da Hood characters do not always carry a HumanoidDescription, and a scale value can be missing: each is only copied when there)
+            local local_description = find_first_child(humanoid, "HumanoidDescription")
 
-            description["BodyTypeScale"] = humanoid["BodyTypeScale"]["Value"]
-            description["HeadScale"] = humanoid["HeadScale"]["Value"]
-            description["DepthScale"] = humanoid["BodyDepthScale"]["Value"]
-            description["HeightScale"] = humanoid["BodyHeightScale"]["Value"]
-            description["ProportionScale"] = humanoid["BodyProportionScale"]["Value"]
-            description["WidthScale"] = humanoid["BodyWidthScale"]["Value"]
-            description:SetEmotes(local_description:GetEmotes())
+            for property, scale_name in {BodyTypeScale = "BodyTypeScale", HeadScale = "HeadScale", DepthScale = "BodyDepthScale", HeightScale = "BodyHeightScale", ProportionScale = "BodyProportionScale", WidthScale = "BodyWidthScale"} do
+                local scale = find_first_child(humanoid, scale_name)
+
+                if scale then
+                    description[property] = scale["Value"]
+                end
+            end
+
+            if local_description then
+                pcall(function()
+                    description:SetEmotes(local_description:GetEmotes())
+                end)
+            end
 
             local shirt = local_parts["Shirt"]
 
@@ -28469,9 +28476,77 @@ do
                 destroy(shirt_graphic)
             end
 
-            humanoid:ApplyDescriptionClientServer(description)
+            -- Humanoid:ApplyDescriptionClientServer does not exist and ApplyDescription is the server's only, so the look is put on here, on this
+            -- client: the game builds a dummy from the description (Players:CreateHumanoidModelFromDescription works on the client), and its
+            -- accessories, clothes, body colours and face are moved onto the character. Other players keep seeing the real avatar.
+            local applied, apply_error = pcall(function()
+                local character = humanoid["Parent"]
+                local dummy = players_service:CreateHumanoidModelFromDescription(description, humanoid["RigType"])
 
-            if not clone then
+                for _, child in get_children(character) do
+                    if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("BodyColors") then
+                        destroy(child)
+                    end
+                end
+
+                for _, child in get_children(dummy) do
+                    if child:IsA("Accessory") then
+                        local handle = find_first_child(child, "Handle")
+
+                        if handle then
+                            -- (Humanoid:AddAccessory does nothing here.) The dummy's welds are taken off and the handle is welded by hand: its
+                            -- attachment (HatAttachment, HairAttachment...) to the character's attachment of the same name, or on top of the head.
+                            for _, weld in get_children(handle) do
+                                if weld:IsA("Weld") or weld:IsA("WeldConstraint") or weld:IsA("Motor6D") then
+                                    destroy(weld)
+                                end
+                            end
+
+                            local attachment = handle:FindFirstChildWhichIsA("Attachment")
+                            local target = nil
+
+                            if attachment then
+                                for _, item in character:GetDescendants() do
+                                    if item:IsA("Attachment") and item["Name"] == attachment["Name"] and item["Parent"]:IsA("BasePart") then
+                                        target = item
+                                        break
+                                    end
+                                end
+                            end
+
+                            child["Parent"] = character
+
+                            local weld = Instance.new("Weld")
+                            weld["Name"] = "AccessoryWeld"
+                            weld["Part0"] = handle
+                            weld["Part1"] = target and target["Parent"] or head
+                            weld["C0"] = attachment and attachment["CFrame"] or CFrame.new()
+                            weld["C1"] = target and target["CFrame"] or CFrame.new(0, 0.6, 0)
+                            handle["CanCollide"] = false
+                            handle["Massless"] = true
+                            weld["Parent"] = handle
+                        end
+                    elseif child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("BodyColors") then
+                        child["Parent"] = character
+                    end
+                end
+
+                local new_face = find_first_child(dummy, "Head") and find_first_child(dummy["Head"], "face")
+                local old_face = find_first_child(head, "face")
+
+                if new_face and old_face and new_face:IsA("Decal") and old_face:IsA("Decal") then
+                    old_face["Texture"] = new_face["Texture"]
+                end
+
+                destroy(dummy)
+            end)
+
+            if not applied then
+                new_notification("custom character: the new look could not be put on (" .. tostring(apply_error) .. ")", 4)
+                return
+            end
+
+            if false and not clone and find_first_child(humanoid, "BodyWidthScale") then
                 scale_connection = create_connection(humanoid["BodyWidthScale"]:GetPropertyChangedSignal("Value"), function()
                     wait()
                     last_description["BodyTypeScale"] = humanoid["BodyTypeScale"]["Value"]
@@ -28508,11 +28583,50 @@ do
         end
     end)
 
-    local get_user_description = function(value)
-        local value = value or flags["custom_character_userid"]
+    -- A user id, or a username (looked up with GetUserIdFromNameAsync, remembered so a respawn does not ask again)
+    local user_ids = {}
 
-        if value and tonumber(value) then
-            return players_service:GetHumanoidDescriptionFromUserId(value)
+    local resolve_user_id = function(value)
+        value = value and string.gsub(tostring(value), "^%s*(.-)%s*$", "%1") or ""
+
+        if value == "" then
+            return nil
+        end
+
+        if tonumber(value) then
+            return tonumber(value)
+        end
+
+        local key = string.lower(value)
+
+        if user_ids[key] == nil then
+            local ok, id = pcall(function()
+                return players_service:GetUserIdFromNameAsync(value)
+            end)
+
+            user_ids[key] = ok and id or false
+
+            if not ok then
+                new_notification("custom character: no player named " .. value, 3)
+            end
+        end
+
+        return user_ids[key] or nil
+    end
+
+    local get_user_description = function(value)
+        local id = resolve_user_id(value or flags["custom_character_userid"])
+
+        if id then
+            local ok, description = pcall(function()
+                return players_service:GetHumanoidDescriptionFromUserId(id)
+            end)
+
+            if ok then
+                return description
+            end
+
+            new_notification("custom character: could not get the look of user " .. tostring(id), 3)
         end
     end
 
@@ -28521,7 +28635,20 @@ do
         local file = "neverlose recode/custom/"..value
 
         if isfile(file) then
-            return game:GetObjects(getcustomasset(file))[1]
+            local ok, object = pcall(function()
+                return game:GetObjects(getcustomasset(file))[1]
+            end)
+
+            -- a model file holds a HumanoidDescription somewhere inside it, or is one
+            if ok and object and not object:IsA("HumanoidDescription") then
+                object = object:FindFirstChildWhichIsA("HumanoidDescription", true)
+            end
+
+            if ok and object then
+                return object
+            end
+
+            new_notification("custom character: " .. tostring(value) .. " has no HumanoidDescription in it", 3)
         end
     end
 
@@ -28556,7 +28683,7 @@ do
     end)
 
     create_connection(menu_references["custom_character_userid"]["on_textbox_change"], function(value)
-        if flags["custom_character"] and value and tonumber(value) then
+        if flags["custom_character"] and value and tostring(value) ~= "" then
             local description = get_user_description(value)
 
             if description then
