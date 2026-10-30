@@ -12497,6 +12497,17 @@ do
 				return
 			end
 
+			-- The ragebot's Distance Check (Automatic Fire's gear) covers the trigger bot too: with it on, no click at a target past the Range of
+			-- the gun in hand.
+			local api = sharedEnv.neverlose
+			local distanceCheck = api and api.get_flag and api.get_flag("auto_equip_distance_check") == true
+			local range = tool:FindFirstChild("Range")
+			local root = localplayer.Character:FindFirstChild("HumanoidRootPart")
+
+			if distanceCheck and currenttarget and range and root and (root.Position - currenttarget.Position).Magnitude > (tonumber(range.Value) or math.huge) then
+				return
+			end
+
 			tool:Activate()
 			lasttriggerclick = os.clock()
 		end
@@ -13235,8 +13246,33 @@ do
 		end)
 
 		---------- Per frame ----------
+		-- Force Hit, Force Fire and the Trigger Bot live in the Rage tab now and act on the ragebot's target: its head is handed to the silent aim
+		-- here (Select mode), and let go when the ragebot has nobody. While the ragebot itself aims (auto fire, bullet manipulation) its own hook
+		-- sends the shots and this one stays out of the way (ragebotaims).
+		local linkedtarget = nil
+
 		connect(runservice.RenderStepped, function()
 			local silent = config["silent aimbot"]
+			local wanted = silent["force hit"] or silent["force fire"] or config["trigger bot"]["enabled"]
+
+			if wanted then
+				local api = sharedEnv.neverlose
+				local ok, player = pcall(function()
+					return api and api.get_ragebot_target and api.get_ragebot_target()
+				end)
+				local head = ok and typeof(player) == "Instance" and player:IsA("Player") and player.Character and player.Character:FindFirstChild("Head") or nil
+
+				silent["enabled"] = true
+				config["targeting"]["mode"] = "Select"
+
+				if head ~= linkedtarget then
+					linkedtarget = head
+					Semi.setTarget(head)
+				end
+			elseif linkedtarget then
+				linkedtarget = nil
+				Semi.setTarget(nil)
+			end
 
 			if config["targeting"]["mode"] == "Automatic" and silent["enabled"] and not masterActive() then
 				local now = os.clock()
@@ -13467,7 +13503,7 @@ do
 	---Builds the Semi Rage tab. Every control writes straight into Semi.Config; toggles are
 	---registered like the rest of the menu, so they can be bound to keys and the master switch
 	---can turn them off and back on.
-	function Semi.buildTab(tab)
+	function Semi.buildTab(tab, forceOnly)
 		local config = Semi.Config
 
 		-- The table that holds the last key of a config path, and that key.
@@ -13609,6 +13645,28 @@ do
 					warn(("[SemiRage] Could not add '%s': %s"):format(tostring(spec.name), tostring(err)))
 				end
 			end
+
+			return section
+		end
+
+		-- The Rage tab's FORCE section: Force Hit, Force Fire and the Trigger Bot (the Semi Rage tab is gone). They work on the ragebot's target
+		-- (see "Per frame"); the flags are the ones the Semi Rage rows had, so configs keep their values.
+		if forceOnly then
+			local function enableSilent(value)
+				if value and Semi.installSilentHook then
+					Semi.installSilentHook()
+				end
+			end
+
+			return addSection("FORCE", "right", {
+				toggle("Force Hit", { "silent aimbot", "force hit" }, enableSilent),
+				toggle("Force Fire", { "silent aimbot", "force fire" }, enableSilent),
+				toggle("Trigger Bot", { "trigger bot", "enabled" }),
+				dropdown("Trigger Mode", { "trigger bot", "mode" }, { "Always", "Toggle", "Hold" }),
+				keybind("Trigger Key", { "binds", "triggerbot" }),
+				slider("Trigger Delay", { "trigger bot", "delay" }, 0, 1, 2, "s"),
+				toggle("Require Target", { "trigger bot", "require target" }),
+			})
 		end
 
 		local hitParts = { "Closest Part", "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" }
@@ -15449,12 +15507,6 @@ local function buildInterface()
 		Name = "Rage",
 	})
 
-	-- Sits right under Rage in the sidebar.
-	local SemiRage = window:AddTab({
-		Icon = "crosshairs",
-		Name = "Semi Rage",
-	})
-
 	local Legit = window:AddTab({
 		Icon = "mouse-scrollwheel",
 		Name = "Legit",
@@ -15821,17 +15873,13 @@ local function buildInterface()
 		warn("[Visions hook] Full Auto failed to start: " .. tostring(fullAutoError))
 	end
 
-	-- Semi Rage: the Glory v4 features, with the menu's only master switch.
-	local SemiMaster = SemiRage:AddSection({
-		Name = "MASTER",
-		Position = "left",
-	})
-	Session.addMasterRow(SemiMaster, "master_switch_semi")
-
-	-- A problem in Semi Rage must never take the rest of the menu down with it.
-	local okSemiTab, semiTabError = pcall(Session.Semi.buildTab, SemiRage)
+	-- The Semi Rage tab is gone: Force Hit, Force Fire and the Trigger Bot are the Rage tab's FORCE section (with the menu's master switch).
+	-- A problem there must never take the rest of the menu down with it.
+	local okSemiTab, forceSection = pcall(Session.Semi.buildTab, Rage, true)
 	if not okSemiTab then
-		warn("[Visions hook] The Semi Rage tab failed: " .. tostring(semiTabError))
+		warn("[Visions hook] The FORCE section failed: " .. tostring(forceSection))
+	elseif forceSection then
+		Session.addMasterRow(forceSection, "master_switch_semi")
 	end
 
 	local okSemiStart, semiStartError = pcall(Session.Semi.start)
