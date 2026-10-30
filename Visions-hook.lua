@@ -13186,6 +13186,9 @@ do
 				return
 			end
 
+			-- a locked silent aim target redirects wherever the cursor is (getsilenthit), so its box shows active the whole time
+			local locked = fovpart == fovparts.silent and config["targeting"]["mode"] == "Select"
+
 			if fovcfg["mode"] == "2D" then
 				fovpart.Transparency = 1
 
@@ -13194,7 +13197,7 @@ do
 
 					if tl and br then
 						local mpos = userinputservice:GetMouseLocation()
-						local inside = mpos.X >= tl.X and mpos.X <= br.X and mpos.Y >= tl.Y and mpos.Y <= br.Y
+						local inside = locked or (mpos.X >= tl.X and mpos.X <= br.X and mpos.Y >= tl.Y and mpos.Y <= br.Y)
 						setbox2d(lines2d, tl, br, inside and fovcfg["active color"] or Color3.fromRGB(150, 150, 150))
 					else
 						hidebox2d(lines2d)
@@ -13209,7 +13212,7 @@ do
 
 				if fovcfg["visible"] then
 					fovpart.Transparency = 0.85
-					fovpart.BrickColor = cursorhitsbox(fovpart.CFrame, fovpart.Size) and BrickColor.new(fovcfg["active color"]) or BrickColor.new("Grey")
+					fovpart.BrickColor = (locked or cursorhitsbox(fovpart.CFrame, fovpart.Size)) and BrickColor.new(fovcfg["active color"]) or BrickColor.new("Grey")
 				else
 					fovpart.Transparency = 1
 				end
@@ -13415,7 +13418,9 @@ do
 				return nil
 			end
 
-			if silent["fov"]["enabled"] and not mouseinfovconfig(silent["fov"], currenttarget) then
+			-- The FOV box picks who gets locked; once a target is locked (Select mode) every shot goes to it, wherever the camera points. Only
+			-- Automatic mode, which has no lock, still needs the cursor on the box.
+			if config["targeting"]["mode"] ~= "Select" and silent["fov"]["enabled"] and not mouseinfovconfig(silent["fov"], currenttarget) then
 				return nil
 			end
 
