@@ -4601,10 +4601,13 @@ local function createJujuLib()
 		new("UIStroke", { Color = T.WindowBorder, Thickness = 1 }, frame)
 		V.Frame = frame
 
-		-- the razor and its red cut off the top right corner
+		-- the razor and its red cut off the top right corner (it is also the handle the window is moved by)
+		local razor = nil
+
 		if Lib.RazorAsset then
-			new("ImageLabel", {
+			razor = new("ImageLabel", {
 				Name = "Razor",
+				Active = true,
 				AnchorPoint = Vector2.new(1, 0),
 				BackgroundTransparency = 1,
 				Image = Lib.RazorAsset,
@@ -4671,11 +4674,11 @@ local function createJujuLib()
 
 		local pages = new("Frame", { Name = "Pages", BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 1, -84) }, frame)
 
-		-- dragging by the top bar
+		-- Moving the window: hold the left button on the razor and drag (the top bar only when there is no razor picture)
 		do
 			local dragStart, startPos = nil, nil
 
-			bind(top.InputBegan, function(input)
+			bind((razor or top).InputBegan, function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragStart, startPos = input.Position, frame.Position
 				end
