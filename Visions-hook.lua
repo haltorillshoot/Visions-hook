@@ -22602,6 +22602,114 @@ do
         local heart_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAkAAAAJCAYAAADgkQYQAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsEAAA7BAbiRa+0AAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAA2XYBAOgDAADZdgEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAACnKL6u+xXB7AAAAEZJREFUKFONj1sOADAEBOn976xWENVHOglWMh9QQbxAzcQ+RbHAzFgy29CWwgmIw/OTL2m7qVJvChYxBFsaEGHeP3GaQDQBlXYd/dTBOJ0AAAAASUVORK5CYII=")
         local heart_overlay_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAkAAAAJCAYAAADgkQYQAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAA8nYBAOgDAADydgEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAACOO8FX0xe8TgAAADpJREFUKFNjgIH/UIDOBgFGEIEsgA4YQQCfAhhggtJ4AVGKiHMTlI1VIUwerggEkBUiG4ABME1kYAAAII4n8u04np4AAAAASUVORK5CYII=")
 
+        -- The panel's text is GUI text, not Drawing text: a Drawing can only use the executor's own fonts, and the panel shows the menu's font (the
+        -- Visions look's Gotham, the Classic look's SourceSans, following a look switch). create_panel_text gives a TextLabel the Drawing text
+        -- properties the panel code reads and writes (Text, Position, Color, Transparency, Size, Center, Outline, Visible, TextBounds, Destroy),
+        -- so the positioning, the tweens and the colour settings work on it unchanged.
+        local panel_gui = nil
+        local panel_labels = setmetatable({}, {["__mode"] = "k"})
+        local panel_style = nil
+
+        local panel_font = function(bold)
+            local session = getgenv()["__NeverLoseMenuSession"]
+            local visions = type(session) == "table" and type(session.Lib) == "table" and session.Lib.MenuStyle == "visions"
+
+            if bold then
+                return visions and Enum["Font"]["GothamMedium"] or Enum["Font"]["SourceSansSemibold"]
+            end
+
+            return visions and Enum["Font"]["Gotham"] or Enum["Font"]["SourceSans"]
+        end
+
+        local create_panel_text = function(properties, bold)
+            if not panel_gui or not panel_gui["Parent"] then
+                panel_gui = Instance["new"]("ScreenGui")
+                panel_gui["Name"] = tostring({}):sub(8)
+                panel_gui["IgnoreGuiInset"] = true
+                panel_gui["ResetOnSpawn"] = false
+                panel_gui["DisplayOrder"] = 5
+                panel_gui["Parent"] = hui
+            end
+
+            local label = Instance["new"]("TextLabel")
+            label["BackgroundTransparency"] = 1
+            label["AutomaticSize"] = Enum["AutomaticSize"]["XY"]
+            label["Size"] = UDim2["fromOffset"](0, 0)
+            label["TextStrokeColor3"] = color3_fromrgb(0, 0, 0)
+            label["Font"] = panel_font(bold)
+            label["Parent"] = panel_gui
+            panel_labels[label] = bold == true
+
+            local state = {["position"] = vector2_new(0, 0), ["transparency"] = 1, ["center"] = false, ["outline"] = false}
+
+            local stroke = function()
+                label["TextStrokeTransparency"] = state["outline"] and 1 - state["transparency"] * 0.85 or 1
+            end
+
+            local proxy = setmetatable({}, {
+                ["__index"] = function(_, key)
+                    if key == "Position" then return state["position"]
+                    elseif key == "Transparency" then return state["transparency"]
+                    elseif key == "Color" then return label["TextColor3"]
+                    elseif key == "Text" then return label["Text"]
+                    elseif key == "Size" then return label["TextSize"]
+                    elseif key == "Visible" then return label["Visible"]
+                    elseif key == "TextBounds" then return label["TextBounds"]
+                    elseif key == "Center" then return state["center"]
+                    elseif key == "Outline" then return state["outline"]
+                    elseif key == "Destroy" or key == "Remove" then
+                        return function()
+                            panel_labels[label] = nil
+                            pcall(destroy, label)
+                        end
+                    end
+
+                    return nil
+                end,
+                ["__newindex"] = function(_, key, value)
+                    if key == "Position" then
+                        state["position"] = value
+                        label["Position"] = UDim2["fromOffset"](value["X"], value["Y"])
+                    elseif key == "Transparency" then
+                        state["transparency"] = value
+                        label["TextTransparency"] = 1 - value
+                        stroke()
+                    elseif key == "Color" then label["TextColor3"] = value
+                    elseif key == "Text" then label["Text"] = value
+                    elseif key == "Size" then label["TextSize"] = value
+                    elseif key == "Visible" then label["Visible"] = value
+                    elseif key == "ZIndex" then label["ZIndex"] = value
+                    elseif key == "Center" then
+                        state["center"] = value
+                        label["AnchorPoint"] = vector2_new(value and 0.5 or 0, 0)
+                    elseif key == "Outline" then
+                        state["outline"] = value
+                        stroke()
+                    end
+                end,
+            })
+
+            for key, value in properties do
+                proxy[key] = value
+            end
+
+            return proxy
+        end
+
+        -- the panel's ScreenGui goes with the script
+        do
+            local teardowns = getgenv()["neverlose_teardowns"]
+
+            if teardowns then
+                teardowns[#teardowns+1] = function()
+                    if panel_gui then
+                        pcall(destroy, panel_gui)
+                        panel_gui = nil
+                    end
+                end
+            end
+        end
+
         local text = nil
         local text2 = nil
         local text3 = nil
@@ -22678,6 +22786,20 @@ do
             end
 
             hide_manager["cp_target_update"](text)
+
+            -- the menu look changed: every panel line takes its font
+            local session = getgenv()["__NeverLoseMenuSession"]
+            local style = type(session) == "table" and type(session.Lib) == "table" and session.Lib.MenuStyle or nil
+
+            if style ~= panel_style then
+                panel_style = style
+
+                for label, bold in panel_labels do
+                    pcall(function()
+                        label["Font"] = panel_font(bold)
+                    end)
+                end
+            end
 
             if last_state_text ~= text3 then
                 last_state_text = text3
@@ -22768,6 +22890,11 @@ do
                 center_panel_viewport_size_connection = nil
             end
 
+            if panel_gui and not value then
+                pcall(destroy, panel_gui)
+                panel_gui = nil
+            end
+
             if center_panel_mouse_behavior_connection then
                 center_panel_mouse_behavior_connection:Disconnect()
                 center_panel_mouse_behavior_connection = nil
@@ -22786,7 +22913,7 @@ do
                 heartbeat[#heartbeat+1] = do_center_panel
                 center_panel_viewport_size_connection = create_connection(camera:GetPropertyChangedSignal("ViewportSize"), update_center_panel)
                 center_panel_mouse_behavior_connection = create_connection(user_input_service:GetPropertyChangedSignal("MouseBehavior"), update_center_panel)
-                text = create_real_drawing("Text", {
+                text = create_panel_text({
                     ["Color"] = flags["center_panel_secondary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
@@ -22797,9 +22924,9 @@ do
                     ["Font"] = 2,
                     ["Outline"] = true,
                     ["Position"] = vector2_new(0, 0),
-                })
+                }, true)
 
-                text2 = create_real_drawing("Text", {
+                text2 = create_panel_text({
                     ["Color"] = flags["center_panel_secondary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
@@ -22813,7 +22940,7 @@ do
                 -- the new look has no "live" tag, no glow and no heart
                 text2["Visible"] = false
 
-                text3 = create_real_drawing("Text", {
+                text3 = create_panel_text({
                     ["Color"] = flags["center_panel_secondary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
@@ -22826,7 +22953,7 @@ do
                     ["Position"] = vector2_new(0, 0),
                 })
 
-                hide_manager["cp_target"] = create_real_drawing("Text", {
+                hide_manager["cp_target"] = create_panel_text({
                     ["Color"] = flags["center_panel_secondary_color"],
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
