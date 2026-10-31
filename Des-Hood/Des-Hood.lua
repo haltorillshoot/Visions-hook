@@ -1589,7 +1589,7 @@ _G.neverlose_menu_refs = menu_references
 local nl_ok, nl_err = pcall(function()
 
 local WINDOW_NAME = "Visions hook"
-local WINDOW_CONTENT = "Da Hood"
+local WINDOW_CONTENT = "Des Hood"
 local CONFIG_FOLDER = "NeverLoseConfigs"
 local BINDS_FILE = CONFIG_FOLDER .. "/binds.json" -- right-click keybinds are saved here
 local MENU_KEY = "Insert"
@@ -6161,8 +6161,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
-	["ad_strafe"] = {"ad_strafe", "ad_strafe"},
-	["ad_strafe_interval"] = {"ad_strafe_interval", "ad_strafe_interval"},
 	["auto_fire_gun_gap"] = {"auto_fire_gun_gap", "auto_fire_gun_gap"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
@@ -6170,8 +6168,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["removespread_amount"] = {"reduce_shotgun_spread_amount", "reduce_shotgun_spread_amount"},
 	["remove_recoil"] = {"remove_recoil", "remove_recoil"},
 	["range_enhancer"] = {"range_enhancer", "range_enhancer"},
-	["quick_draw"] = {"quick_draw", "quick_draw"},
-	["quick_draw_guns"] = {"quick_draw_guns", "quick_draw_guns", "list"},
 	["ragebot_lead_fast"] = {"ragebot_lead_fast", "ragebot_lead_fast"},
 	["dt"] = {"rapid_fire", "rapid_fire"},
 	-- Rapid fire's own settings, Fake Position, Network Desync, Velocity Desync and Sender Rate Value have no menu row (the engine's anti
@@ -6179,18 +6175,11 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["resolver"] = {"auto_fire_defensive", "auto_fire_defensive"},
 	-- new ragebot features welded onto the femmyhac.cc engine
 	["safe_purchasing"] = {"safe_purchasing", "safe_purchasing"},
-	["auto_loadout"] = {"auto_loadout", "auto_loadout"},
 	["follow_target"] = {"follow_target", "follow_target"},
-	["auto_ammo"] = {"auto_ammo", "auto_ammo"},
 	["auto_armor"] = {"auto_armor", "auto_armor"},
 	["anti_stomp"] = {"anti_stomp", "anti_stomp"},
-	["anti_report"] = {"anti_report", "anti_report"},
-	["anti_report_kick"] = {"anti_report_kick", "anti_report_kick"},
-	["anti_report_fight_only"] = {"anti_report_fight_only", "anti_report_fight_only"},
-	["anti_report_fight_window"] = {"anti_report_fight_window", "anti_report_fight_window"},
 	["auto_mask"] = {"auto_mask", "auto_mask"},
 	["auto_heal"] = {"auto_heal", "auto_heal"},
-	["anti_taser"] = {"anti_taser", "anti_taser"},
 	["anti_afk"] = {"anti_afk", "anti_afk"},
 	-- visualization, fake pos and main-section additions
 	["auto_equip"] = {"auto_equip", "auto_equip"},
@@ -6209,7 +6198,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_equip_unequip_when"] = {"auto_equip_unequip_when", "auto_equip_unequip_when", "list"},
 	["auto_equip_gun"] = {"auto_equip_gun", "auto_equip_gun", "list"},
 	["auto_equip_prioritize_db"] = {"auto_equip_prioritize_db", "auto_equip_prioritize_db"},
-	["auto_equip_distance_check"] = {"auto_equip_distance_check", "auto_equip_distance_check"},
 	["void_hide_type"] = {"void_hide_type", "void_hide_type", "list"},
 	["void_hide_bait_distance"] = {"void_hide_bait_distance", "void_hide_bait_distance"},
 	["void_hide_bait_cooldown"] = {"void_hide_bait_cooldown", "void_hide_bait_cooldown"},
@@ -6236,9 +6224,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["target_selection_wait_for_protection"] = {"target_selection_wait_for_protection", "target_selection_wait_for_protection"},
 	["target_selection_void_while_waiting"] = {"target_selection_void_while_waiting", "target_selection_void_while_waiting"},
 	["safe_purchasing_avoid_statuses"] = {"safe_purchasing_avoid_statuses", "safe_purchasing_avoid_statuses", "list"},
-	["auto_loadout_disable_when"] = {"auto_loadout_disable_when", "auto_loadout_disable_when", "list"},
-	["auto_loadout_guns"] = {"auto_loadout_guns", "auto_loadout_guns", "list"},
-	["auto_loadout_ammo"] = {"auto_loadout_ammo", "auto_loadout_ammo"},
 	["follow_target_style"] = {"follow_target_dropdown", "follow_target_style", "list"},
 	["follow_target_stop_if"] = {"follow_target_stop_if", "follow_target_stop_if", "list"},
 	["follow_target_distance"] = {"follow_target_distance", "follow_target_distance"},
@@ -6259,9 +6244,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_stomp_target_statuses"] = {"auto_stomp_target_statuses", "auto_stomp_target_statuses", "list"},
 	["auto_stomp_wait_for_all"] = {"auto_stomp_wait_for_all", "auto_stomp_wait_for_all"},
 	["auto_stomp_prioritize_over_reload"] = {"auto_stomp_prioritize_over_reload", "auto_stomp_prioritize_over_reload"},
-	["auto_ammo_disable_when"] = {"auto_ammo_disable_when", "auto_ammo_disable_when", "list"},
-	["auto_ammo_minimum_clips"] = {"auto_ammo_minimum_clips", "auto_ammo_minimum_clips"},
-	["auto_ammo_purchase_amount"] = {"auto_ammo_purchase_amount", "auto_ammo_purchase_amount"},
 	["auto_armor_purchase_if_below"] = {"auto_armor_purchase_if_below", "auto_armor_purchase_if_below"},
 	["auto_armor_try_cooldown"] = {"auto_armor_try_cooldown", "auto_armor_try_cooldown"},
 	["anti_stomp_teleport_back"] = {"anti_stomp_teleport_back", "anti_stomp_teleport_back"},
@@ -10447,11 +10429,6 @@ function Session.buildSettingsPanels(rows)
 	-- Other --
 	panelList(rows.safePurchasing:AddOption(), "Avoid Statuses", "safe_purchasing_avoid_statuses", { "friendly", "target", "neutral", "enemy" }, { "target", "enemy" })
 
-	local loadout = rows.autoLoadout:AddOption()
-	panelList(loadout, "Disable When", "auto_loadout_disable_when", { "below x health", "forcefield" }, { "forcefield" })
-	panelList(loadout, "Guns", "auto_loadout_guns", { "double-barrel sg", "tacticalshotgun", "flintlock", "revolver", "rifle", "knife", "ak47", "aug", "lmg" }, { "rifle" })
-	panelSlider(loadout, "Ammo", "auto_loadout_ammo", 0, 50, 0, "x", 5)
-
 	local follow = rows.followTarget:AddOption()
 	local strafeRows, randomizeRows, skyRows, zigzagRows = {}, {}, {}, {}
 	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above", "zig zag" }, "random", function(value)
@@ -10510,24 +10487,11 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(stomp, "Wait For All Targets Knocked", "auto_stomp_wait_for_all", false)
 	panelToggle(stomp, "Prioritize Over Reloading", "auto_stomp_prioritize_over_reload", false)
 
-	local ammo = rows.autoAmmo:AddOption()
-	panelList(ammo, "Disable When", "auto_ammo_disable_when", { "target alive" }, {})
-	panelSlider(ammo, "Minimum Clips", "auto_ammo_minimum_clips", 0, 50, 0, "x", 1)
-	panelSlider(ammo, "Purchase Amount", "auto_ammo_purchase_amount", 0, 50, 0, "x", 10)
-
 	local armor = rows.autoArmor:AddOption()
 	panelSlider(armor, "Purchase If Below", "auto_armor_purchase_if_below", 0, 100, 0, "%", 40)
 	panelSlider(armor, "Try Cooldown", "auto_armor_try_cooldown", 0, 2, 2, "s", 0.05)
 
 	panelToggle(rows.antiStomp:AddOption(), "Teleport Back", "anti_stomp_teleport_back", false)
-
-	do
-		local antiReport = rows.antiReport:AddOption()
-		panelToggle(antiReport, "Kick", "anti_report_kick", true)
-		-- A guess, not proof: the report signal never says who the report is about.
-		panelToggle(antiReport, "Kick Only If In A Fight", "anti_report_fight_only", true)
-		panelSlider(antiReport, "Fight Window", "anti_report_fight_window", 10, 600, 0, "s", 180)
-	end
 
 	panelList(rows.autoMask:AddOption(), "Disable When", "auto_mask_disable_when", { "not full health", "target alive" }, {})
 
@@ -10537,9 +10501,6 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(heal, "Stop Following While Healing", "auto_heal_stop_following", false)
 
 	-- Maximum Fire Rate has no settings: every gun fires as fast as the server takes its shots (the engine's "rapid fire")
-
-	-- A/D: how long each key is held before switching to the other
-	panelSlider(rows.adStrafe:AddOption(), "Interval", "ad_strafe_interval", 0.05, 1, 2, "s", 0.22)
 
 	-- Full auto: 0 to 100, a share of the gun's own fire rate (100 = as fast as the gun allows, 0 = the slowest)
 	panelSlider(rows.fullAuto:AddOption(), "Speed", "full_auto_speed", 0, 100, 0, "%", 100)
@@ -10561,22 +10522,14 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Pre Fire", "auto_fire_pre_fire", false)
 	panelSlider(autoFire, "Pre Fire Time", "auto_fire_pre_fire_time", 0, 200, 0, "ms", 60)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
-	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
 	panelSlider(autoFire, "Gun Gap", "auto_fire_gun_gap", 0, 300, 0, "ms", 140, { [0] = "at once" })
-	-- Distance Check (was in Auto Equip's gear; same option and flag): the target is past the Double-Barrel's range but within the Rifle's, so the
-	-- Rifle goes instead (until the DB can reach again)
-	panelToggle(autoFire, "Distance Check", "auto_equip_distance_check", false)
 
 	-- Auto equip --
 	local equip = rows.autoEquip:AddOption()
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
 	panelList(equip, "Guns", "auto_equip_gun", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "rifle", "double-barrel sg" })
 	panelToggle(equip, "Prioritize DB", "auto_equip_prioritize_db", false)
-
-	-- Quick Draw: which guns it may take out (of those, the one with the shortest range that still reaches)
-	local quickDraw = rows.quickDraw:AddOption()
-	panelList(quickDraw, "Guns", "quick_draw_guns", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "revolver", "double-barrel sg", "tacticalshotgun" })
 
 	-- Prediction --
 	local predictionPanel = rows.prediction:AddOption()
@@ -11336,7 +11289,7 @@ do
 	-- registered by Semi (below) calls Session.afterSafetyShutdown to switch them off the way the user would.
 	Session.SafetyShutdownFlags = {
 		"Ragebot", "AutoFire", "auto_fire_bullet_manipulation", "follow_target", "void_hide_exploit", "void_hide",
-		"target_selection_target_when_shot_at", "auto_equip", "auto_loadout", "auto_ammo", "auto_armor", "auto_mask", "auto_heal", "autostomp", "dt",
+		"target_selection_target_when_shot_at", "auto_equip", "auto_armor", "auto_mask", "auto_heal", "autostomp", "dt",
 	}
 	Session.SafetyShutdownSemi = {
 		"silent aimbot enabled", "silent aimbot force fire", "silent aimbot force hit", "camera aimbot enabled", "trigger bot enabled", "speed modifications enabled",
@@ -13224,17 +13177,6 @@ do
 				return
 			end
 
-			-- The ragebot's Distance Check (Automatic Fire's gear) covers the trigger bot too: with it on, no click at a target past the Range of
-			-- the gun in hand.
-			local api = sharedEnv.neverlose
-			local distanceCheck = api and api.get_flag and api.get_flag("auto_equip_distance_check") == true
-			local range = tool:FindFirstChild("Range")
-			local root = localplayer.Character:FindFirstChild("HumanoidRootPart")
-
-			if distanceCheck and currenttarget and range and root and (root.Position - currenttarget.Position).Magnitude > (tonumber(range.Value) or math.huge) then
-				return
-			end
-
 			tool:Activate()
 			lasttriggerclick = os.clock()
 		end
@@ -13378,7 +13320,7 @@ do
 				local method = getnamecallmethod()
 				local clobbered = false
 
-				if method == "FireServer" and Semi.Alive and not checkcaller() and (...) == "ShootGun" and self.Name == "MainEvent" and not ragebotaims() then
+				if method == "FireServer" and Semi.Alive and not checkcaller() and (...) == "ShootGun" and self.Name == "MainGameEvent" and not ragebotaims() then
 					-- Method calls are made in here (getsilenthit), so the method is put back before the call goes on. Every other call - almost all of the
 					-- game's method calls pass through this hook - makes none, and used to pay the extra C call for nothing.
 					clobbered = true
@@ -13387,10 +13329,12 @@ do
 					local root = ok and hit and character and character:FindFirstChild("HumanoidRootPart")
 					local handle = select(2, ...)
 
-					if root and handle then
-						-- Sent from the body at the part, as forcehit_silent does; a shotgun's time, spread and pellet follow.
+					local build = sharedEnv.neverlose_des_shot
+
+					if root and handle and build then
+						-- Sent from the body at the part, as forcehit_silent does, in Des Hood's layout (a shotgun's pellets in the one call).
 						restorenamecall(method)
-						return originalnamecall(self, "ShootGun", handle, root.Position, hit.position, hit.part, SHOOT_NORMAL, select(7, ...))
+						return originalnamecall(self, build(handle, root.Position, hit.position, hit.part, nil))
 					end
 				end
 
@@ -13420,7 +13364,8 @@ do
 			local tool = character and character:FindFirstChildOfClass("Tool")
 			local handle = tool and tool:FindFirstChild("Handle")
 			local ammo = tool and tool:FindFirstChild("Ammo")
-			local remote = replicatedstorage:FindFirstChild("MainEvent")
+			local gameremotes = replicatedstorage:FindFirstChild("GameRemotes")
+			local remote = gameremotes and gameremotes:FindFirstChild("MainGameEvent") or replicatedstorage:FindFirstChild("MainEvent")
 
 			if not (hit and root and handle and ammo and remote) or tool.Name == "[Knife]" or (tonumber(ammo.Value) or 0) <= 0 then
 				return
@@ -13457,7 +13402,11 @@ do
 					tool:Activate()
 				end)
 			else
-				remote:FireServer("ShootGun", handle, root.Position, hit.position, hit.part, SHOOT_NORMAL)
+				local build = sharedEnv.neverlose_des_shot
+
+				if build then
+					remote:FireServer(build(handle, root.Position, hit.position, hit.part, nil))
+				end
 			end
 		end)
 
@@ -15974,12 +15923,14 @@ local function startFullAuto()
 			end
 			return
 		end
+		-- Speed is a share of the gun's rate, and a pull still waits until the gun is ready (gun_due: its cooldown is over, from the gun script's own
+		-- last shot), so the shots come the moment the gun can fire, not up to a cooldown late off a timer of ours that is out of step with the gun's.
 		local speedItem = NeverLose.Flags["full_auto_speed"]
 		local speed = speedItem and tonumber(speedItem:GetValue()) or 100
-		local interval = (cooldown + 0.015) / (math.max(speed, 1) / 100)
+		local interval = type(gunDue) == "function" and cooldown / (math.max(speed, 1) / 100) or (cooldown + 0.015) / (math.max(speed, 1) / 100)
 		local now = os.clock()
 
-		if now - FullAuto.Last >= interval then
+		if now - FullAuto.Last >= interval and (type(gunDue) ~= "function" or gunDue(tool)) then
 			FullAuto.Last = now
 			pcall(tool.Activate, tool)
 		end
@@ -16338,24 +16289,6 @@ local function buildInterface()
 		Callback = onChanged("auto_equip"),
 	})
 
-	-- A/D: while the ragebot has a target the character taps A and D back and forth (Interval in the gear)
-	-- Quick Draw: with a melee (or nothing) in hand, the gun that reaches the ragebot's target is taken out when it comes in reach, and the melee is
-	-- put back a second after it leaves (an opponent that flies past at 300 studs/s with a knife out and a Revolver for the shot only)
-	rows.quickDraw = Raging:AddLabel("Quick Draw")
-	rows.quickDraw:ToolTip("Holding a knife or nothing: takes out the gun that reaches the target when it comes in range, and puts the knife back after")
-	addBindableToggle(rows.quickDraw, "Quick Draw", {
-		Default = false,
-		Flag = "quick_draw",
-		Callback = onChanged("quick_draw"),
-	})
-
-	rows.adStrafe = Raging:AddLabel("A/D")
-	addBindableToggle(rows.adStrafe, "A/D", {
-		Default = false,
-		Flag = "ad_strafe",
-		Callback = onChanged("ad_strafe"),
-	})
-
 	rows.spamResolver = Raging:AddLabel("Resolver")
 	addBindableToggle(rows.spamResolver, "Resolver", {
 		Default = false,
@@ -16628,25 +16561,11 @@ local function buildInterface()
 		Callback = onChanged("safe_purchasing"),
 	})
 
-	rows.autoLoadout = Other:AddLabel("Auto Loadout")
-	addBindableToggle(rows.autoLoadout, "Auto Loadout", {
-		Default = false,
-		Flag = "auto_loadout",
-		Callback = onChanged("auto_loadout"),
-	})
-
 	rows.followTarget = Other:AddLabel("Follow Target")
 	addBindableToggle(rows.followTarget, "Follow Target", {
 		Default = false,
 		Flag = "follow_target",
 		Callback = onChanged("follow_target"),
-	})
-
-	rows.autoAmmo = Other:AddLabel("Auto Ammo")
-	addBindableToggle(rows.autoAmmo, "Auto Ammo", {
-		Default = false,
-		Flag = "auto_ammo",
-		Callback = onChanged("auto_ammo"),
 	})
 
 	rows.autoArmor = Other:AddLabel("Auto Armor")
@@ -16663,14 +16582,6 @@ local function buildInterface()
 		Callback = onChanged("anti_stomp"),
 	})
 
-	rows.antiReport = Other:AddLabel("Anti Report")
-	rows.antiReport:ToolTip("When any player submits an in-game report in this server (the server marks that player for 5 s) everything is switched off. The game never says who a report is about, so the kick is limited by a guess: Kick Only If In A Fight kicks only when the reporter hurt you or you hurt them within the Fight Window. Turn it off to be kicked on every report")
-	addBindableToggle(rows.antiReport, "Anti Report", {
-		Default = false,
-		Flag = "anti_report",
-		Callback = onChanged("anti_report"),
-	})
-
 	rows.autoMask = Other:AddLabel("Auto Mask")
 	addBindableToggle(rows.autoMask, "Auto Mask", {
 		Default = false,
@@ -16683,12 +16594,6 @@ local function buildInterface()
 		Default = false,
 		Flag = "auto_heal",
 		Callback = onChanged("auto_heal"),
-	})
-
-	addBindableToggle(Other:AddLabel("Anti Taser"), "Anti Taser", {
-		Default = false,
-		Flag = "anti_taser",
-		Callback = onChanged("anti_taser"),
 	})
 
 	-- The bypass block at the top answers the idle kick on its own and cannot be switched off; this one is the visible switch for a second answer
@@ -17239,7 +17144,45 @@ local real_drawing = getgenv()["Drawing"]
 local fake_drawing = getgenv()["fake_drawing"]
 
 local __nil_event = setmetatable({FireServer=function() end}, {__index=function() return function() end end})
-local event = replicated_storage:FindFirstChild("MainEvent") or __nil_event
+
+-- Des Hood sends its shots, reloads and stomps through GameRemotes.MainGameEvent; the MainEvent beside it is not used by the game.
+local event = (replicated_storage:FindFirstChild("GameRemotes") and replicated_storage["GameRemotes"]:FindFirstChild("MainGameEvent")) or replicated_storage:FindFirstChild("MainEvent") or __nil_event
+
+-- A shot in Des Hood is one call: ("ShootGun", Handle, origin, pellets, position, part, normal, Range, Damage). A shotgun puts its five pellets in
+-- `pellets` ({ AimPosition, Result1 = position, Result2 = part, Result3 = normal } each) and leaves position, part and normal nil; every other
+-- gun leaves `pellets` nil. Range and Damage are the gun's own values. This builds the arguments for a claim: where the shot starts, the point
+-- it hit, the part it hit and the surface normal. (No method calls: it runs inside the shot hook, where one before old_namecall replaces the
+-- namecall method and the shot is never sent.)
+getgenv()["neverlose_des_shot"] = function(handle, origin, position, part, normal)
+    local tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+    local range_value = tool and find_first_child(tool, "Range")
+    local damage_value = tool and find_first_child(tool, "Damage")
+    local range = range_value and range_value["Value"] or 200
+    local damage = damage_value and damage_value["Value"] or 0
+    local way = position - origin
+    local length = way["Magnitude"]
+
+    if typeof(normal) ~= "Vector3" then
+        normal = length > 0 and -way / length or vector3_new(0, 1, 0)
+    end
+
+    if tool and find_first_child(tool, "GunClientShotgun") then
+        local reach = length > 0 and origin + way / length * range or position
+        local pellets = {}
+
+        for i = 1, 5 do
+            -- a few hundredths of a stud apart, so no two pellets claim the same point
+            local nudge = vector3_new((math_random() - 0.5) * 0.2, (math_random() - 0.5) * 0.2, (math_random() - 0.5) * 0.2)
+
+            pellets[i] = {["AimPosition"] = reach + nudge, ["Result1"] = position + nudge, ["Result2"] = part, ["Result3"] = normal}
+        end
+
+        return "ShootGun", handle, origin, pellets, nil, nil, nil, range, damage
+    end
+
+    return "ShootGun", handle, origin, nil, position, part, normal, range, damage
+end
+
 local clone = game.Clone
 local bush = workspace:FindFirstChild("Bush")
 local vehicles = workspace:FindFirstChild("Vehicles")
@@ -17290,7 +17233,6 @@ local set_legitbot_target = nil
 local is_defensive_active = nil
 local vehicle_spawner = nil
 local vehicle_blocked = nil
-local get_vehicle = nil
 
 do 
     vehicle_spawner = find_first_child(workspace, "VehicleSpawner")
@@ -18069,14 +18011,39 @@ do
         end)
     end
 
+    -- A shot in Des Hood is ("ShootGun", Handle, origin, pellets, position, part, normal, Range, Damage). The rewrites in the hook below work on
+    -- ("ShootGun", handle, origin, position, part, direction), so a call in Des Hood's layout is turned into that one on the way in, and a call
+    -- in that one goes out through here, rebuilt in Des Hood's layout (neverlose_des_shot). A call that is already in Des Hood's layout goes out as it is.
+    local des_old_namecall = function(remote, packet, handle, origin, position, part, direction, ...)
+        if typeof(origin) == "Vector3" and typeof(position) == "Vector3" then
+            return old_namecall(remote, getgenv()["neverlose_des_shot"](handle, origin, position, part, direction))
+        end
+
+        return old_namecall(remote, packet, handle, origin, position, part, direction, ...)
+    end
+
     local new = {
         -- the work on the FireServer calls this run handles (the wrapper below the table decides which calls get here, and sets the identity)
         ["__namecall"] = LPH_JIT_MAX(function(self, ...)
             if getnamecallmethod() == "FireServer" then
                 local args = {...}
                 local packet = args[1]
-                
+
                 if packet == "ShootGun" then
+                    -- Every send in this branch goes out through des_old_namecall (a shadow of old_namecall for the branch). A shotgun's first pellet
+                    -- stands for the whole volley while the rewrites work on it.
+                    local old_namecall = des_old_namecall
+
+                    if typeof(args[3]) == "Vector3" and typeof(args[4]) ~= "Vector3" then
+                        local pellets = args[4]
+                        local first = type(pellets) == "table" and pellets[1] or nil
+                        local claimed = first and first["Result1"] or args[5]
+
+                        if typeof(claimed) == "Vector3" then
+                            args = {"ShootGun", args[2], args[3], claimed, first and first["Result2"] or args[6], first and first["Result3"] or args[7]}
+                        end
+                    end
+
                     -- the hitbox expander's box (a part only this client has) stands for the real Head it sits in
                     local hit_part = args[5]
                     local box_swapped = false
@@ -19056,19 +19023,11 @@ do
     local anti_sit_sat_connection = nil
     local anti_sit_character_added_connection = nil
 
-    -- The vehicle features (get vehicle, auto vehicle, semi god) all run through get_vehicle, which sits the character in a seat. Anti sit stood
-    -- the character up again at once, so none of them completed. While get_vehicle is running anti sit lets the seat be taken.
+    -- Nothing seats the character on purpose any more (the vehicle features are gone), so anti sit never has to let a seat be taken.
     hide_manager["vehicle_seat_wanted"] = function()
-        for i = 1, #anti_aim do
-            if anti_aim[i] == get_vehicle then
-                return true
-            end
-        end
-
         return false
     end
 
-    -- Called by get_vehicle when it starts and when it ends: the Seated state is on for as long as it runs and goes back off after it.
     hide_manager["anti_sit_sync"] = function()
         local humanoid = local_parts["Humanoid"]
 
@@ -19170,103 +19129,6 @@ do
     local a = Enum["KeyCode"]["A"]
     local d = Enum["KeyCode"]["D"]
 
-    -- >> ( pushback guard )
-    -- Measured with two alts in one server, one moving and the other recording what the server showed of it: the server took every
-    -- movement it was given and showed the other client the same distance in the same time, with no snap back, no damage and no
-    -- kick. That was ground speed up to 560 studs/s, velocity flight up to 1600 (the top of the slider), 4 s at 400 studs/s and 1 s
-    -- at 1600. It always saw the walk speed as 16. There is no speed it is known to refuse, so nothing is capped here. What this
-    -- does is notice the server taking the body back: when one frame carries it backwards, against the way it was going, by more
-    -- than 24 studs and more than 8 frames of that travel, both multipliers drop to a quarter for 10 seconds (again for each
-    -- repeat) and then come back on their own. A change of direction can't set it off (it is one frame of travel), and it stands
-    -- aside while the void hide moves the body, for a moment after the void rescue has put it back on the ground (measured: a
-    -- fall after flying put the body 3000+ studs back at once, which is the script's own doing and not the server's), after a
-    -- respawn or a change of vehicle, and when it is switched off.
-    local PUSHBACK_MIN_STUDS = 24
-    local PUSHBACK_FRAMES = 8
-    local PUSHBACK_FACTOR = 0.25
-    local PUSHBACK_HOLD = 10
-    local PUSHBACK_SETTLE = 1.5
-
-    local pushback_scale = 1
-    local pushback_until = 0
-    local pushback_part = nil
-    local pushback_position = nil
-    local pushback_velocity = vector3_zero
-    local pushback_settled_at = 0
-
-    local do_pushback_guard = LPH_NO_VIRTUALIZE(function(dt, hrp)
-        local now = clock()
-
-        if pushback_scale < 1 and now >= pushback_until then
-            pushback_scale = 1
-        end
-
-        local api = getgenv()["neverlose"]
-        local void_hiding = api and api["is_in_void"] and api["is_in_void"]()
-
-        -- (Follow Target has the body at the target for the physics step, so what is read here is that place, not the real body: it is no push)
-        if not hrp or hrp ~= pushback_part or void_hiding or local_following then
-            pushback_part = hrp
-            pushback_position = nil
-            pushback_settled_at = now + PUSHBACK_SETTLE
-
-            return
-        end
-
-        local position = hrp["Position"]
-        local last_position = pushback_position
-        local last_velocity = pushback_velocity
-
-        pushback_position = position
-        pushback_velocity = hrp["AssemblyLinearVelocity"]
-
-        if not last_position or now < pushback_settled_at or flags["movement_pushback_guard"] == false then
-            return
-        end
-
-        local speed = last_velocity["Magnitude"]
-
-        if speed < 1 then
-            return
-        end
-
-        local back = -(position - last_position):Dot(last_velocity / speed)
-
-        if back > math.max(PUSHBACK_MIN_STUDS, speed * math.max(dt, 1/60) * PUSHBACK_FRAMES) then
-            pushback_scale = math.max(pushback_scale * PUSHBACK_FACTOR, 1/64)
-            pushback_until = now + PUSHBACK_HOLD
-
-            new_notification(
-                "movement was pushed back "..floor(back).." studs, speed and flight slowed to "..floor(pushback_scale * 100).."% for "..PUSHBACK_HOLD.."s",
-                3
-            )
-        end
-    end)
-
-    -- the guard runs first in the list so it reads the velocity before speed or flight write a new one
-    local movement_on = {["speed"] = false, ["flight"] = false}
-
-    local sync_pushback_guard = LPH_NO_VIRTUALIZE(function()
-        local wanted = movement_on["speed"] or movement_on["flight"]
-        local present = nil
-
-        for i = 1, #heartbeat do
-            if heartbeat[i] == do_pushback_guard then
-                present = i
-                break
-            end
-        end
-
-        if present and not wanted then
-            remove(heartbeat, present)
-
-            pushback_scale = 1
-            pushback_part = nil
-            pushback_position = nil
-        elseif wanted and not present then
-            table.insert(heartbeat, 1, do_pushback_guard)
-        end
-    end)
 
     -- Same method as the Semirage speed: the humanoid's own WalkSpeed, 16 x the value, put back to 16 when it is switched off.
     -- The game's Framework script writes the humanoid's WalkSpeed itself on every Heartbeat, after any Heartbeat step of ours, so
@@ -19283,7 +19145,7 @@ do
         local humanoid = speed_humanoid
 
         if humanoid and humanoid["Parent"] then
-            local target = math.max(16, walk_speed * pushback_scale)
+            local target = math.max(16, walk_speed)
 
             if humanoid["WalkSpeed"] ~= target then
                 humanoid["WalkSpeed"] = target
@@ -19328,9 +19190,6 @@ do
         end
 
         release_speed_humanoid()
-
-        movement_on["speed"] = value and true or false
-        sync_pushback_guard()
 
         if value then
             heartbeat[#heartbeat+1] = do_speed
@@ -19398,7 +19257,7 @@ do
             end
         end
 
-        local velocity = direction["Magnitude"] > 0 and direction["Unit"] * math.max(16, multiplier * pushback_scale) or vector3_zero
+        local velocity = direction["Magnitude"] > 0 and direction["Unit"] * math.max(16, multiplier) or vector3_zero
 
         -- Follow Target moves the real body by this while it has the body at the target for the physics step
         hide_manager["flight_velocity"] = velocity
@@ -19417,9 +19276,6 @@ do
             end
         end
 
-        movement_on["flight"] = value and true or false
-        sync_pushback_guard()
-
         if value then
             heartbeat[#heartbeat+1] = do_flight
         end
@@ -19429,7 +19285,6 @@ do
         multiplier = value*16
     end)
 
-    menu_references["movement_pushback_guard"] = menu_references["movement_section"]:create_element({["name"] = "pushback guard"}, {["toggle"] = {["flag"] = "movement_pushback_guard", ["default"] = true}})
     menu_references["other_section"] = menu["groups"]["misc."]:create_section("main", "other", 1, 0.4, 0.6)
 
     -- >> ( animation breaker )
@@ -19857,105 +19712,6 @@ end
 do
     menu_references["utility_section"] = menu["groups"]["misc."]:create_section("main", "utility", 2, 0.7, 0)
 
-    -- >> ( remove flintlock knockback )
-
-    do
-        local function check_connection(connection)
-            local f = connection["Function"]
-                
-            if f then
-                for _, v in getupvalues(f) do
-                    if type(v) == "function" and not isourclosure(v) and getinfo(v)["name"] == "applyBlast" then
-                        return _, f, v
-                    end
-                end
-            end
-
-            return false
-        end
-
-        menu_references["remove_flintlock_knockback"] = menu_references["utility_section"]:create_element({["name"] = "remove flintlock knockback"}, {["toggle"] = {["flag"] = "remove_flintlock_knockback"}})
-        
-        -- Every Flintlock the character has (in hand or in the backpack: its Activated handler is the gun's own) gets its knockback function
-        -- (applyBlast) replaced by one that does nothing, while Remove Flintlock Knockback or the ragebot is on, and gets it back when both are off.
-        -- It used to remember one gun only and put it back on the next equip of any gun, so with every gun out at once (Auto Equip) the Flintlock
-        -- was unpatched straight away and still threw the character back.
-        local patched = setmetatable({}, {["__mode"] = "k"})
-
-        local knockback_wanted = function()
-            return flags["remove_flintlock_knockback"] == true or flags["ragebot"] == true
-        end
-
-        local patch_flintlock = function(tool)
-            if not tool or patched[tool] or tool["Name"] ~= "[Flintlock]" then
-                return
-            end
-
-            pcall(function()
-                for _, v in getconnections(tool["Activated"]) do
-                    local index, f, original = check_connection(v)
-
-                    if index then
-                        setupvalue(f, index, function() end)
-                        patched[tool] = {f, index, original}
-                    end
-                end
-            end)
-        end
-
-        local unpatch_flintlocks = function()
-            for tool, entry in patched do
-                pcall(setupvalue, entry[1], entry[2], entry[3])
-                patched[tool] = nil
-            end
-        end
-
-        local refresh_flintlocks = function()
-            if not knockback_wanted() then
-                unpatch_flintlocks()
-                return
-            end
-
-            for _, holder in {local_character, find_first_child(players_service["LocalPlayer"], "Backpack")} do
-                if holder then
-                    for _, tool in get_children(holder) do
-                        patch_flintlock(tool)
-                    end
-                end
-            end
-        end
-
-        create_connection(signals["on_local_tool_equipped"], function(tool)
-            if tool and knockback_wanted() then
-                patch_flintlock(tool)
-            end
-        end)
-
-        create_connection(menu_references["remove_flintlock_knockback"]["on_toggle_change"], function()
-            refresh_flintlocks()
-        end)
-
-        -- the ragebot's toggle is made further down the file
-        spawn(function()
-            wait()
-
-            if menu_references["ragebot_enabled"] then
-                create_connection(menu_references["ragebot_enabled"]["on_toggle_change"], function()
-                    refresh_flintlocks()
-                end)
-            end
-
-            refresh_flintlocks()
-        end)
-
-        do
-            local teardowns = getgenv()["neverlose_teardowns"]
-
-            if teardowns then
-                teardowns[#teardowns+1] = unpatch_flintlocks
-            end
-        end
-    end
 
     -- >> ( unlock custom crosshair )
 
@@ -20011,172 +19767,6 @@ do
         end
     end)
 
-    -- >> ( unlock animation packs )
-
-    menu_references["unlock_animation_packs"] = menu_references["utility_section"]:create_element({["name"] = "unlock animation packs"}, {["toggle"] = {["flag"] = "unlock_animation_packs"}})
-
-    local unlock_animation_packs_connections = nil
-    local unlock_animation_instances = nil
-    local animations = {
-        ["Chest Pump"] = "rbxassetid://3189779152",
-        ["Praying"] = "rbxassetid://3487719500",
-        ["Greet"] = "rbxassetid://3189777795",
-        ["Dance2"] = "rbxassetid://3189776546",
-        ["Dance1"] = "rbxassetid://3189773368",
-        ["Lay"] = "rbxassetid://3152378852",
-        ["Lean"] = "rbxassetid://3152375249",
-        ["T Pose"] = "rbxassetid://11710524200",
-        ["Speed Blitz"] = "rbxassetid://11710541744",
-        ["Griddy"] = "rbxassetid://11710529220",
-        ["Rossy"] = "rbxassetid://11710527244",
-        ["Sturdy"] = "rbxassetid://11710524717",
-        ["The Default"] = "rbxassetid://11710522278"
-    }
-
-    local play_animation = function(animation)
-        local humanoid = local_parts["Humanoid"]
-
-        if humanoid then
-            local old = create_instance("Animation", {
-                ["AnimationId"] = animations[animation]
-            })
-            local loaded = humanoid:LoadAnimation(old)
-            loaded["Looped"] = (animation ~= "Chest Pump" and animation ~= "Praying" and animation ~= "Greet") or false
-            loaded:Play()
-            destroy(old)
-
-            local move_connection = nil; move_connection = create_connection(humanoid:GetPropertyChangedSignal("MoveDirection"), function()
-                loaded:Stop()
-                if move_connection then
-                    move_connection:Disconnect()
-                    move_connection = nil
-                end
-            end)
-
-            delay((loaded["Length"] + 0.5) or 2, function()
-                if move_connection and not loaded["IsPlaying"] then
-                    move_connection:Disconnect()
-                    move_connection = nil
-                    loaded:Stop()
-                end
-            end)
-        end
-    end
-
-    local lock_animation_packs = function()
-        local gui = local_player["PlayerGui"]
-
-        if gui then
-            local main_screen_gui = wait_for_child(gui, "MainScreenGui", 5)
-
-            if main_screen_gui then
-                local animation_pack = wait_for_child(main_screen_gui, "AnimationPack", 5)
-                local animation_plus_pack = wait_for_child(main_screen_gui, "AnimationPlusPack", 5)
-
-                if animation_pack and animation_plus_pack then
-                    animation_pack["Visible"] = true
-                    animation_plus_pack["Visible"] = false
-                end
-            end
-        end
-    end
-
-    local unlock_animation_packs = LPH_JIT_MAX(function()
-        local gui = local_player["PlayerGui"]
-        -- The list this run belongs to: the toggle replaces or drops it, and the waits below take a while.
-        local list = unlock_animation_packs_connections
-
-        if gui then
-            local main_screen_gui = wait_for_child(gui, "MainScreenGui", 5)
-
-            if main_screen_gui then
-                local animation_pack = wait_for_child(main_screen_gui, "AnimationPack", 5)
-                local animation_plus_pack = wait_for_child(main_screen_gui, "AnimationPlusPack", 5)
-
-                if animation_pack and animation_plus_pack and list and unlock_animation_packs_connections == list then
-                    animation_pack["Visible"] = true
-
-                    -- The same buttons again (the GUI survived the respawn): they are connected already, not a second time.
-                    if list["pack"] == animation_pack then
-                        animation_plus_pack["Visible"] = true
-                        return
-                    end
-
-                    list["pack"] = animation_pack
-
-                    unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(animation_pack["MouseButton1Click"], function()
-                        animation_pack["ScrollingFrame"]["Visible"] = true
-                        animation_pack["CloseButton"]["Visible"] = true
-                        main_screen_gui["AnimationPlusPack"]["Position"] = udim2_new(-1, 0, 0.5, 12)
-                    end)
-
-                    unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(animation_pack["CloseButton"]["MouseButton1Click"], function()
-                        animation_pack["ScrollingFrame"]["Visible"] = false
-                        animation_pack["CloseButton"]["Visible"] = false
-                        main_screen_gui["AnimationPlusPack"]["Position"] = udim2_new(0, 0, 0.5, 12)
-                    end)
-
-                    for _, v in get_children(animation_pack["ScrollingFrame"]) do
-                        if v["ClassName"] == "TextButton" then
-                            local animation = v["Text"]
-                            unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(v["MouseButton1Click"], function()
-                                play_animation(animation)
-                            end)
-                        end
-                    end
-
-                    animation_plus_pack["Visible"] = true
-
-                    unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(animation_plus_pack["MouseButton1Click"], function()
-                        animation_plus_pack["ScrollingFrame"]["Visible"] = true
-                        animation_plus_pack["CloseButton"]["Visible"] = true
-                        animation_pack["Position"] = udim2_new(-1, 0, 0.5, -12)
-                    end)
-
-                    unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(animation_plus_pack["CloseButton"]["MouseButton1Click"], function()
-                        animation_plus_pack["ScrollingFrame"]["Visible"] = false
-                        animation_plus_pack["CloseButton"]["Visible"] = false
-                        animation_pack["Position"] = udim2_new(0, 0, 0.5, -12)
-                    end)
-
-                    for _, v in get_children(animation_plus_pack["ScrollingFrame"]) do
-                        if v["ClassName"] == "TextButton" then
-                            local animation = v["Text"]
-                            unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(v["MouseButton1Click"], function()
-                                play_animation(animation)
-                            end)
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    create_connection(menu_references["unlock_animation_packs"]["on_toggle_change"], function(value)
-        if unlock_animation_packs_connections then
-            for i = 1, #unlock_animation_packs_connections do
-                unlock_animation_packs_connections[i]:Disconnect()
-            end
-            unlock_animation_packs_connections = nil
-        end
-
-        if unlock_animation_instances then
-            for _, animation in unlock_animation_instances do
-                destroy(animation)
-            end
-            unlock_animation_instances = nil
-        end
-
-        if value then
-            unlock_animation_instances = {}
-            unlock_animation_packs_connections = {}
-            unlock_animation_packs_connections[#unlock_animation_packs_connections+1] = create_connection(signals["on_local_character_loaded"], unlock_animation_packs)
-
-            unlock_animation_packs()
-        else
-            lock_animation_packs()
-        end
-    end)
     
     -- >> ( unlock camera distance )
 
@@ -20254,145 +19844,6 @@ do
         do_remove(value)
 	end))
 
-    -- >> ( auto vehicle )
-
-    do
-        -- Looked up softly: a missing Bike folder must not end the load here, nothing after this point would exist.
-        local bike_folder = find_first_child(replicated_storage, "Bike")
-        local bike_events = bike_folder and find_first_child(bike_folder, "Events")
-        local packet_receiver = bike_events and find_first_child(bike_events, "PacketReceiver") or __nil_event
-        local do_auto_vehicle = LPH_NO_VIRTUALIZE(function(dt, hrp)
-            -- a try that came to nothing waits before the next (hide_manager.vehicle_retry_at, set by get_vehicle)
-            if vehicle == nil and clock() >= (hide_manager["vehicle_retry_at"] or 0) then
-                for i = 1, #anti_aim do
-                    if anti_aim[i] == get_vehicle then
-                        return
-                    end
-                end
-                get_vehicle()
-                anti_aim[#anti_aim+1] = get_vehicle
-            end
-        end)
-
-        menu_references["auto_vehicle"] = menu_references["utility_section"]:create_element({["name"] = "auto vehicle"}, {["toggle"] = {["flag"] = "auto_vehicle"}})
-
-        create_connection(menu_references["auto_vehicle"]["on_toggle_change"], function(bool)
-            for i = 1, #heartbeat do
-                if heartbeat[i] == do_auto_vehicle then
-                    remove(heartbeat, i)
-                    break
-                end
-            end
-
-            for i = 1, #anti_aim do
-                if anti_aim[i] == get_vehicle then
-                    remove(anti_aim, i)
-                    break
-                end
-            end
-
-            if bool then
-                heartbeat[#heartbeat+1] = do_auto_vehicle
-            end
-        end)
-        
-        menu_references["auto_vehicle_godmode"] = menu_references["utility_section"]:create_element({["name"] = "semi god"}, {["toggle"] = {["flag"] = "auto_vehicle_godmode"}})
-
-        local old_cframe = nil
-        local timer = clock()
-
-        local do_auto_vehicle_godmode = LPH_JIT(function(dt, hrp)
-            if not hrp then
-                timer = clock()
-                old_cframe = nil
-                return
-            end
-            
-            local right_upper_leg = local_parts["RightUpperLeg"]
-            local left_upper_leg = local_parts["LeftUpperLeg"]
-
-            if clock() - timer > 4 then
-                if vehicle then
-                    packet_receiver["FireServer"](packet_receiver, "GetOff")
-                elseif old_cframe and clock() - timer > 7 then
-                    hrp["CFrame"] = old_cframe
-                    hrp["Velocity"] = vector3_zero
-                    render_stepped_wait(render_stepped)
-                    hrp["CFrame"] = old_cframe
-                    hrp["Velocity"] = vector3_zero
-                end
-
-                if clock() - timer > 8 then
-                    old_cframe = nil
-                    timer = clock()
-                    for i = 1, #anti_aim do
-                        if anti_aim[i] == get_vehicle then
-                            remove(anti_aim, i)
-                            break
-                        end
-                    end
-                end
-            end
-
-            if (right_upper_leg and right_upper_leg["CFrame"] ~= right_upper_leg["CFrame"]) and (left_upper_leg and left_upper_leg["CFrame"] ~= left_upper_leg["CFrame"]) then
-                return
-            end
-
-            local old_velocity = hrp["Velocity"]
-            -- math_random(-2^63, 2^63-1) returns the same number on every call on this executor, so a random value in the 32-bit range (the size of the constant it returned) is used instead.
-            hrp["AssemblyLinearVelocity"] = vector3_new(math_random(-2147483647, 2147483647), math_random(-2147483647, 2147483647), math_random(-2147483647, 2147483647))
-            render_stepped_wait(render_stepped)
-            hrp["AssemblyLinearVelocity"] = old_velocity
-            
-            if vehicle == nil then
-                timer = clock()
-                if not old_cframe then
-                    old_cframe = hrp["CFrame"]
-                end
-                for i = 1, #anti_aim do
-                    if anti_aim[i] == get_vehicle then
-                        return
-                    end
-                end
-                anti_aim[#anti_aim+1] = get_vehicle
-            end
-        end)
-
-        local connection = nil
-
-        create_connection(menu_references["auto_vehicle_godmode"]["on_toggle_change"], function(bool)
-            if connection then
-                connection["Disconnect"](connection)
-                connection = nil
-            end
-
-            for i = 1, #anti_aim do
-                if anti_aim[i] == do_auto_vehicle_godmode then
-                    remove(anti_aim, i)
-                    break
-                end
-            end
-
-            for i = 1, #anti_aim do
-                if anti_aim[i] == get_vehicle then
-                    remove(anti_aim, i)
-                    break
-                end
-            end
-
-            old_cframe = nil
-            timer = clock()
-
-            if bool then
-                anti_aim[#anti_aim+1] = do_auto_vehicle_godmode
-
-                connection = create_connection(signals["on_local_character_added"], function(character)
-                    old_cframe = nil
-                    timer = clock()
-                end)
-            end
-        end)
-    end
 
     -- >> ( auto reload )
 
@@ -20634,152 +20085,7 @@ do
     end)
 
 
-    -- >> ( redeem codes )
 
-    create_connection(menu_references["utility_section"]:create_element({["name"] = "redeem codes"}, {["button"] = {}})["on_clicked"], function()
-    -- One run at a time: a second click started a second pass over every code while the first was still waiting between them.
-    if hide_manager["redeeming_codes"] then
-        new_notification("already redeeming codes", 2)
-        return
-    end
-
-    hide_manager["redeeming_codes"] = true
-
-    -- The codes are kept here (they used to be read from a codes.txt in somebody else's repository). Six seconds between them: the game answers one
-    -- code at a time.
-    local codes = {"MACRO!", "ETERNAL", "HALLOWEEN26"}
-
-    local finished = pcall(function()
-        for i = 1, #codes do
-            event:FireServer("EnterPromoCode", codes[i])
-            wait(6)
-        end
-    end)
-
-    hide_manager["redeeming_codes"] = nil
-
-    if finished then
-        new_notification("sent "..tostring(#codes).." codes", 2)
-    else
-        new_notification("redeeming the codes failed", 3)
-    end
-end)
-
-    -- >> ( get vehicle )
-
-    do
-        local old_cframe = nil
-        local vehicle_tick = nil
-        local started = nil
-
-        local function reset()
-            for i = 1, #anti_aim do
-                if anti_aim[i] == get_vehicle then
-                    remove(anti_aim, i)
-                    break
-                end
-            end
-            old_cframe, vehicle_tick, started = nil, nil, nil
-            -- anti sit let the seat be taken while this ran
-            if hide_manager["anti_sit_sync"] then
-                hide_manager["anti_sit_sync"]()
-            end
-        end
-
-        -- No vehicle came of a try (none free, or the spawner too slow): auto vehicle tries again only after retry_wait seconds, doubled after each
-        -- such try up to 30. It used to start again the next frame, putting the body at the spawner every frame for as long as none came.
-        local retry_wait = 2
-
-        local function give_up()
-            hide_manager["vehicle_retry_at"] = clock() + retry_wait
-            retry_wait = math["min"](retry_wait * 2, 30)
-            reset()
-        end
-
-        get_vehicle = LPH_JIT_MAX(function(dt, hrp)
-            if not dt then
-                reset()
-                return
-            end
-        
-            if not started then
-                started = clock()
-                if hide_manager["anti_sit_sync"] then
-                    hide_manager["anti_sit_sync"]()
-                end
-            end
-        
-            if not hrp or vehicle_blocked then
-                reset()
-                return
-            end
-
-            if clock() - started > 1 then
-                give_up()
-                return
-            end
-        
-            if local_player["GetAttribute"](local_player, "ServerDebounceVGM") then
-                return
-            end
-        
-            if vehicle then
-                retry_wait = 2
-                hide_manager["vehicle_retry_at"] = nil
-                vehicle_tick = vehicle_tick or clock()
-                if clock() - vehicle_tick > local_ping / 500 then
-                    reset()
-                end
-                return
-            end
-        
-            if not vehicle_blocked then
-                local set_vehicle = nil
-                for _, new_vehicle in vehicle_data do
-                    local part = new_vehicle[1]
-                    if part and not new_vehicle[3] and part["Position"]["Magnitude"] < 1e6 then
-                        set_vehicle = new_vehicle
-                        break
-                    end
-                end
-        
-                if not set_vehicle then
-                    -- No prompt was found at the spawner when the script loaded (vehicle_spawner is then nil, or still the folder): nowhere to go.
-                    if type(vehicle_spawner) ~= "table" then
-                        give_up()
-                        return
-                    end
-
-                    -- The position saved before this frame's other anti aim steps moved the character (the part can be at theirs by now). The one taken on
-                    -- the first try was kept for every later one and pulled the character back whenever it had moved since.
-                    old_cframe = local_client_position
-                    hrp["CFrame"] = vehicle_spawner[2]
-                    fireproximityprompt(vehicle_spawner[1], 1)
-                    render_stepped_wait(render_stepped)
-                    hrp["CFrame"] = old_cframe
-                else
-                    local part, ride = set_vehicle[1], set_vehicle[2]
-                    if part and ride and not in_void then
-                        fireproximityprompt(ride, 1)
-                        local current_cframe = local_client_position
-                        hrp["CFrame"] = part["CFrame"] - vector3_new(0, 5, 0)
-                        render_stepped_wait(render_stepped)
-                        hrp["CFrame"] = current_cframe
-                    end
-                end
-            end
-        end)
-
-        create_connection(menu_references["utility_section"]:create_element({["name"] = "get vehicle"}, {["button"] = {}})["on_clicked"], function()
-            for i = 1, #anti_aim do
-                if anti_aim[i] == get_vehicle then
-                    return
-                end
-            end
-            get_vehicle()
-            anti_aim[#anti_aim+1] = get_vehicle
-        end)
-    end
 
     create_connection(menu_references["utility_section"]:create_element({["name"] = "force reset"}, {["button"] = {}})["on_clicked"], function()
         local humanoid = local_parts["Humanoid"]
@@ -27046,7 +26352,9 @@ do
 
     for gun, skin in require(replicated_storage["SkinModules"]) do
         local gun = gun:lower():sub(2, -2)
-        if gun ~= "house" and gun ~= "mask" and gun ~= "wallet" and gun ~= "bat" and gun ~= "vehicle" and gun ~= "vehicles" then
+        -- Des Hood's SkinModules also holds the bullet colors, emojis and stomp skins, which are not weapons
+        if gun ~= "house" and gun ~= "mask" and gun ~= "wallet" and gun ~= "bat" and gun ~= "vehicle" and gun ~= "vehicles"
+            and gun ~= "bullet colors" and gun ~= "emojis" and gun ~= "stomps" and gun ~= "stomp rewards" then
             if not gun_list[gun] then
                 gun_list[#gun_list+1] = gun
             end
@@ -27061,14 +26369,17 @@ do
         end
     end
 
+    -- The weapon the list starts on: the AUG where the game has one (Des Hood has no AUG, so the first weapon it does have)
+    local default_weapon = skins_list["aug"] and "aug" or gun_list[1]
+
     menu_references["skins_section"] = menu["groups"]["visuals"]:create_panel_section("skins", "skins list", 1, true)
     menu_references["skins_editor_section"] = menu["groups"]["visuals"]:create_section("skins", "skins editor", 2, 0.9, 0)
         menu_references["skin_changer"] = menu_references["skins_editor_section"]:create_element({["name"] = "skin changer"}, {["toggle"] = {["flag"] = "skin_changer"}})
-        menu_references["skin_changer_gun"] = menu_references["skins_editor_section"]:create_element({["name"] = "weapon"}, {["dropdown"] = {["flag"] = "!weapon", ["options"] = gun_list, ["default"] = {"aug"}, ["requires_one"] = true}})
+        menu_references["skin_changer_gun"] = menu_references["skins_editor_section"]:create_element({["name"] = "weapon"}, {["dropdown"] = {["flag"] = "!weapon", ["options"] = gun_list, ["default"] = {default_weapon}, ["requires_one"] = true}})
     menu_references["custom_skins_section"] = menu["groups"]["visuals"]:create_section("skins", "custom skins", 2, 0.1, 0.9)
         menu_references["refresh_custom_skins"] = menu_references["custom_skins_section"]:create_element({["name"] = "refresh custom skins"}, {["button"] = {["fake"] = true}})
 
-    local selected_weapon = "aug"
+    local selected_weapon = default_weapon
     local section = menu_references["skins_section"]
 
     create_connection(menu_references["skin_changer_gun"]["on_dropdown_change"], LPH_JIT_MAX(function(value)
@@ -27096,7 +26407,7 @@ do
         menu_references["skin_changer_gun"]["on_dropdown_change"]:Fire({selected_weapon})
     end)
 
-    for _, skin in skins_list["aug"] do
+    for _, skin in skins_list[selected_weapon] or {} do
         section:add_item({
             ["text"] = _,
             ["icons"] = {}
@@ -33053,17 +32364,12 @@ end
         menu_references["auto_fire_pre_fire_time"] = menu_references["auto_fire_settings"]:create_element({["name"] = "pre fire time"}, {["slider"] = {["flag"] = "auto_fire_pre_fire_time", ["min"] = 0, ["max"] = 200, ["suffix"] = "ms", ["default"] = 60, ["decimals"] = 0}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
-        menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
         menu_references["auto_fire_gun_gap"] = menu_references["auto_fire_settings"]:create_element({["name"] = "gun gap"}, {["slider"] = {["flag"] = "auto_fire_gun_gap", ["min"] = 0, ["max"] = 300, ["suffix"] = "ms", ["default"] = 140, ["min_text"] = "at once", ["decimals"] = 0}})
-        menu_references["ad_strafe"] = menu_references["general_section"]:create_element({["name"] = "a/d"}, {["toggle"] = {["flag"] = "ad_strafe", ["default"] = false}})
-        menu_references["ad_strafe_settings"] = menu_references["ad_strafe"]:create_settings()
-        menu_references["ad_strafe_interval"] = menu_references["ad_strafe_settings"]:create_element({["name"] = "interval"}, {["slider"] = {["flag"] = "ad_strafe_interval", ["min"] = 0.05, ["max"] = 1, ["default"] = 0.22, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["auto_equip"] = menu_references["general_section"]:create_element({["name"] = "auto equip"}, {["toggle"] = {["flag"] = "auto_equip", ["default"] = false}})
         menu_references["auto_equip_settings"] = menu_references["auto_equip"]:create_settings()
         menu_references["auto_equip_unequip_when"] = menu_references["auto_equip_settings"]:create_element({["name"] = "unequip when"}, {["dropdown"] = {["flag"] = "auto_equip_unequip_when", ["default"] = {"no target"}, ["options"] = {"no target"}, ["multi"] = true}})
         menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle", "double-barrel sg"}, ["options"] = {"double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["auto_equip_prioritize_db"] = menu_references["auto_equip_settings"]:create_element({["name"] = "prioritize db"}, {["toggle"] = {["flag"] = "auto_equip_prioritize_db", ["default"] = false}})
-        menu_references["auto_equip_distance_check"] = menu_references["auto_equip_settings"]:create_element({["name"] = "distance check"}, {["toggle"] = {["flag"] = "auto_equip_distance_check", ["default"] = false}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
         menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
@@ -33180,11 +32486,6 @@ end
         menu_references["safe_purchasing"] = menu_references["utility_section"]:create_element({["name"] = "safe purchasing"}, {["toggle"] = {["flag"] = "safe_purchasing"}})
         menu_references["safe_purchasing_settings"] = menu_references["safe_purchasing"]:create_settings()
         menu_references["safe_purchasing_avoid_statuses"] = menu_references["safe_purchasing_settings"]:create_element({["name"] = "avoid statuses"}, {["dropdown"] = {["flag"] = "safe_purchasing_avoid_statuses", ["options"] = {"friendly", "target", "neutral", "enemy"}, ["default"] = {"target", "enemy"}, ["multi"] = true, ["requires_one"] = true}})
-        menu_references["auto_loadout"] = menu_references["utility_section"]:create_element({["name"] = "auto loadout"}, {["toggle"] = {["flag"] = "auto_loadout"}})
-        menu_references["auto_loadout_settings"] = menu_references["auto_loadout"]:create_settings()
-        menu_references["auto_loadout_disable_when"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["flag"] = "auto_loadout_disable_when", ["options"] = {"below x health", "forcefield"}, ["multi"] = true, ["requires_one"] = false, ["default"] = {"forcefield"}}})
-        menu_references["auto_loadout_guns"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "guns"}, {["dropdown"] = {["flag"] = "auto_loadout_guns", ["options"] = {"double-barrel sg", "tacticalshotgun", "flintlock", "revolver", "rifle", "knife", "ak47", "aug", "lmg"}, ["multi"] = true, ["requires_one"] = true, ["default"] = {"rifle"}}})
-        menu_references["auto_loadout_ammo"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "ammo"}, {["slider"] = {["flag"] = "auto_loadout_ammo", ["min"] = 0, ["max"] = 50, ["default"] = 5, ["suffix"] = "x"}})
         menu_references["follow_target"] = menu_references["utility_section"]:create_element({["name"] = "follow target"}, {["toggle"] = {["flag"] = "follow_target"}})
         menu_references["follow_target_settings"] = menu_references["follow_target"]:create_settings()
         menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "zig zag"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
@@ -33222,11 +32523,6 @@ end
         menu_references["auto_stomp_target_statuses"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "target statuses"}, {["dropdown"] = {["flag"] = "auto_stomp_target_statuses", ["options"] = {"friendly", "neutral", "target", "enemy"}, ["default"] = {"target"}, ["multi"] = true, ["requires_one"] = true}})
         menu_references["auto_stomp_wait_for_all"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "wait for all targets knocked"}, {["toggle"] = {["flag"] = "auto_stomp_wait_for_all", ["default"] = false}})
         menu_references["auto_stomp_prioritize_over_reload"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "prioritize over reloading"}, {["toggle"] = {["flag"] = "auto_stomp_prioritize_over_reload", ["default"] = false}})
-        menu_references["auto_ammo"] = menu_references["utility_section"]:create_element({["name"] = "auto ammo"}, {["toggle"] = {["flag"] = "auto_ammo"}})
-        menu_references["auto_ammo_settings"] = menu_references["auto_ammo"]:create_settings()
-        menu_references["auto_ammo_disable_when"] = menu_references["auto_ammo_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"target alive"}, ["flag"] = "auto_ammo_disable_when", ["multi"] = true, ["requires_one"] = false}})
-        menu_references["auto_ammo_minimum_clips"] = menu_references["auto_ammo_settings"]:create_element({["name"] = "minimum clips"}, {["slider"] = {["flag"] = "auto_ammo_minimum_clips", ["min"] = 0, ["max"] = 50, ["default"] = 1, ["suffix"] = "x"}})
-        menu_references["auto_ammo_purchase_amount"] = menu_references["auto_ammo_settings"]:create_element({["name"] = "purchase amount"}, {["slider"] = {["flag"] = "auto_ammo_purchase_amount", ["min"] = 0, ["max"] = 50, ["default"] = 10, ["suffix"] = "x"}})
         menu_references["auto_armor"] = menu_references["utility_section"]:create_element({["name"] = "auto armor"}, {["toggle"] = {["flag"] = "auto_armor"}})
         menu_references["auto_armor_settings"] = menu_references["auto_armor"]:create_settings()
         menu_references["auto_armor_purchase_if_below"] = menu_references["auto_armor_settings"]:create_element({["name"] = "purchase if below"}, {["slider"] = {["flag"] = "auto_armor_purchase_if_below", ["min"] = 0, ["max"] = 100, ["default"] = 40, ["suffix"] = "%"}})
@@ -33234,11 +32530,6 @@ end
         menu_references["anti_stomp"] = menu_references["utility_section"]:create_element({["name"] = "anti stomp"}, {["toggle"] = {["flag"] = "anti_stomp"}})
         menu_references["anti_stomp_settings"] = menu_references["anti_stomp"]:create_settings()
         menu_references["anti_stomp_teleport_back"] = menu_references["anti_stomp_settings"]:create_element({["name"] = "teleport back"}, {["toggle"] = {["flag"] = "anti_stomp_teleport_back"}})
-        menu_references["anti_report"] = menu_references["utility_section"]:create_element({["name"] = "anti report"}, {["toggle"] = {["flag"] = "anti_report", ["default"] = false}})
-        menu_references["anti_report_settings"] = menu_references["anti_report"]:create_settings()
-        menu_references["anti_report_kick"] = menu_references["anti_report_settings"]:create_element({["name"] = "kick"}, {["toggle"] = {["flag"] = "anti_report_kick", ["default"] = true}})
-        menu_references["anti_report_fight_only"] = menu_references["anti_report_settings"]:create_element({["name"] = "kick only if in a fight"}, {["toggle"] = {["flag"] = "anti_report_fight_only", ["default"] = true}})
-        menu_references["anti_report_fight_window"] = menu_references["anti_report_settings"]:create_element({["name"] = "fight window"}, {["slider"] = {["flag"] = "anti_report_fight_window", ["min"] = 10, ["max"] = 600, ["default"] = 180, ["suffix"] = "s"}})
         menu_references["auto_mask"] = menu_references["utility_section"]:create_element({["name"] = "auto mask"}, {["toggle"] = {["flag"] = "auto_mask"}})
         menu_references["auto_mask_settings"] = menu_references["auto_mask"]:create_settings()
         menu_references["auto_mask_disable_when"] = menu_references["auto_mask_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"not full health", "target alive"}, ["flag"] = "auto_mask_disable_when", ["multi"] = true, ["requires_one"] = false}})
@@ -33247,7 +32538,6 @@ end
         menu_references["auto_heal_purchase_if_below"] = menu_references["auto_heal_settings"]:create_element({["name"] = "purchase if below"}, {["slider"] = {["flag"] = "auto_heal_purchase_if_below", ["min"] = 0, ["max"] = 100, ["default"] = 70, ["suffix"] = "%"}})
         menu_references["auto_heal_try_cooldown"] = menu_references["auto_heal_settings"]:create_element({["name"] = "try cooldown"}, {["slider"] = {["flag"] = "auto_heal_try_cooldown", ["min"] = 0, ["max"] = 2, ["default"] = 0.05, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["auto_heal_stop_following"] = menu_references["auto_heal_settings"]:create_element({["name"] = "stop following while healing"}, {["toggle"] = {["flag"] = "auto_heal_stop_following", ["default"] = false}})
-        menu_references["anti_taser"] = menu_references["utility_section"]:create_element({["name"] = "anti taser"}, {["toggle"] = {["flag"] = "anti_taser"}})
         menu_references["anti_afk"] = menu_references["utility_section"]:create_element({["name"] = "anti afk"}, {["toggle"] = {["flag"] = "anti_afk", ["default"] = true}})
         menu_references["rapid_fire"] = menu_references["utility_section"]:create_element({["name"] = "rapid fire"}, {["toggle"] = {["flag"] = "rapid_fire", ["default"] = false}})
         menu_references["rapid_fire_settings"] = menu_references["rapid_fire"]:create_settings()
@@ -33388,78 +32678,6 @@ end
         return nil, false
     end
 
-    -- Distance Check (Auto Equip's gear): while the target is past the Double-Barrel's own Range but within the Rifle's, and the Rifle is there with a
-    -- round in it, the Double-Barrel is not sent (the server turns its shot away, and every refused shotgun call counts against its SecurityTolerance)
-    -- and the Rifle goes first. Both ranges are the guns' own Range values; with either unknown nothing changes. It switches back once the target is
-    -- 4 studs inside the DB's range again, and holds each switch for at least half a second, so a target on the edge does not flip the guns every
-    -- frame. Nothing is rewritten: the gun order, the Auto Equip list and the shot counts stay as they are. hide_manager.distance_check_active says
-    -- whether it is on now (Auto Equip brings the Rifle out for it).
-    local distance_check_state = {["active"] = false, ["since"] = 0}
-
-    local gun_range = function(tool, known)
-        local range = tool and find_first_child(tool, "Range")
-
-        return range and tonumber(range["Value"]) or tonumber(known)
-    end
-
-    hide_manager["distance_check"] = function(guns, distance)
-        local state = distance_check_state
-
-        if flags["auto_equip_distance_check"] ~= true or type(distance) ~= "number" or distance ~= distance then
-            state["active"] = false
-            hide_manager["distance_check_active"] = false
-            return false
-        end
-
-        local shell, rifle, rifle_ammo, rifle_known = nil, nil, 0, nil
-
-        for _, gun in guns do
-            local tool = gun[1]["Parent"]
-
-            if tool and tool["Name"] == "[Double-Barrel SG]" then
-                shell = {tool, gun[2]}
-            elseif tool and tool["Name"] == "[Rifle]" then
-                rifle, rifle_ammo, rifle_known = tool, gun[3], gun[2]
-            end
-        end
-
-        -- a Rifle still in the backpack counts too: Auto Equip brings it out while this is on
-        if not rifle then
-            local backpack = find_first_child(local_player, "Backpack")
-            local stored = backpack and find_first_child(backpack, "[Rifle]")
-            local ammo = stored and find_first_child(stored, "Ammo")
-
-            if stored and ammo then
-                rifle, rifle_ammo = stored, ammo["Value"]
-            end
-        end
-
-        local shell_range = shell and gun_range(shell[1], shell[2])
-        local rifle_range = rifle and gun_range(rifle, rifle_known)
-        local now = clock()
-        local wanted = state["active"]
-
-        if not (shell_range and rifle_range) or rifle_ammo <= 0 or distance > rifle_range then
-            wanted = false
-        elseif state["active"] then
-            wanted = distance > shell_range - 4
-        else
-            wanted = distance > shell_range
-        end
-
-        -- the Rifle running dry or going out of reach ends it at once; otherwise a switch is held for half a second
-        local forced_off = not (shell_range and rifle_range) or rifle_ammo <= 0 or (rifle_range and distance > rifle_range)
-
-        if wanted ~= state["active"] and (forced_off or now - state["since"] >= 0.5) then
-            state["active"] = wanted
-            state["since"] = now
-        end
-
-        hide_manager["distance_check_active"] = state["active"]
-
-        return state["active"]
-    end
-
     -- Pellets in one shot: the shotguns fire five, a call each.
     local pellet_guns = {["[Double-Barrel SG]"] = 5, ["[Shotgun]"] = 5, ["[TacticalShotgun]"] = 5, ["[Drum-Shotgun]"] = 5}
 
@@ -33483,6 +32701,8 @@ end
     -- already sends it on every server window, so a pair there only adds a refused call; on a click the second shot comes 0.21 s later on its own.
     local salvo_manual_guns = {["[Revolver]"] = true}
 
+    -- Des Hood's server does not hold the second shot of a pair, it turns it away (measured: every pair came back as one shot, and the pair's wait
+    -- of two cooldowns halved Full Auto and Maximum Fire Rate). The Double Tap row is gone, so the flag is never set and this stays off.
     hide_manager["salvo_extra"] = function(handle, manual)
         if flags["auto_fire_salvo"] ~= true or hide_manager["salvo_busy"] == true or typeof(handle) ~= "Instance" then
             return false
@@ -33573,8 +32793,62 @@ end
     end
 
     -- the gun's own LocalLastShotAt, unless the shot it stamps was dropped by the shot hook
+    -- Des Hood's guns leave no LocalLastShotAt on the tool. Their scripts (GunClient, GunClientShotgun) keep the time of their last shot, tick(), in
+    -- a variable of the Activated handler: the number just before the one that holds the gun's ShootingCooldown. It is read from there and
+    -- turned into the clock this script uses, so readiness (gun_due, Full Auto, Maximum Fire Rate) sees every shot the gun made, a click or a pull.
+    -- nil while the gun has not shot or its handler is not connected yet (looked for again after a second).
+    local shot_handlers = setmetatable({}, {["__mode"] = "k"})
+    local shot_handler_looked = setmetatable({}, {["__mode"] = "k"})
+
+    hide_manager["script_shot_stamp"] = function(tool)
+        local record = shot_handlers[tool]
+
+        if not record and clock() - (shot_handler_looked[tool] or -math["huge"]) >= 1 then
+            shot_handler_looked[tool] = clock()
+
+            local cooldown_value = find_first_child(tool, "ShootingCooldown")
+            local cooldown = cooldown_value and tonumber(cooldown_value["Value"])
+
+            for _, connection in getconnections(tool["Activated"]) do
+                local handler = connection["Function"]
+
+                if cooldown and handler and getinfo(handler)["source"]:find("GunClient") then
+                    for index, upvalue in getupvalues(handler) do
+                        -- (-10000 is what Maximum Fire Rate puts in the cooldown's place)
+                        if index > 1 and type(upvalue) == "number" and (math["abs"](upvalue - cooldown) < 1e-6 or upvalue == -10000) and type(debug["getupvalue"](handler, index - 1)) == "number" then
+                            record = {handler, index - 1}
+                            shot_handlers[tool] = record
+                            break
+                        end
+                    end
+                end
+
+                if record then
+                    break
+                end
+            end
+        end
+
+        if not record then
+            return nil
+        end
+
+        local ok, shot_at = pcall(debug["getupvalue"], record[1], record[2])
+
+        -- 0 until the first shot
+        if not ok or type(shot_at) ~= "number" or shot_at <= 0 then
+            return nil
+        end
+
+        return clock() - (tick() - shot_at)
+    end
+
     hide_manager["last_shot_stamp"] = function(tool)
         local stamp = tool["GetAttribute"](tool, "LocalLastShotAt")
+
+        if stamp == nil then
+            stamp = hide_manager["script_shot_stamp"](tool)
+        end
 
         if stamp ~= nil and stamp == hide_manager["dropped_stamp"][tool] then
             return nil
@@ -36317,17 +35591,7 @@ end
                     end
                 end
 
-                -- Distance Check: the target only has to be in reach of one of the guns in hand with a round in it (the Rifle while the DB cannot reach),
-                -- not of the gun equipped last; the gun choice below then sends the one that can reach.
                 local fire_reach = local_gun
-
-                if fire_reach and flags["auto_equip_distance_check"] == true then
-                    for _, held in local_guns do
-                        if held[2] and held[3] and held[3] > 0 and held[2] > fire_reach then
-                            fire_reach = held[2]
-                        end
-                    end
-                end
 
                 -- the Range Enhancer's 15 studs count as reach too
                 if fire_reach and hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() then
@@ -36414,26 +35678,6 @@ end
                             plan_tool, plan_hold = hide_manager["one_tap_plan"](target, new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
                         end
 
-                        -- Distance Check: the DB cannot reach the target but the Rifle can, so the Rifle goes and the DB waits
-                        local rifle_over_shell = hide_manager["distance_check"](new_local_guns, (ragebot_aim_position - local_server_position)["Magnitude"])
-
-                        if rifle_over_shell then
-                            plan_hold = false
-
-                            if plan_tool and plan_tool["Name"] == "[Double-Barrel SG]" then
-                                plan_tool = nil
-                            end
-
-                            for _, gun in new_local_guns do
-                                local tool = gun[1]["Parent"]
-
-                                if tool and tool["Name"] == "[Rifle]" then
-                                    plan_tool = tool
-                                    break
-                                end
-                            end
-                        end
-
                         table.sort(new_local_guns, function(a, b)
                             local tool_a, tool_b = a[1]["Parent"], b[1]["Parent"]
 
@@ -36468,10 +35712,6 @@ end
                             end
 
                             if plan_hold and tool and tool["Name"] == "[Double-Barrel SG]" then
-                                continue
-                            end
-
-                            if rifle_over_shell and tool and tool["Name"] == "[Double-Barrel SG]" then
                                 continue
                             end
 
@@ -36670,22 +35910,10 @@ end
                                 local Magnitude = dir["Magnitude"]
                                 
                                 local shot_direction = (Magnitude <= 0 or Magnitude ~= Magnitude) and ((handle["Position"])-pos)["Unit"] or dir
-                                local pellets = hide_manager["pellets_of"](handle["Parent"])
-
-                                if pellets > 1 then
-                                    -- A shotgun's shot is a call a pellet, all under the server's time and one spread number (the gun's own script sends
-                                    -- it so). The plain five argument call is taken only until the server's SecurityTolerance is used up, and the gun
-                                    -- is then locked out for the rest of the server.
-                                    hide_manager["spread_count"] = (hide_manager["spread_count"] or 0) + 1
-                                    local stamp = workspace:GetServerTimeNow()
-
-                                    for pellet = 1, pellets do
-                                        event:FireServer("ShootGun", handle, origin, pos, hitbox, shot_direction, stamp, hide_manager["spread_count"], pellet)
-                                    end
-                                else
-                                    for i = 1, ragebot_force_position and 2 or 1 do
-                                        event:FireServer("ShootGun", handle, origin, pos, hitbox, shot_direction)
-                                    end
+                                -- Des Hood takes a shot as one call, a shotgun's pellets inside it (neverlose_des_shot builds it). The shot hook
+                                -- then claims it from where the server has the body, so what is sent here is only the target and the gun.
+                                for i = 1, ragebot_force_position and 2 or 1 do
+                                    event:FireServer(getgenv()["neverlose_des_shot"](handle, origin, pos, hitbox, nil))
                                 end
 
                                 spawn(get_bullet_result, target[2], hitbox, origin, pos, target_velocity, did_defensive)
@@ -37618,7 +36846,7 @@ end
                 elseif follow_target_stop_if_target_knocked and ragebot_target[18] then
                     local_following = false
                     return
-                elseif follow_target_stop_if_no_gun_equipped and not local_gun and not (hide_manager["quick_draw_ready"] and hide_manager["quick_draw_ready"]()) then
+                elseif follow_target_stop_if_no_gun_equipped and not local_gun then
                     local_following = false
                     return
                 elseif hide_manager["healing"] and flags["auto_heal"] == true and flags["auto_heal_stop_following"] == true then
@@ -37795,250 +37023,6 @@ end
         end)
     end
 
-    -- >> ( anti report )
-
-    -- Da Hood handles its in-game reports on the server, and the only report packet a client ever gets is its own reporter history.
-    -- The one thing every client can see (checked with a real "Aim Manipulation" report): the server sets the attribute
-    -- ServerDebounceReporting on the REPORTER's player for exactly 5 s, starting 0.06 s after the report is sent. It names neither the
-    -- target nor the reason, so this reacts to "a report was submitted in this server", not to "a report about me". Nothing is polled:
-    -- one attribute signal per other player, and only while the toggle is on.
-    do
-        local REPORT_ATTRIBUTE = "ServerDebounceReporting"
-        local watchers = {}
-        local player_added_connection = nil
-        local player_removing_connection = nil
-        local triggered = false
-
-        -- Everything that shoots, moves or buys on its own.
-        local shutdown_elements = {
-            "ragebot_enabled", "auto_fire", "auto_fire_bullet_manipulation", "follow_target", "target_strafe", "void_hide_exploit", "void_hide",
-            "target_selection_target_when_shot_at", "auto_equip", "auto_loadout", "auto_ammo", "auto_armor", "auto_mask", "auto_heal", "auto_reload",
-            "auto_stomp", "silent_aim", "silent_aim_bullet_manipulation", "aim_assist", "triggerbot", "rapid_fire", "noclip", "speed"
-        }
-
-        getgenv()["neverlose_safety_shutdown"] = nil
-
-        local safety_shutdown = LPH_NO_VIRTUALIZE(function(reporter_name, fought_them)
-            if triggered then
-                return
-            end
-
-            triggered = true
-
-            -- Checked by the menu's target picking, which would otherwise switch the ragebot, auto fire and follow back on.
-            getgenv()["neverlose_safety_shutdown"] = true
-
-            for i = 1, #shutdown_elements do
-                local element = menu_references[shutdown_elements[i]]
-
-                if element then
-                    -- The flag first, so a callback that reads it while switching its feature off already sees it off.
-                    local flag = element["_flag_name"]
-
-                    if flag then
-                        flags[flag] = false
-                    end
-
-                    if type(element["set_toggle"]) == "function" then
-                        pcall(element["set_toggle"], element, false)
-                    end
-                end
-            end
-
-            -- What the script put into the game itself (the gun module's aim hook, the last target).
-            local teardowns = getgenv()["neverlose_teardowns"]
-
-            if teardowns then
-                for i = #teardowns, 1, -1 do
-                    pcall(teardowns[i])
-                end
-            end
-
-            local message = "anti report: "..tostring(reporter_name).." submitted a report in this server"
-
-            -- Everything is already off at this point, whoever reported. The kick is the part that is limited: with Kick Only If In A Fight
-            -- on it needs a reporter this client has been in a fight with (the game never says who a report is about, so that is a guess).
-            local kick = flags["anti_report_kick"] and (fought_them or not flags["anti_report_fight_only"])
-
-            if kick then
-                new_notification(message..", everything is off", 4)
-
-                pcall(function()
-                    local_player:Kick(message..". The script shut down.")
-                end)
-            elseif flags["anti_report_kick"] then
-                new_notification(message..", everything is off; you have not fought them lately, so no kick", 4)
-            else
-                new_notification(message..", everything is off", 4)
-            end
-        end)
-
-        -- "Only If In A Fight" is a guess, not proof: the report signal never says who the report is about. A reporter counts as someone this client has
-        -- been in a fight with when their health or armor dropped while the game's own LastDamager value (BodyEffects) named this player, or this
-        -- player's dropped while it named them, within the Fight Window. Reports from anyone else are noted and ignored.
-        local fought = {}
-        local fight_connections = {}
-        local previous_health = nil
-        local previous_armor = nil
-
-        local damager_of = function(character)
-            local body = character and find_first_child(character, "BodyEffects")
-            local value = body and find_first_child(body, "LastDamager")
-            local damager = value and value["Value"]
-
-            if typeof(damager) == "Instance" then
-                return damager["Name"]
-            end
-
-            return damager ~= nil and tostring(damager) or nil
-        end
-
-        -- Read a moment after the drop, so the damager has arrived with it.
-        local note_hit_on = function(data)
-            local player = data[2]
-
-            delay(0.1, function()
-                if player and player["Parent"] and damager_of(data[3]) == local_player["Name"] then
-                    fought[player] = clock()
-                end
-            end)
-        end
-
-        local note_hit_on_me = function()
-            delay(0.1, function()
-                local name = damager_of(local_character)
-                local attacker = name and players_service:FindFirstChild(name)
-
-                if attacker and attacker ~= local_player then
-                    fought[attacker] = clock()
-                end
-            end)
-        end
-
-        local start_tracking_fights = function()
-            -- Where this client's own health and armor stand now, so the first drop after switching on is seen as one.
-            local humanoid = local_parts["Humanoid"]
-
-            previous_health = humanoid and humanoid["Health"] or nil
-            previous_armor = local_armor
-
-            fight_connections[#fight_connections+1] = create_connection(signals["on_player_health_changed"], function(data, health, delta)
-                if delta and delta > 0 then
-                    note_hit_on(data)
-                end
-            end)
-
-            fight_connections[#fight_connections+1] = create_connection(signals["on_player_armor_changed"], function(data, armor, delta)
-                if delta and delta > 0 then
-                    note_hit_on(data)
-                end
-            end)
-
-            fight_connections[#fight_connections+1] = create_connection(signals["on_local_health_changed"], function(health)
-                if previous_health and health < previous_health then
-                    note_hit_on_me()
-                end
-
-                previous_health = health
-            end)
-
-            fight_connections[#fight_connections+1] = create_connection(signals["on_local_armor_changed"], function(armor)
-                if previous_armor and armor < previous_armor then
-                    note_hit_on_me()
-                end
-
-                previous_armor = armor
-            end)
-        end
-
-        local in_a_fight_with = function(player)
-            local when = fought[player]
-
-            return when ~= nil and clock() - when <= (flags["anti_report_fight_window"] or 180)
-        end
-
-        local watch_player = LPH_NO_VIRTUALIZE(function(player)
-            if player == local_player or watchers[player] then
-                return
-            end
-
-            watchers[player] = player:GetAttributeChangedSignal(REPORT_ATTRIBUTE):Connect(function()
-                -- Only the attribute turning on counts: it turning off 5 s later, or a copy that was already on when this was switched on, is not a report.
-                if flags["anti_report"] and not triggered and player["Parent"] and player:GetAttribute(REPORT_ATTRIBUTE) == true then
-                    safety_shutdown(player["Name"], in_a_fight_with(player))
-                end
-            end)
-        end)
-
-        local stop_watching = function()
-            for player, connection in watchers do
-                connection:Disconnect()
-                watchers[player] = nil
-            end
-
-            for i = #fight_connections, 1, -1 do
-                fight_connections[i]:Disconnect()
-                fight_connections[i] = nil
-            end
-
-            fought = {}
-            previous_health = nil
-            previous_armor = nil
-
-            if player_added_connection then
-                player_added_connection:Disconnect()
-                player_added_connection = nil
-            end
-
-            if player_removing_connection then
-                player_removing_connection:Disconnect()
-                player_removing_connection = nil
-            end
-        end
-
-        create_connection(menu_references["anti_report"]["on_toggle_change"], function(value)
-            stop_watching()
-
-            -- Switching it off and on again arms it afresh.
-            triggered = false
-            getgenv()["neverlose_safety_shutdown"] = nil
-
-            if value then
-                start_tracking_fights()
-
-                for _, player in players_service:GetPlayers() do
-                    watch_player(player)
-                end
-
-                player_added_connection = players_service["PlayerAdded"]:Connect(watch_player)
-                player_removing_connection = players_service["PlayerRemoving"]:Connect(function(player)
-                    local connection = watchers[player]
-
-                    if connection then
-                        connection:Disconnect()
-                        watchers[player] = nil
-                    end
-                end)
-            end
-        end)
-
-        local teardowns = getgenv()["neverlose_teardowns"]
-
-        if teardowns then
-            teardowns[#teardowns+1] = stop_watching
-        end
-
-        -- Read-only snapshot for testing: how many players are being watched and whether it has fired.
-        hide_manager["anti_report_state"] = function()
-            local count = 0
-
-            for _ in watchers do
-                count = count + 1
-            end
-
-            return {["watching"] = count, ["triggered"] = triggered, ["armed"] = flags["anti_report"] == true}
-        end
-    end
 
     -- >> ( target strafe )
 
@@ -38166,60 +37150,6 @@ end
         spawn(watch_character, local_player["Character"])
     end
 
-    -- >> ( a/d )
-
-    -- A/D (Rage tab, off by default): for as long as the ragebot has a target the character taps A and D back and forth, every Interval seconds, in
-    -- the void and out of it (the steps that hide the character put the body back where it was at the start of each frame, so the walking goes on
-    -- underneath them).
-    do
-        local virtual_input_manager = cloneref(game:GetService("VirtualInputManager"))
-        local send_key_event = virtual_input_manager["SendKeyEvent"]
-        local key_a = Enum["KeyCode"]["A"]
-        local key_d = Enum["KeyCode"]["D"]
-        local held_key = nil
-        local last_switch = 0
-
-        -- Lets go of whatever is held, then holds the new key; nil just lets go.
-        local press_key = LPH_NO_VIRTUALIZE(function(key)
-            if held_key == key then
-                return
-            end
-
-            if held_key then
-                pcall(send_key_event, virtual_input_manager, false, held_key, false, game)
-            end
-
-            if key then
-                pcall(send_key_event, virtual_input_manager, true, key, false, game)
-            end
-
-            held_key = key
-        end)
-
-        local do_target_strafe = LPH_NO_VIRTUALIZE(function(dt, hrp)
-            -- A/D off, no target (or the ragebot is off, or the Anti Report shutdown ran), a knocked character, or the player typing in chat: let go.
-            if flags["ad_strafe"] ~= true or not (flags["ragebot"] and ragebot_target and hrp) or local_knocked or getgenv()["neverlose_safety_shutdown"] or (getgenv()["neverlose_is_typing"] and getgenv()["neverlose_is_typing"]()) then
-                press_key(nil)
-                return
-            end
-
-            local tick = clock()
-
-            if held_key == nil or tick - last_switch >= (tonumber(flags["ad_strafe_interval"]) or 0.22) then
-                last_switch = tick
-                press_key(held_key == key_a and key_d or key_a)
-            end
-        end)
-
-        heartbeat[#heartbeat+1] = do_target_strafe
-
-        -- Unloading disconnects everything in connections, so a held key goes up with them.
-        connections[#connections+1] = {
-            Disconnect = function()
-                press_key(nil)
-            end
-        }
-    end
 
 
     -- >> ( rapid fire ) -- the menu's Maximum Fire Rate
@@ -38256,7 +37186,9 @@ end
             local cooldown = find_first_child(tool, "ShootingCooldown")
             local wait_time = cooldown and tonumber(cooldown["Value"]) or 0
             local last = math.max((hide_manager["last_shot_stamp"] and hide_manager["last_shot_stamp"](tool)) or -math.huge, hide_manager["gun_fired_at"] and hide_manager["gun_fired_at"][tool] or -math.huge)
-            local margin = tool:GetAttribute("SecurityTolerance") ~= nil and 0.0095 or 0.0015
+            -- A policed gun's own script waits its cooldown + 0.0095 + 0.05 (the 0.05 is its margin for the trip): asking sooner only gets the pull turned
+            -- away by the script, and it never sends early.
+            local margin = tool:GetAttribute("SecurityTolerance") ~= nil and 0.0595 or 0.0015
 
             -- Double Tap: the server fires the held half of a pair one cooldown after the first, so the next shot waits a second cooldown (sent
             -- earlier it lands on the held one and is refused)
@@ -38297,15 +37229,23 @@ end
                 return
             end
 
+            -- The guns the server polices (a SecurityTolerance on the tool: the shotguns) keep their script's own wait. It is the server's cooldown with
+            -- a margin for the trip, and a call that arrives early is counted against the tolerance (past it the gun is locked for the server).
+            -- Held and Full Auto shots still go out the moment that wait is over (gun_due).
+            if tool["GetAttribute"](tool, "SecurityTolerance") ~= nil then
+                return
+            end
+
             local cooldown_value = find_first_child(tool, "ShootingCooldown")
             local gun_cooldown = cooldown_value and tonumber(cooldown_value["Value"]) or nil
             local constants = getconstants(old)
             local record = {}
             local index = nil
 
-            -- The number closest to the gun's own cooldown (within a quarter of a second), otherwise the first number in the script.
+            -- The number that is the gun's own cooldown, exactly. Nothing else is touched: Des Hood's gun scripts keep only colour numbers among
+            -- their constants, and the number "closest to the cooldown" used to be one of those.
             if gun_cooldown then
-                local best_gap = 0.25
+                local best_gap = 1e-6
 
                 for i, constant in constants do
                     if type(constant) == "number" and constant ~= -10000 and constant ~= 0.05 then
@@ -38319,27 +37259,18 @@ end
                 end
             end
 
-            if not index then
-                for i, constant in constants do
-                    if type(constant) == "number" and constant ~= -10000 and constant ~= 0.05 then
-                        index = i
-                        break
-                    end
-                end
-            end
-
             if index then
                 record["constant"] = {index, constants[index]}
                 setconstant(old, index, patched_value(constants[index]))
             end
 
-            -- The upvalue by the same rule: the number closest to the gun's own cooldown (within a quarter of a second), otherwise the first small
-            -- number, so a spread, recoil or burst number the script keeps before the cooldown is not overwritten.
+            -- The upvalue by the same rule: the number that is the gun's cooldown (Des Hood's scripts read ShootingCooldown into one when they start),
+            -- so the number before it, the time of the last shot, a damage or a spread number is never overwritten.
             local upvalues = getupvalues(old)
             local upvalue_index = nil
 
             if gun_cooldown then
-                local best_gap = 0.25
+                local best_gap = 1e-6
 
                 for i, upvalue in upvalues do
                     if type(upvalue) == "number" and upvalue ~= 0 and upvalue ~= 0.05 and upvalue < 10 then
@@ -38349,15 +37280,6 @@ end
                             best_gap = gap
                             upvalue_index = i
                         end
-                    end
-                end
-            end
-
-            if not upvalue_index then
-                for i, upvalue in upvalues do
-                    if type(upvalue) == "number" and upvalue ~= 0 and upvalue ~= 0.05 and upvalue < 10 then
-                        upvalue_index = i
-                        break
                     end
                 end
             end
@@ -39201,111 +38123,6 @@ end
         end
     end
 
-    -- >> ( anti taser )
-
-    do
-        local connection = nil
-        local connections = {}
-        local taser_dodging = false
-        local rad = math["rad"]
-        local cframe_angles = CFrame["Angles"]
-
-        local do_anti_taser = function(data, tool)
-            local connection = connections[data]
-
-            if connection then
-                connection["Disconnect"](connection)
-                connections[data] = nil
-            end
-
-            if tool and tool["Name"] == "[Taser]" then
-                local handle = wait_for_child(tool, "Handle", 5)
-
-                if not handle then
-                    return
-                end
-
-                local beam = wait_for_child(handle, "TazerBeam", 5)
-
-                if not beam then
-                    return
-                end
-
-                connections[data] = beam["GetPropertyChangedSignal"](beam, "Attachment1"):Connect(function()
-                    local part = beam["Attachment1"]
-
-                    if local_character and part and part["IsDescendantOf"](part, local_character) and not local_knocked then
-                        local hrp = local_parts["HumanoidRootPart"]
-
-                        if not hrp then
-                            return
-                        end
-
-                        -- Several beam changes in a row would stack several dodge steps on the same character.
-                        if taser_dodging then
-                            return
-                        end
-
-                        taser_dodging = true
-
-                        wait(local_ping/1000)
-
-                        local start = clock()
-
-                        local new_function = function(dt)
-                            -- The character can be replaced during the dodge: always the current one, never the one the beam was on.
-                            local hrp = local_parts["HumanoidRootPart"]
-
-                            if hrp and hrp["Parent"] and not in_void and not stomping then
-                                local old = local_client_position
-                                hrp["CFrame"] = cframe_new(vector3_new(math_random(-100000, 100000), math_random(-400, 100000), math_random(-100000, 100000)))
-                                render_stepped_wait(render_stepped)
-                                hrp["CFrame"] = old
-                            end
-                        end
-                        
-                        anti_aim[#anti_aim+1] = new_function
-
-                        wait(0.6)
-
-                        for i = 1, #anti_aim do
-                            if anti_aim[i] == new_function then
-                                remove(anti_aim, i)
-                                break
-                            end
-                        end
-
-                        taser_dodging = false
-                    end
-                end)
-            end
-        end
-
-        create_connection(menu_references["anti_taser"]["on_toggle_change"], function(value)
-            if connection then
-                connection:Disconnect()
-                connection = nil
-            end
-
-            for data, connnection in connections do
-                connnection:Disconnect()
-                connections[data] = nil
-            end
-
-            if value then
-                connection = create_connection(signals["on_player_tool_equipped"], do_anti_taser)
-
-                -- A taser that is already in someone's hand fires no equip signal: watch those too.
-                for _, held_data in player_data do
-                    local held_tool = held_data[13]
-
-                    if held_tool and held_tool["Name"] == "[Taser]" then
-                        spawn(do_anti_taser, held_data, held_tool)
-                    end
-                end
-            end
-        end)
-    end
 
     -- >> ( auto armor )
 
@@ -39858,212 +38675,7 @@ end
         end)
     end
 
-    -- >> ( auto loadout )
 
-    do
-        local auto_loadout_connection2 = nil
-        local auto_loadout_connection = nil
-        local auto_loadout_guns = {"rifle"}
-
-        -- Every gun the character owns, wherever it is: the bag, the hand (read from the character itself, not from the script's own list of
-        -- what it has seen equipped, which misses anything already in the hand when the script started), and the script's list.
-        local owned_tools = function()
-            local children = get_children(local_player["Backpack"])
-            local character = local_player["Character"]
-
-            if character then
-                for _, held in get_children(character) do
-                    if held["ClassName"] == "Tool" then
-                        children[#children+1] = held
-                    end
-                end
-            end
-
-            children[#children+1] = local_tool
-
-            for gun, data in local_guns do
-                local parent = gun["Parent"]
-                if parent then
-                    children[#children+1] = parent
-                end
-            end
-
-            return children
-        end
-
-        local run_auto_loadout = LPH_JIT_MAX(function()
-            local old_hrp = local_parts["HumanoidRootPart"]
-
-            if not old_hrp or local_cash < 10000 or (purchasing and purchasing[6]:find("armor")) then
-                return
-            end
-
-            local children = owned_tools()
-
-            local purchase = {}
-
-            for i = 1, #auto_loadout_guns do
-                local weapon = auto_loadout_guns[i]
-
-                for i = 1, #children do
-                    if string.find(children[i]["Name"]:lower(), weapon.."]", 1, true) then
-                        weapon = nil
-                        break
-                    end
-                end
-
-                if weapon then
-                    purchase[#purchase+1] = weapon
-                end
-            end
-
-            for i = 1, #purchase do
-                local gun = purchase[i]
-                local tool = nil
-
-                -- Not sold here: there is nothing to wait for (purchase_item returns without a word for an item it doesn't know).
-                if shops[gun] == nil then
-                    continue
-                end
-
-                purchase_item(gun)
-
-                -- The wait ended only on success, death or the toggle: a refused purchase kept the run (and every gun after this one) waiting for ever.
-                local give_up_at = clock() + 30
-
-                while old_hrp == local_parts["HumanoidRootPart"] and flags["auto_loadout"] and clock() < give_up_at do
-                    local children = owned_tools()
-
-                    for i = 1, #children do
-                        local child = children[i]
-                        if string.find(child["Name"]:lower(), gun.."]", 1, true) then
-                            tool = child
-                            break
-                        end
-                    end
-
-                    if tool then
-                        break
-                    end
-
-                    if not purchasing then
-                        purchase_item(gun)
-                    end
-                    wait(0.05)
-                end
-                if tool then
-                    local ammo = wait_for_child(tool, "Ammo", 1)
-
-                    if ammo then
-                        if old_hrp ~= local_parts["HumanoidRootPart"] or not flags["auto_loadout"] then
-                            break
-                        end
-                        purchase_item(gun.." ammo", flags["auto_loadout_ammo"])
-                        repeat wait(0.05) until not purchasing or old_hrp ~= local_parts["HumanoidRootPart"] or not flags["auto_loadout"]
-                    end
-                end
-            end
-        end)
-
-        -- One run at a time, and none once the toggle is off. Every armor change started another run that bought the missing gun again
-        -- (and again, for as long as the armor kept changing), whatever the toggle said: the check was only inside the wait loop.
-        local auto_loadout_running = false
-
-        local do_auto_loadout = function()
-            if auto_loadout_running or not flags["auto_loadout"] then
-                return
-            end
-
-            auto_loadout_running = true
-
-            local ok, err = pcall(run_auto_loadout)
-
-            auto_loadout_running = false
-
-            if not ok then
-                warn("[Visions hook] auto loadout: "..tostring(err))
-            end
-        end
-
-        create_connection(menu_references["auto_loadout"]["on_toggle_change"], function(value)
-            if auto_loadout_connection then
-                auto_loadout_connection:Disconnect()
-                auto_loadout_connection = nil
-            end
-
-            if auto_loadout_connection2 then
-                auto_loadout_connection2:Disconnect()
-                auto_loadout_connection2 = nil
-            end
-
-            if value then
-                do_auto_loadout()
-                auto_loadout_connection = create_connection(signals["on_local_character_loaded"], do_auto_loadout)
-                auto_loadout_connection2 = create_connection(signals["on_local_armor_changed"], do_auto_loadout)
-            end
-        end)
-
-        create_connection(menu_references["auto_loadout_guns"]["on_dropdown_change"], function(value)
-            auto_loadout_guns = value
-
-            if auto_loadout_connection then
-                do_auto_loadout()
-            end
-        end)
-    end
-
-    -- >> ( auto ammo )
-
-    do
-        local disable_when_target_alive = false
-
-        local minimum_clips = flags["auto_ammo_minimum_clips"]+1
-
-        local do_auto_ammo = LPH_JIT_MAX(function(dt, hrp)
-            if (disable_when_target_alive and ((ragebot_target and not ragebot_target[7]) or nil)) or purchasing or local_reloading or not hrp then
-                return
-            end
-
-            for gun, data in local_guns do
-                local gun = gun["Parent"]
-                -- A tool that just left the character, or one without an inventory entry or MaxAmmo, is skipped instead of erroring.
-                local record = gun and inventory and find_first_child(inventory, gun["Name"])
-                local max_ammo = gun and find_first_child(gun, "MaxAmmo")
-                local remainder = record and max_ammo and max_ammo["Value"] > 0 and minimum_clips - floor((tonumber(record["Value"]) or 0)/max_ammo["Value"]) or -1
-
-                if remainder >= 0 then
-                    purchase_item(gun["Name"]:sub(2, -2):lower().." ammo", flags["auto_ammo_purchase_amount"])
-                end
-            end
-        end)
-
-        create_connection(menu_references["auto_ammo"]["on_toggle_change"], function(value)
-            for i = 1, #heartbeat do
-                if heartbeat[i] == do_auto_ammo then
-                    remove(heartbeat, i)
-                    break
-                end
-            end
-
-            if value then
-                heartbeat[#heartbeat+1] = do_auto_ammo
-            end
-        end)
-
-        create_connection(menu_references["auto_ammo_disable_when"]["on_dropdown_change"], function(value)
-            disable_when_target_alive = false
-            for i = 1, #value do
-                local value = value[i]
-                if value == "target alive" then
-                    disable_when_target_alive = true
-                end
-            end
-        end)
-        
-        create_connection(menu_references["auto_ammo_minimum_clips"]["on_slider_change"], function(value)
-            minimum_clips = value+1
-        end)
-    end
 
     -- >> ( auto stomp )
 
@@ -40853,10 +39465,6 @@ end
                     end
                     -- Prioritize DB: the Double-Barrel comes out whether or not it is in the list
                     if not is_gun and name == "[Double-Barrel SG]" and flags["auto_equip_prioritize_db"] == true then
-                        is_gun = true
-                    end
-                    -- Distance Check: the Rifle comes out while the target is past the DB's range (it goes back once the check is off again)
-                    if not is_gun and name == "[Rifle]" and hide_manager["distance_check_active"] == true then
                         is_gun = true
                     end
                     if is_gun then
@@ -41772,9 +40380,6 @@ local get_silent_aim_position = nil
         menu_references["reduce_shotgun_spread_amount"] = menu_references["reduce_shotgun_spread_settings"]:create_element({["name"] = "reduce amount"}, {["slider"] = {["flag"] = "reduce_shotgun_spread_amount", ["min"] = 0, ["max"] = 100, ["default"] = 100, ["decimals"] = 0, ["suffix"] = "%", ["min_text"] = "none", ["max_text"] = "all"}})
         menu_references["remove_recoil"] = menu_references["legitbot_other_section"]:create_element({["name"] = "remove recoil"}, {["toggle"] = {["flag"] = "remove_recoil"}})
         menu_references["range_enhancer"] = menu_references["legitbot_other_section"]:create_element({["name"] = "range enhancer"}, {["toggle"] = {["flag"] = "range_enhancer"}})
-        menu_references["quick_draw"] = menu_references["legitbot_other_section"]:create_element({["name"] = "quick draw"}, {["toggle"] = {["flag"] = "quick_draw"}})
-        menu_references["quick_draw_settings"] = menu_references["quick_draw"]:create_settings()
-        menu_references["quick_draw_guns"] = menu_references["quick_draw_settings"]:create_element({["name"] = "guns"}, {["dropdown"] = {["flag"] = "quick_draw_guns", ["default"] = {"revolver", "double-barrel sg", "tacticalshotgun"}, ["options"] = {"double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["ragebot_lead_fast"] = menu_references["legitbot_other_section"]:create_element({["name"] = "lead fast targets"}, {["toggle"] = {["flag"] = "ragebot_lead_fast", ["default"] = true}})
 
     -- >> ( legitbot master )
@@ -43513,182 +42118,6 @@ do
         end
     end
 
-    -- Whether Quick Draw would take a gun out once the target is in reach (it is on, Auto Equip is off, and a loaded gun it may take out is in the
-    -- backpack). Follow Target's Stop If "no gun equipped" asks it: with a knife in hand the follow used to wait for a gun and Quick Draw for the
-    -- target to come in reach, so neither ever started (with Spam on its windows went to the target anyway, which is why turning Spam off stopped
-    -- the follow).
-    hide_manager["quick_draw_ready"] = function()
-        if flags["quick_draw"] ~= true or flags["auto_equip"] then
-            return false
-        end
-
-        local backpack = find_first_child_of_class(local_player, "Backpack")
-
-        if not backpack then
-            return false
-        end
-
-        local allowed = nil
-
-        if type(flags["quick_draw_guns"]) == "table" and #flags["quick_draw_guns"] > 0 then
-            allowed = {}
-
-            for _, name in flags["quick_draw_guns"] do
-                allowed[string.lower(tostring(name))] = true
-            end
-        end
-
-        for _, tool in get_children(backpack) do
-            local ammo = find_first_child(tool, "Ammo")
-
-            if find_first_child(tool, "Range") and ammo and ammo["Value"] > 0 and (not allowed or allowed[string.lower(string.sub(tool["Name"], 2, -2))]) then
-                return true
-            end
-        end
-
-        return false
-    end
-
-    -- >> ( quick draw )
-    -- With a melee or nothing in hand (and Auto Equip off), the gun that reaches the ragebot's target is taken out as it comes in reach: the shortest
-    -- ranged one with a round in it that still reaches (the DB close, the Rifle far; 15 studs more with the Range Enhancer). Once the target has been
-    -- out of reach (or gone) for a second, what was in hand goes back. A gun taken out by the player is left alone. Checked 10 times a second.
-    do
-        local last_check = 0
-        local drawn = nil -- {gun = taken out, back = what was in hand, seen = last time the target was in its reach}
-
-        create_connection(run_service["Heartbeat"], function()
-            if flags["quick_draw"] ~= true or flags["auto_equip"] then
-                drawn = nil
-                return
-            end
-
-            -- A purchase owns the hands while it runs (it put the guns in the bag on purpose), and so does Auto Heal while it eats: a gun drawn
-            -- now made the features fight over the hand.
-            if purchasing or hide_manager["healing"] then
-                return
-            end
-
-            local now = clock()
-
-            if now - last_check < 0.1 then
-                return
-            end
-
-            last_check = now
-
-            local character = local_character
-            local humanoid = character and find_first_child_of_class(character, "Humanoid")
-            local root = character and find_first_child(character, "HumanoidRootPart")
-            local backpack = find_first_child_of_class(local_player, "Backpack")
-
-            if not humanoid or not root or not backpack or humanoid["Health"] <= 0 or local_knocked then
-                drawn = nil
-                return
-            end
-
-            local held = find_first_child_of_class(character, "Tool")
-
-            -- The mask Auto Mask has out is its own until it is worn.
-            if held and held["Name"] == "[Mask]" and flags["auto_mask"] == true then
-                return
-            end
-
-            local held_range = held and find_first_child(held, "Range")
-            local held_gun = held_range and find_first_child(held, "Ammo") and true or false
-            local extra = flags["range_enhancer"] == true and 15 or 0
-
-            local target = flags["ragebot"] and ragebot_target or nil
-            local target_root = target and not target[7] and not target[18] and target[4] and target[4]["HumanoidRootPart"]
-            -- Measured the way Auto Fire measures its reach: from where the shot starts (hide_manager.shot_origin, moved ahead when closing in fast)
-            -- to the aim position, so the gun comes out by the time Auto Fire would shoot with it, Pre Fire's margin included (pre_fire_margin).
-            local aim_at = target_root and (ragebot_aim_position or target_root["Position"])
-            local from = root["Position"]
-
-            if aim_at and hide_manager["shot_origin"] and not local_following then
-                from = hide_manager["shot_origin"]() or from
-
-                if hide_manager["advance_origin"] then
-                    from = hide_manager["advance_origin"](from, aim_at)
-                end
-            end
-
-            local distance = aim_at and (aim_at - from)["Magnitude"] or nil
-            local reach_of = function(tool, range_value)
-                return range_value + extra + (hide_manager["pre_fire_margin"] and hide_manager["pre_fire_margin"](from, aim_at, tool) or 0)
-            end
-
-            if distance and distance == distance then
-                -- the gun already out still reaches: kept (an empty one too, so it can be reloaded, unless another loaded gun reaches)
-                local keep = held_gun and drawn and drawn.gun == held and distance <= reach_of(held, held_range["Value"])
-
-                if keep then
-                    drawn.seen = now
-
-                    if held["Ammo"]["Value"] > 0 then
-                        return
-                    end
-                end
-
-                -- the player took a gun out themselves
-                if held_gun and not drawn then
-                    return
-                end
-
-                local best, best_range = nil, nil
-
-                -- the guns ticked in Quick Draw's Guns (by the menu's names: "[Double-Barrel SG]" is "double-barrel sg"); none ticked: any gun
-                local allowed = nil
-
-                if type(flags["quick_draw_guns"]) == "table" and #flags["quick_draw_guns"] > 0 then
-                    allowed = {}
-
-                    for _, name in flags["quick_draw_guns"] do
-                        allowed[string.lower(tostring(name))] = true
-                    end
-                end
-
-                for _, tool in get_children(backpack) do
-                    local range = find_first_child(tool, "Range")
-                    local ammo = find_first_child(tool, "Ammo")
-
-                    if allowed and not allowed[string.lower(string.sub(tool["Name"], 2, -2))] then
-                        range = nil
-                    end
-
-                    if range and ammo and ammo["Value"] > 0 and distance <= reach_of(tool, range["Value"]) and (not best_range or range["Value"] < best_range) then
-                        best, best_range = tool, range["Value"]
-                    end
-                end
-
-                if best then
-                    if not drawn then
-                        drawn = {back = held}
-                    end
-
-                    drawn.gun = best
-                    drawn.seen = now
-                    pcall(humanoid["EquipTool"], humanoid, best)
-                    return
-                end
-
-                if keep then
-                    return
-                end
-            end
-
-            if drawn and now - (drawn.seen or 0) > 1 then
-                local back = drawn.back
-                drawn = nil
-
-                if back and back["Parent"] == backpack then
-                    pcall(humanoid["EquipTool"], humanoid, back)
-                else
-                    pcall(humanoid["UnequipTools"], humanoid)
-                end
-            end
-        end)
-    end
 
     -- The ragebot's target is in the void and its spot there has jumped in the last half second (do_ragebot marks it).
     hide_manager["is_void_jittering"] = function(target, position)
