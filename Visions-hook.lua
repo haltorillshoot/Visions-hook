@@ -18185,7 +18185,46 @@ do
                     if ragebot_aim_position and ragebot_target then
                         local handle = args[2]
 
-                        local pos = ragebot_aim_position + vector3_new(math_random(101,105)/100,0.008,-0.008)
+                        -- The claim is the middle of the head, nudged by a few hundredths of a stud so no two claims are the same. It used to add
+                        -- 1.01 to 1.05 studs along the world X axis: every shot was claimed beside the head (watched from the target's side: the
+                        -- tracers ended at its side or neck and the blood came off to one side).
+                        local center_nudge = vector3_new((math_random() - 0.5)*0.1, (math_random() - 0.5)*0.1, (math_random() - 0.5)*0.1)
+                        local pos = ragebot_aim_position + center_nudge
+
+                        -- Lead spread: no one lead is right against a target that keeps turning (watched: 23 sends with 36 to 52 studs of lead at a
+                        -- flier diving in and out, none taken, while the server forgives about 25 studs). The fake bullets each claim a different
+                        -- share of the lead in turn, so within the 0.2 s a gun waits one of them sits where the server has the target; a refused one
+                        -- costs nothing, and one that comes during the gun's cooldown is held and fired by the server without a second check.
+                        local aim_seen, aim_lead_vector = hide_manager["aim_seen"], hide_manager["aim_lead_vector"]
+
+                        if aim_seen and aim_lead_vector then
+                            local scales = hide_manager["lead_scales"]
+
+                            if not scales then
+                                scales = {1, 0.5, 0, 1.4, 0.75, 0.25}
+                                hide_manager["lead_scales"] = scales
+                            end
+
+                            -- A shotgun gets no fake bullets (every refused call counts against its SecurityTolerance), and its five pellet calls are
+                            -- one shot: all of them take half the lead, the one claim within the 25 studs the server forgives of both ends of a lead
+                            -- up to 50 studs (cycling them spread one shot's pellets out along the lead, and they were refused).
+                            -- (dot calls only: a method call before old_namecall replaces the namecall method and the shot is never sent)
+                            local spread_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+                            local spread_name = spread_tool and spread_tool["Name"]
+                            local scale
+
+                            if spread_tool and (spread_tool["GetAttribute"](spread_tool, "SecurityTolerance") ~= nil or spread_name == "[Double-Barrel SG]" or spread_name == "[Shotgun]"
+                                or spread_name == "[TacticalShotgun]" or spread_name == "[Drum-Shotgun]") then
+                                scale = 0.5
+                            else
+                                local step = (hide_manager["lead_step"] or 0) % #scales + 1
+                                hide_manager["lead_step"] = step
+                                scale = scales[step]
+                            end
+
+                            hide_manager["lead_scale_used"] = scale
+                            pos = aim_seen + aim_lead_vector*scale + center_nudge
+                        end
                         -- claimed from where the server most likely has the body (Origin Lag, getgenv().neverlose_origin_lag, seconds; 0 = where it is now)
                         local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](getgenv()["neverlose_origin_lag"] or 0.09)
                         local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
@@ -36035,6 +36074,14 @@ end
                 if custom_ragebot_aim_position then
                     ragebot_aim_position = custom_ragebot_aim_position
                     custom_ragebot_aim_position = nil
+                end
+
+                -- The shot hook spreads its claims along the lead (hide_manager.lead_scale): only while the aim is still the target plus its lead
+                -- (not a resolved spot, a forced or a custom position) and the lead is long enough for it to matter.
+                if ragebot_aim_position == hitbox_position + lead and lead["Magnitude"] > 8 then
+                    hide_manager["aim_seen"], hide_manager["aim_lead_vector"] = hitbox_position, lead
+                else
+                    hide_manager["aim_seen"], hide_manager["aim_lead_vector"] = nil, nil
                 end
 
                 -- Nothing real sits past this: an aim position that is not a number or that far out means the tracking has run away.
