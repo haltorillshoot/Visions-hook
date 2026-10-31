@@ -664,9 +664,7 @@ LPH_JIT_MAX(function()
     end)
 end)()
 
--- > ( bypass: void + anti afk )
--- ported from based hub. the engine deletes anything that falls under FallenPartsDestroyHeight and
--- NaN switches that check off, so a fall into nothing is put back on the last ground stood on.
+-- > ( bypass: anti afk )
 -- the idle kick is answered the way a player touching the mouse would
 
 LPH_JIT_MAX(function()
@@ -676,46 +674,15 @@ LPH_JIT_MAX(function()
         pcall(previous)
     end
 
-    local player_service = cloneref(game:GetService("Players"))
-    local run_service = cloneref(game:GetService("RunService"))
     local virtual_user = cloneref(game:GetService("VirtualUser"))
     local input_service = cloneref(game:GetService("UserInputService"))
-    local player = player_service.LocalPlayer
+    local player = cloneref(game:GetService("Players")).LocalPlayer
 
-    local VOID_RESCUE = true -- false keeps the NaN height but never moves the character
     local AFK_QUIET = 600 -- seconds without input before an answer is given unasked, the engine kicks at 1200
-    local FALL_DROP = 150 -- studs fallen with nothing underneath before it counts as the void
-    local FALL_SEE = 15000 -- how far down a ray looks for ground
-    local HIDE_RANGE = 1e5 -- further out than this is a void hide teleport, not a fall
-    local SPOT_SETTLE = 0.4 -- seconds stood on ground before it is kept
-    local SPOT_APART = 10 -- studs between two kept spots
-    local SPOT_KEEP = 8
-    local nan = 0 / 0
 
     local stopped = false
-    local game_height = nil
     local last_input, last_answer = os.clock(), 0
-    local stood_since, fall_top, last_rescue = nil, nil, 0
-    local spots = {}
     local connections = {}
-
-    local ray_params = RaycastParams.new()
-    ray_params.FilterType = Enum.RaycastFilterType.Exclude
-    ray_params.RespectCanCollide = true
-
-    -- the game's own height is kept so it can be handed back
-    local function apply_void()
-        if stopped then
-            return
-        end
-
-        local height = workspace.FallenPartsDestroyHeight
-
-        if height == height then
-            game_height = height
-            workspace.FallenPartsDestroyHeight = nan
-        end
-    end
 
     local function answer_idle()
         last_answer = os.clock()
@@ -726,134 +693,10 @@ LPH_JIT_MAX(function()
         end)
     end
 
-    local function ground_below(position, reach, character)
-        ray_params.FilterDescendantsInstances = {character}
-
-        return workspace:Raycast(position, Vector3.new(0, -reach, 0), ray_params)
-    end
-
-    -- ground the body has stood on for a moment that is part of the map, not something loose or carried
-    local function remember(character, humanoid, root, now)
-        stood_since = stood_since or now
-
-        if now - stood_since < SPOT_SETTLE then
-            return
-        end
-
-        local hit = ground_below(root.Position, humanoid.HipHeight + root.Size.Y + 6, character)
-
-        if not hit or not hit.Instance.Anchored then
-            return
-        end
-
-        local newest = spots[#spots]
-
-        if newest and (newest.Position - root.Position).Magnitude < SPOT_APART then
-            spots[#spots] = root.CFrame
-        else
-            table.insert(spots, root.CFrame)
-
-            if #spots > SPOT_KEEP then
-                table.remove(spots, 1)
-            end
-        end
-    end
-
-    local function rescue(character, root, now)
-        -- back in the void this soon after the last time, that spot was no good so the one before is used
-        if now - last_rescue < 4 and #spots > 1 then
-            table.remove(spots)
-        end
-
-        while #spots > 0 do
-            local spot = spots[#spots]
-
-            if ground_below(spot.Position + Vector3.new(0, 2, 0), 14, character) then
-                root.CFrame = spot + Vector3.new(0, 0.5, 0)
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-
-                last_rescue, fall_top = now, nil
-                getgenv().neverlose_rescued_at = now
-
-                return
-            end
-
-            -- the ground there has gone
-            table.remove(spots)
-        end
-    end
-
-    local function look(now)
-        local character = player.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-
-        if not humanoid or not root or humanoid.Health <= 0 then
-            stood_since, fall_top = nil, nil
-            return
-        end
-
-        local position = root.Position
-
-        -- void hide parks the body millions of studs away for a frame, that is not a fall
-        if math.max(math.abs(position.X), math.abs(position.Y), math.abs(position.Z)) > HIDE_RANGE then
-            return
-        end
-
-        local state = humanoid:GetState()
-
-        if humanoid.SeatPart or state == Enum.HumanoidStateType.Swimming or state == Enum.HumanoidStateType.Climbing then
-            stood_since, fall_top = nil, nil
-            return
-        end
-
-        if humanoid.FloorMaterial ~= Enum.Material.Air and state ~= Enum.HumanoidStateType.Freefall then
-            fall_top = nil
-            remember(character, humanoid, root, now)
-            return
-        end
-
-        stood_since = nil
-        fall_top = math.max(fall_top or position.Y, position.Y)
-
-        -- under where the game itself would have ended it
-        local caught = game_height ~= nil and position.Y < game_height
-
-        if not caught and root.AssemblyLinearVelocity.Y < -4 and fall_top - position.Y > 30 then
-            if not ground_below(position, FALL_SEE, character) then
-                caught = fall_top - position.Y > FALL_DROP
-            end
-        end
-
-        if caught then
-            rescue(character, root, now)
-        end
-    end
-
-    apply_void()
-
-    -- the game setting its height again must not bring the void back
-    table.insert(connections, workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(apply_void))
     table.insert(connections, player.Idled:Connect(answer_idle))
     table.insert(connections, input_service.InputBegan:Connect(function()
         last_input = os.clock()
     end))
-
-    if VOID_RESCUE then
-        local elapsed = 0
-
-        table.insert(connections, run_service.Heartbeat:Connect(function(dt)
-            elapsed += dt
-
-            if elapsed < 0.06 then
-                return
-            end
-
-            elapsed = 0
-            pcall(look, os.clock())
-        end))
-    end
 
     -- backup for when Idled never fires
     task.spawn(function()
@@ -875,11 +718,6 @@ LPH_JIT_MAX(function()
             pcall(function()
                 connection:Disconnect()
             end)
-        end
-
-        -- stopped is set first, giving the height back fires the signal above
-        if game_height ~= nil and workspace.FallenPartsDestroyHeight ~= workspace.FallenPartsDestroyHeight then
-            workspace.FallenPartsDestroyHeight = game_height
         end
     end
 end)()
@@ -19306,10 +19144,9 @@ do
 
         local api = getgenv()["neverlose"]
         local void_hiding = api and api["is_in_void"] and api["is_in_void"]()
-        local rescued_at = getgenv()["neverlose_rescued_at"]
 
         -- (Follow Target has the body at the target for the physics step, so what is read here is that place, not the real body: it is no push)
-        if not hrp or hrp ~= pushback_part or void_hiding or local_following or (rescued_at and now - rescued_at < PUSHBACK_SETTLE) then
+        if not hrp or hrp ~= pushback_part or void_hiding or local_following then
             pushback_part = hrp
             pushback_position = nil
             pushback_settled_at = now + PUSHBACK_SETTLE
