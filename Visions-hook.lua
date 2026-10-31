@@ -6208,6 +6208,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["void_hide_bait_spot"] = {"void_hide_bait_spot", "void_hide_bait_spot", "list"},
 	["void_hide_deep_distance"] = {"void_hide_deep_distance", "void_hide_deep_distance"},
 	["follow_target_lead"] = {"follow_target_lead", "follow_target_lead"},
+	["follow_target_void_spammers"] = {"follow_target_void_spammers", "follow_target_void_spammers"},
 	["follow_target_lead_time"] = {"follow_target_lead_time", "follow_target_lead_time"},
 	["void_hide_disable_when"] = {"void_hide_disable_when", "void_hide_disable_when", "list"},
 	["void_hide_force_when"] = {"void_hide_force_when", "void_hide_force_when", "list"},
@@ -10461,6 +10462,8 @@ function Session.buildSettingsPanels(rows)
 	panelList(follow, "Stop If", "follow_target_stop_if", { "no gun equipped", "target knocked", "reloading" }, { "no gun equipped", "target knocked", "reloading" })
 	panelSlider(follow, "Distance", "follow_target_distance", 2, 200, 0, " studs", 15)
 	panelToggle(follow, "Follow Into Void", "follow_target_into_void", true)
+	-- a target whose void spot keeps jumping (void spam) is followed too
+	panelToggle(follow, "Follow Void Spammers", "follow_target_void_spammers", true)
 	panelToggle(follow, "Adjust", "follow_target_adjust", false)
 	-- Lead: a fast target is followed to where it will be by the time the server has the body there (its speed times Lead Time, up to 60 studs)
 	panelToggle(follow, "Lead", "follow_target_lead", true)
@@ -33169,6 +33172,7 @@ end
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
         menu_references["follow_target_into_void"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow into void"}, {["toggle"] = {["flag"] = "follow_target_into_void", ["default"] = true}})
         menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
+        menu_references["follow_target_void_spammers"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow void spammers"}, {["toggle"] = {["flag"] = "follow_target_void_spammers", ["default"] = true}})
         menu_references["follow_target_lead"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead"}, {["toggle"] = {["flag"] = "follow_target_lead", ["default"] = true}})
         menu_references["follow_target_lead_time"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead time"}, {["slider"] = {["flag"] = "follow_target_lead_time", ["min"] = 0, ["max"] = 300, ["default"] = 80, ["decimals"] = 0, ["suffix"] = "ms"}})
         menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.15, ["decimals"] = 2, ["suffix"] = "s"}})
@@ -37575,7 +37579,9 @@ end
             local void_limit = flags["follow_target_into_void"] ~= false and 1e10 or 9e5
 
             -- ...except a spot that keeps jumping (hide_manager.is_void_jittering): the body would land where the target was, never where it is.
-            if not bypass and ragebot_aim_position and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position) then
+            -- (Follow Void Spammers, on by default, follows it anyway, the way Void Hide's Spam windows do: with Spam off the follow used to stop for
+            -- a target that void spams, measured on one whose spot was about a billion studs out and jumped every quarter second)
+            if not bypass and flags["follow_target_void_spammers"] == false and ragebot_aim_position and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position) then
                 local_following = false
                 return
             end
@@ -37592,7 +37598,7 @@ end
                 elseif follow_target_stop_if_target_knocked and ragebot_target[18] then
                     local_following = false
                     return
-                elseif follow_target_stop_if_no_gun_equipped and not local_gun then
+                elseif follow_target_stop_if_no_gun_equipped and not local_gun and not (hide_manager["quick_draw_ready"] and hide_manager["quick_draw_ready"]()) then
                     local_following = false
                     return
                 elseif hide_manager["healing"] and flags["auto_heal"] == true and flags["auto_heal_stop_following"] == true then
@@ -43460,6 +43466,42 @@ do
                 pcall(remove_box)
             end
         end
+    end
+
+    -- Whether Quick Draw would take a gun out once the target is in reach (it is on, Auto Equip is off, and a loaded gun it may take out is in the
+    -- backpack). Follow Target's Stop If "no gun equipped" asks it: with a knife in hand the follow used to wait for a gun and Quick Draw for the
+    -- target to come in reach, so neither ever started (with Spam on its windows went to the target anyway, which is why turning Spam off stopped
+    -- the follow).
+    hide_manager["quick_draw_ready"] = function()
+        if flags["quick_draw"] ~= true or flags["auto_equip"] then
+            return false
+        end
+
+        local backpack = find_first_child_of_class(local_player, "Backpack")
+
+        if not backpack then
+            return false
+        end
+
+        local allowed = nil
+
+        if type(flags["quick_draw_guns"]) == "table" and #flags["quick_draw_guns"] > 0 then
+            allowed = {}
+
+            for _, name in flags["quick_draw_guns"] do
+                allowed[string.lower(tostring(name))] = true
+            end
+        end
+
+        for _, tool in get_children(backpack) do
+            local ammo = find_first_child(tool, "Ammo")
+
+            if find_first_child(tool, "Range") and ammo and ammo["Value"] > 0 and (not allowed or allowed[string.lower(string.sub(tool["Name"], 2, -2))]) then
+                return true
+            end
+        end
+
+        return false
     end
 
     -- >> ( quick draw )
