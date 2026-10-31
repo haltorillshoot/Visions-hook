@@ -6307,6 +6307,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_at_target_vehicle"] = {"auto_fire_at_target_vehicle", "auto_fire_at_target_vehicle"},
 	["auto_fire_always_fire"] = {"auto_fire_always_fire", "auto_fire_always_fire"},
 	["auto_fire_dont_render"] = {"auto_fire_dont_render", "auto_fire_dont_render"},
+	["auto_fire_show_attempts"] = {"auto_fire_show_attempts", "auto_fire_show_attempts"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
@@ -9242,7 +9243,9 @@ local lastHitShown = setmetatable({}, { __mode = "k" })
 local function showHit(hit)
 	local now = os.clock()
 
-	if now - (lastHitShown[hit.Player] or -1) < 0.35 then
+	-- (0.12 s: the engine's report and the health watch see one hit within about a tenth of a second; it was 0.35 s, which swallowed every
+	-- other Revolver hit, 0.2 s apart)
+	if now - (lastHitShown[hit.Player] or -1) < 0.12 then
 		return
 	end
 
@@ -9459,7 +9462,8 @@ local function onBulletRay(object)
 	end
 	-- Every player's shots come through here (each shotgun pellet is one): with no tracer, impact or hit visual on there is nothing to do,
 	-- so none of the waiting and searching below is done.
-	if not (Visual.LocalTracers or Visual.PlayerTracers or Visual.Impacts or anyHitVisual()) then
+	-- (your own shots always go on: their beams are moved to the target below even with every visual off)
+	if not (Visual.LocalTracers or Visual.PlayerTracers or Visual.Impacts or anyHitVisual()) and object:GetAttribute("OwnerCharacter") ~= LocalPlayer.Name then
 		return
 	end
 	local arrived = os.clock()
@@ -9559,6 +9563,17 @@ local function onBulletRay(object)
 			end
 		end
 		drawTracer(startPosition, endPosition, isLocal)
+	elseif isLocal and (endPosition - beam.Attachment1.WorldPosition).Magnitude > 0.5 then
+		-- No tracer of our own: the game's beam (or a skin's own GunBeam) is moved to where the shot really went, the target; it was left
+		-- where the gun was pointed, so with a skin on the bullets flew off to the cursor. A shotgun's pellets all take the claim (with Remove
+		-- Spread at 100%), so they meet on the target.
+		for _, item in ipairs(object:GetDescendants()) do
+			if item:IsA("Beam") and item.Attachment1 then
+				pcall(function()
+					item.Attachment1.WorldPosition = endPosition
+				end)
+			end
+		end
 	end
 
 	if isLocal and Visual.Impacts then
@@ -10667,6 +10682,8 @@ function Session.buildSettingsPanels(rows)
 		Callback = forward("auto_fire_always_fire", true),
 	})
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
+	-- every attempt Auto Fire makes, fake bullets included, drawn at the target with the gun's sound
+	panelToggle(autoFire, "Show Fake Bullets", "auto_fire_show_attempts", true)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
@@ -24960,9 +24977,29 @@ do
             end
         end
 
+        -- A failed shot is told at most once per target and reason every 1.5 s, with how many there were since: the fake bullets fail up to 30
+        -- times a second, and each one used to put a notification of its own on the screen for 3 s.
+        local failed_last = {}
+
         local send_failed_notification = function(player, part, reason, damage)
+            if not player or not part then
+                return
+            end
+
+            local key = player["Name"] .. "|" .. tostring(reason)
+            local entry = failed_last[key]
+            local now = clock()
+
+            if entry and now - entry[1] < 1.5 then
+                entry[2] += 1
+                return
+            end
+
+            local extra = entry and entry[2] > 0 and (" (x" .. (entry[2] + 1) .. ")") or ""
+            failed_last[key] = {now, 0}
+
             new_notification(
-                "shot at "..player["Name"].."'s "..(part["Name"]):lower().." failed due to "..reason,
+                "shot at "..player["Name"].."'s "..(part["Name"]):lower().." failed due to "..reason..extra,
                 3,
                 flags["shot_notifications_failed_color"]
             )
@@ -33045,6 +33082,7 @@ end
         menu_references["auto_fire_at_target_vehicle"] = menu_references["auto_fire_settings"]:create_element({["name"] = "at target vehicle"}, {["toggle"] = {["flag"] = "auto_fire_at_target_vehicle", ["default"] = true}})
         menu_references["auto_fire_always_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "always fire"}, {["toggle"] = {["flag"] = "auto_fire_always_fire", ["default"] = true}})
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
+        menu_references["auto_fire_show_attempts"] = menu_references["auto_fire_settings"]:create_element({["name"] = "show fake bullets"}, {["toggle"] = {["flag"] = "auto_fire_show_attempts", ["default"] = true}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
         menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
@@ -36424,7 +36462,10 @@ end
                                 setthreadidentity(8)
                                 if shoot then getfenv(shoot)["require"] = require end
                                 -- (with a target the shot is not drawn either: no shooting visuals on this client while the ragebot is on someone)
-                                if shoot and not flags["auto_fire_dont_render"] and not (flags["ragebot"] and ragebot_target) then
+                                -- Show Fake Bullets (on by default): every attempt is drawn at the target, the fake bullets too, with the gun's own
+                                -- shot and sound. It used to draw nothing at all while the ragebot had a target, so once a fight started the shots,
+                                -- their sounds and the hit visuals that follow a drawn shot were gone.
+                                if shoot and not flags["auto_fire_dont_render"] and (flags["auto_fire_show_attempts"] ~= false or not (flags["ragebot"] and ragebot_target)) then
                                     shoot({
                                         Shooter = local_character,
                                         Handle = handle,
