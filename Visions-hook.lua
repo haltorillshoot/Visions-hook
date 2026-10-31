@@ -18243,7 +18243,22 @@ do
                             pos = aim_seen + aim_lead_vector*scale + center_nudge
                         end
                         -- claimed from where the server most likely has the body (Origin Lag, getgenv().neverlose_origin_lag, seconds; 0 = where it is now)
-                        local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](getgenv()["neverlose_origin_lag"] or 0.09)
+                        local origin_lag = getgenv()["neverlose_origin_lag"] or 0.09
+
+                        -- Moving fast, a few hundredths of a second of lag are 10 to 20 studs, about all the server forgives of the origin, and no one lag
+                        -- is right every time: the fake bullets each start from a different share of it in turn (as the lead spread does with the lead),
+                        -- so one of them every 0.03 s sits where the server has the body. Not a shotgun's (its refused calls count against its
+                        -- SecurityTolerance). (dot calls only: a method call before old_namecall replaces the namecall method)
+                        local lag_tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+
+                        if lag_tool and hide_manager["trail_speed"] and lag_tool["GetAttribute"](lag_tool, "SecurityTolerance") == nil and hide_manager["trail_speed"]() > 150 then
+                            local lag_scales = {1, 0.6, 1.4, 0.8, 1.2}
+                            local lag_step = (hide_manager["origin_lag_step"] or 0) % #lag_scales + 1
+                            hide_manager["origin_lag_step"] = lag_step
+                            origin_lag *= lag_scales[lag_step]
+                        end
+
+                        local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](origin_lag)
                         local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
 
                         -- Following the target closely: the body is somewhere within the follow's reach of the target (hide_manager.follow_reach; a strafe at
@@ -18301,6 +18316,17 @@ do
 
                             if range_value then
                                 pos = enhance(origin, pos, range_value["Value"])
+
+                                -- Past reach: the server measures from the shot's origin to where it has the target, and refuses anything past the Range
+                                -- (+ 15 with the Range Enhancer) whatever the claim. Measured in a fight, flying in on a standing target: every claim from
+                                -- past it was refused (Revolver 216 to 218, Tactical 118, DB 139) and each refused send restarted the gun's wait, so the
+                                -- first hit once in reach came about 0.5 s late. Such a shot is not sent (a shotgun's would also cost SecurityTolerance).
+                                local reach_limit = range_value["Value"] + (hide_manager["range_enhancer_on"]() and 15 or 0)
+                                local target_gap = (origin - ragebot_aim_position)["Magnitude"]
+
+                                if target_gap == target_gap and target_gap > reach_limit and not follow_reach then
+                                    return
+                                end
                             end
                         end
 
@@ -36417,7 +36443,9 @@ end
                                 -- time (measured: Revolver at 226 studs, 21 sends, none taken), and each refused send restarted the gun's wait, so the
                                 -- first shot once the target came back in reach was late by up to a cooldown. Such a gun now waits and another one that
                                 -- reaches goes. No margin: a send at 217 studs with the Revolver was refused and held the next one back a cooldown.
-                                local away = (ragebot_aim_position - local_server_position)["Magnitude"]
+                                -- (measured from where the shot will start, hide_manager.shot_origin: not from where the body is now)
+                                local shot_origin = not local_following and hide_manager["shot_origin"] and hide_manager["shot_origin"]() or local_server_position
+                                local away = (ragebot_aim_position - shot_origin)["Magnitude"]
                                 local reach = candidate[2] + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() and 15 or 0)
                                 within_reach = away ~= away or away <= reach
                             end
@@ -43303,22 +43331,59 @@ do
 
         local wanted = clock() - lag
         local latest = points[count]
-        local found = points[1]
+        local found_at = 1
 
         for i = count, 1, -1 do
             if times[i] <= wanted then
-                found = points[i]
+                found_at = i
                 break
             end
         end
 
-        -- the body has only just been taken there (follow starting, out of the void): the old place is too far from the target for any shot, so
-        -- the shot goes from where it is now
-        if (found - latest)["Magnitude"] > 17 then
-            return latest
+        -- the body has only just been taken there (a jump of over 40 studs between two frames: follow starting, out of the void): the old place
+        -- is too far from the target for any shot, so the shot goes from where it is now. A fast flight is not a jump: it used to count as one
+        -- whenever the lag came to more than 17 studs (over about 190 studs/s), so flying in at 300 to 440 studs/s every shot went out from where
+        -- the body is now, 20 to 30 studs ahead of where the server has it, and none was taken until the flight slowed down (measured).
+        for i = found_at + 1, count do
+            if (points[i] - points[i - 1])["Magnitude"] > 40 then
+                return latest
+            end
         end
 
-        return found
+        return points[found_at]
+    end
+
+    -- How fast the body has moved over the last tenth of a second (studs/s), from the same trail
+    hide_manager["trail_speed"] = function()
+        local times, points = hide_manager["trail_times"], hide_manager["trail_points"]
+        local count = #times
+
+        if count < 2 then
+            return 0
+        end
+
+        local first = count
+
+        while first > 1 and times[count] - times[first] < 0.1 do
+            first -= 1
+        end
+
+        local span = times[count] - times[first]
+
+        return span > 0 and (points[count] - points[first])["Magnitude"] / span or 0
+    end
+
+    -- Where the shot hook starts a ragebot shot from (the lagged body, Origin Lag, plus the gun's height): the reach checks measure from here too.
+    -- They used to measure from where the body is now, which while closing in fast is 20 or more studs nearer than the shot's own start (measured:
+    -- flying in at about 300 studs/s, Revolver claims went out from 216 to 218 studs, Tactical from 118, DB from 139, none taken).
+    hide_manager["shot_origin"] = function()
+        local lag_origin = hide_manager["lagged_position"](getgenv()["neverlose_origin_lag"] or 0.09)
+
+        if not lag_origin and not local_server_position then
+            return nil
+        end
+
+        return (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
     end
 
     local update_server_position = LPH_NO_VIRTUALIZE(function(hrp)
