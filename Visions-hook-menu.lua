@@ -1126,6 +1126,15 @@ function Library:CreateWindow(config)
     return Window
 end
 
+-------------------------------------------------------------------------------- used as a library
+-- getgenv().visions_menu_library = true before running this file hands the library back without building the menu below, so another part of
+-- the script (Des Hood's) builds its own window with it. Library.PlayIntro is the VISIONS HOOK intro.
+
+if getgenv and getgenv().visions_menu_library == true then
+    Library.PlayIntro = playIntro
+    return Library
+end
+
 -------------------------------------------------------------------------------- the menu
 
 playIntro()

@@ -45,15 +45,65 @@ end
 local players_service = cloneref(game:GetService("Players"))
 local local_player = players_service.LocalPlayer
 
--- > ( features )
--- Des Hood's own features go below this line.
+-- > ( menu )
+-- Des Hood uses the Visions hook menu (Visions-hook-menu.lua) and nothing else: the file is run as a library (getgenv().visions_menu_library) and
+-- the window below is built with it. A copy in the executor's workspace is used first, the one in the repo otherwise.
 
-pcall(function()
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Visions hook",
-        Text = "Des Hood loaded",
-        Duration = 4,
-    })
-end)
+local function load_menu_library()
+    local ok, source = pcall(readfile, "Visions-hook-menu.lua")
+
+    if not ok or type(source) ~= "string" or source == "" then
+        ok, source = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/Visions-hook-menu.lua")
+    end
+
+    local run = ok and type(source) == "string" and loadstring(source, "=Visions-hook-menu")
+
+    if not run then
+        return nil
+    end
+
+    shared_env.visions_menu_library = true
+    local library_ok, library = pcall(run)
+    shared_env.visions_menu_library = nil
+
+    return library_ok and type(library) == "table" and library or nil
+end
+
+local Library = load_menu_library()
+
+if not Library then
+    warn("[Visions hook] The Visions hook menu could not be loaded, so Des Hood has no menu.")
+    return
+end
+
+pcall(Library.PlayIntro)
+
+local Window = Library:CreateWindow({ Size = UDim2.fromOffset(650, 720), Keybind = Enum.KeyCode.RightShift })
+
+-- the menu goes with the rest on unload (and when the script is run again)
+local unload_connections = shared_env.visions_des_hood_unload
+
+shared_env.visions_des_hood_unload = function()
+    unload_connections()
+    pcall(Window.Unload, Window)
+end
+
+-- > ( features )
+-- Des Hood's own features go below this line, each in a tab of the window above.
+
+-------- Settings
+
+local Settings = Window:AddTab("Settings")
+local menu_section = Settings:AddSection("Menu", "Left")
+
+menu_section:AddDropdown({ Name = "Menu Key", Options = { "RightShift", "Insert", "K", "End" }, Default = "RightShift", Callback = function(key)
+    Window:SetKeybind(Enum.KeyCode[key])
+end })
+
+menu_section:AddButton({ Name = "Unload", Callback = function()
+    shared_env.visions_des_hood_unload()
+end })
+
+Window:FadeIn()
 
 print("[Visions hook] Des Hood loaded for " .. local_player.Name)
