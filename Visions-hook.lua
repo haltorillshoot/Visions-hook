@@ -18234,6 +18234,13 @@ do
                                 or spread_name == "[TacticalShotgun]" or spread_name == "[Drum-Shotgun]") then
                                 scale = 0.5
                             else
+                                -- the first send after a pause (a new cooldown) takes the whole lead, the best guess: a burst that started on a small share
+                                -- of it was refused at 283 studs/s and the hit came a send later
+                                if clock() - (hide_manager["lead_sent_at"] or -1) > 0.1 then
+                                    hide_manager["lead_step"] = 0
+                                end
+
+                                hide_manager["lead_sent_at"] = clock()
                                 local step = (hide_manager["lead_step"] or 0) % #scales + 1
                                 hide_manager["lead_step"] = step
                                 scale = scales[step]
@@ -18260,6 +18267,10 @@ do
 
                         local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](origin_lag)
                         local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
+
+                        if hide_manager["advance_origin"] then
+                            origin = hide_manager["advance_origin"](origin, ragebot_aim_position, lag_tool)
+                        end
 
                         -- Following the target closely: the body is somewhere within the follow's reach of the target (hide_manager.follow_reach; a strafe at
                         -- Speed 75 is all round the circle every frame), and the server has it there about 0.1 s late, so a shot claimed from where the body
@@ -36445,6 +36456,10 @@ end
                                 -- reaches goes. No margin: a send at 217 studs with the Revolver was refused and held the next one back a cooldown.
                                 -- (measured from where the shot will start, hide_manager.shot_origin: not from where the body is now)
                                 local shot_origin = not local_following and hide_manager["shot_origin"] and hide_manager["shot_origin"]() or local_server_position
+
+                                if not local_following and hide_manager["advance_origin"] then
+                                    shot_origin = hide_manager["advance_origin"](shot_origin, ragebot_aim_position, tool)
+                                end
                                 local away = (ragebot_aim_position - shot_origin)["Magnitude"]
                                 local reach = candidate[2] + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() and 15 or 0)
                                 within_reach = away ~= away or away <= reach
@@ -38122,6 +38137,13 @@ end
 
             if pair_at and pair_at >= last - 0.02 and clock() - pair_at < wait_time * 2 + margin then
                 return false
+            end
+
+            -- Not policed: due a one-way trip early, so the send reaches the server during the cooldown, is held there and fired the moment it ends.
+            -- Measured in an HvH: sent at the end of the cooldown, every next hit came 0.21 to 0.26 s after the last (the trip, and a refused
+            -- first try), while the opponent's came 0.16 to 0.21 s apart, and every race was lost by one of those gaps.
+            if margin < 0.005 then
+                margin = -math.clamp(local_ping / 1000, 0.03, 0.08)
             end
 
             return clock() - last >= wait_time + margin
@@ -43370,7 +43392,50 @@ do
 
         local span = times[count] - times[first]
 
-        return span > 0 and (points[count] - points[first])["Magnitude"] / span or 0
+        if span <= 0 then
+            return 0
+        end
+
+        local moved = (points[count] - points[first]) / span
+
+        return moved["Magnitude"], moved
+    end
+
+    -- Closing in fast on the target, the shot starts up to 10 studs further along the way (within the 17 the server forgives of the origin): the
+    -- lagged origin is 25 studs behind the body at 280 studs/s, and in an HvH where both sides flew in at that speed every race was decided by
+    -- about 0.05 s, the opponent's first hit landing first (6 won, 14 lost, the same damage and rate on both sides). 10 studs of reach are about
+    -- 0.02 s of a 540 studs/s closing. Not for a shotgun (its refused calls count against its SecurityTolerance). No method calls in here (it runs
+    -- in the shot hook before old_namecall).
+    hide_manager["advance_origin"] = function(origin, target_position, tool)
+        if typeof(origin) ~= "Vector3" or typeof(target_position) ~= "Vector3" then
+            return origin
+        end
+
+        if tool and (tool["GetAttribute"](tool, "SecurityTolerance") ~= nil or string.find(tool["Name"], "Shotgun") or tool["Name"] == "[Double-Barrel SG]") then
+            return origin
+        end
+
+        local speed, moved = hide_manager["trail_speed"]()
+
+        if not moved or speed < 150 then
+            return origin
+        end
+
+        local towards = target_position - origin
+        local distance = towards["Magnitude"]
+
+        if distance ~= distance or distance < 30 then
+            return origin
+        end
+
+        local way = towards / distance
+        local along = (moved["X"] * way["X"] + moved["Y"] * way["Y"] + moved["Z"] * way["Z"]) / speed
+
+        if along < 0.7 then
+            return origin
+        end
+
+        return origin + way * 10
     end
 
     -- Where the shot hook starts a ragebot shot from (the lagged body, Origin Lag, plus the gun's height): the reach checks measure from here too.
