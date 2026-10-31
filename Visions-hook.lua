@@ -35074,6 +35074,36 @@ end
     hide_manager["ensure_aim_hook"] = ensure_aim_hook
     hide_manager["release_aim_hook"] = release_aim_hook
 
+    -- The game's own shot drawing (GunHandler's local "shoot": the beam, the muzzle and the sound), for Auto Fire's attempts. It used to be found
+    -- at load by a block that kicked the player when it was missing, and that block was turned off, so `shoot` stayed nil and no attempt was
+    -- ever drawn. Looked for once, when an attempt first wants drawing; nil when it is not there (nothing is drawn then, nobody is kicked).
+    hide_manager["resolve_shoot"] = LPH_NO_VIRTUALIZE(function()
+        local handler = get_aim_handler()
+        local outer = handler and rawget(handler, "shoot")
+
+        if type(outer) ~= "function" then
+            return nil
+        end
+
+        local ok, upvalues = pcall(getupvalues, outer)
+
+        if ok and type(upvalues) == "table" then
+            for _, value in upvalues do
+                if type(value) == "function" then
+                    local info_ok, info = pcall(getinfo, value)
+
+                    if info_ok and info and info["name"] == "shoot" and type(info["source"]) == "string" and info["source"]:find("Gun") then
+                        return value
+                    end
+                end
+            end
+        end
+
+        -- Today's module has no inner one: GunHandler.shoot itself draws (it reads Shooter, Handle, ForcedOrigin, AimPosition, Range and the
+        -- skin's GunFX, and sends nothing to the server)
+        return outer
+    end)
+
     -- >> ( walls )
     -- What BASED Hub's Da Hood ragebot has measured about the server's wall check (its "Walls" option), put into the shots this script sends:
     --   * the line the server looks at is the one from the shot's origin to where the hit is CLAIMED, not to the target's part;
@@ -35288,9 +35318,12 @@ end
     end
 
     -- the ragebot's answer: the direction to its aim position. The far void and a point on the gun itself are left to the gun's own aim.
+    -- (also while the ragebot has a target and Show Fake Bullets is on: the gun's own script then draws its shot, a skin's beam and a
+    -- shotgun's pellets at the target, and plays its sound; they went to the cursor, while the shot the server got went to the target)
     aim_chain["providers"]["rage"] = {
         enabled = function()
             return rage_bullet_manipulation["enabled"] == true
+                or (flags["auto_fire_show_attempts"] ~= false and flags["ragebot"] == true and ragebot_target ~= nil and ragebot_aim_position ~= nil)
         end,
         answer = function(origin)
             local position = ragebot_aim_position
@@ -36474,21 +36507,41 @@ end
                                     continue
                                 end
 
+                                -- Show Fake Bullets: the gun module's aim hook (so the gun's own shots, skins and pellets go to the target) and the
+                                -- game's shot drawing are fetched the first time an attempt wants them, once each.
+                                if flags["auto_fire_show_attempts"] ~= false and not flags["auto_fire_dont_render"] and not hide_manager["show_attempts_ready"] then
+                                    hide_manager["show_attempts_ready"] = true
+                                    pcall(hide_manager["ensure_aim_hook"])
+
+                                    if not shoot then
+                                        local resolved_ok, resolved = pcall(hide_manager["resolve_shoot"])
+                                        shoot = resolved_ok and resolved or nil
+                                    end
+                                end
+
                                 setthreadidentity(8)
-                                if shoot then getfenv(shoot)["require"] = require end
                                 -- (with a target the shot is not drawn either: no shooting visuals on this client while the ragebot is on someone)
                                 -- Show Fake Bullets (on by default): every attempt is drawn at the target, the fake bullets too, with the gun's own
                                 -- shot and sound. It used to draw nothing at all while the ragebot had a target, so once a fight started the shots,
                                 -- their sounds and the hit visuals that follow a drawn shot were gone.
+                                -- Drawn as the game draws a shot it got back from the server (ReplicatedShot, with the part hit): GunHandler.shoot
+                                -- otherwise returns without drawing your own shots in the legacy mode. It builds the skin's beam and plays the gun's
+                                -- sound. At identity 2, as the gun module is required, so it cannot see this environment; the drawing can never cost
+                                -- the shot (an error in it is caught).
                                 if shoot and not flags["auto_fire_dont_render"] and (flags["auto_fire_show_attempts"] ~= false or not (flags["ragebot"] and ragebot_target)) then
-                                    shoot({
+                                    local identity = getthreadidentity()
+                                    setthreadidentity(2)
+                                    pcall(shoot, {
                                         Shooter = local_character,
                                         Handle = handle,
                                         ForcedOrigin = origin,
                                         AimPosition = pos,
-                                        BeamColor = color3_fromrgb(1, 0.545098, 0.14902),
-                                        Range = local_gun[2]
+                                        Hit = hitbox,
+                                        Normal = vector3_new(0, 1, 0),
+                                        Range = local_gun[2],
+                                        ReplicatedShot = true
                                     })
+                                    setthreadidentity(identity)
                                 end
 
                                 local dir = (pos-origin)
@@ -36515,7 +36568,6 @@ end
 
                                 spawn(get_bullet_result, target[2], hitbox, origin, pos, target_velocity, did_defensive)
 
-                                if shoot then getfenv(shoot)["require"] = nil end
                                 setthreadidentity(4)
                             end
                         end
