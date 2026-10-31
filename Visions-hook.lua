@@ -36468,6 +36468,49 @@ end
                             end
                         end
 
+                        -- Visual fake bullets for the shotguns: they send nothing between their shots (a refused shotgun call counts against its
+                        -- SecurityTolerance, 5 on the DB and the Tactical, and one shot is five calls), so while no gun is due this tick and a shotgun
+                        -- in hand reaches the target, an attempt is only drawn every 0.03 s (sent never), like the other guns' fake bullets look.
+                        if not chosen_gun and flags["auto_fire_show_attempts"] ~= false and not flags["auto_fire_dont_render"] and clock() - (hide_manager["visual_fake_at"] or 0) >= 0.03 then
+                            if not hide_manager["show_attempts_ready"] then
+                                hide_manager["show_attempts_ready"] = true
+                                pcall(hide_manager["ensure_aim_hook"])
+
+                                if not shoot then
+                                    local resolved_ok, resolved = pcall(hide_manager["resolve_shoot"])
+                                    shoot = resolved_ok and resolved or nil
+                                end
+                            end
+
+                            local away = (pos - origin)["Magnitude"]
+                            local enhanced = hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() and 15 or 0
+
+                            for _, candidate in new_local_guns do
+                                local candidate_handle = candidate[1]
+                                local candidate_tool = candidate_handle and candidate_handle["Parent"]
+
+                                if shoot and candidate_tool and candidate_tool:GetAttribute("SecurityTolerance") ~= nil and (candidate[3] or 0) > 0
+                                    and candidate[2] and away == away and away <= candidate[2] + enhanced then
+                                    hide_manager["visual_fake_at"] = clock()
+
+                                    local identity = getthreadidentity()
+                                    setthreadidentity(2)
+                                    pcall(shoot, {
+                                        Shooter = local_character,
+                                        Handle = candidate_handle,
+                                        ForcedOrigin = origin,
+                                        AimPosition = pos,
+                                        Hit = hitbox,
+                                        Normal = vector3_new(0, 1, 0),
+                                        Range = candidate[2],
+                                        ReplicatedShot = true
+                                    })
+                                    setthreadidentity(identity)
+                                    break
+                                end
+                            end
+                        end
+
                         local pulled = {}
 
                         for i = 1, #new_local_guns do
