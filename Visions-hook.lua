@@ -18145,6 +18145,15 @@ do
                         end
 
                         local lag_origin = hide_manager["lagged_position"] and hide_manager["lagged_position"](origin_lag)
+
+                        -- Standing at the bait spot (Void Hide's bait): the shot starts there. The trail the lagged origin comes from jumps between
+                        -- the void and the bait spot with Spam, so the origin was a void spot or the frame's own place, and none of 83 shots sent from
+                        -- the bait landed (measured).
+                        local bait_spot = hide_manager["bait_spot"]
+
+                        if bait_spot and clock() - (hide_manager["bait_visible_at"] or -1) < 0.1 then
+                            lag_origin = bait_spot
+                        end
                         local origin = (lag_origin or local_server_position["p"]) + vector3_new(0.004,3.0208,-0.048)
 
                         if hide_manager["advance_origin"] then
@@ -40371,6 +40380,50 @@ end
         -- picks the spot (anywhere within Bait Distance, or the last place the body stood on the map); Bait Freeze keeps the body still there
         -- (no Offset), and the ragebot shoots from it (hide_manager.bait_visible_at / bait_since): a target that came for the bait is shot at.
         -- With Spam the bait visit takes the place of the void for its time, as it does without.
+        -- A bait visit is cut short (back into the void) when the target can shoot the bait spot and the body cannot shoot back from it: the gun
+        -- in the target's hand reaches the spot (its Range + 15) and none of the guns here with a round in it reaches the target. Measured with
+        -- Bait Freeze against a Revolver: the target stayed about 145 studs out, past the DB, and 4 of the 8 hits taken came while standing as
+        -- bait. A visit during which the body was hit ends as well.
+        local bait_health = nil
+
+        local bait_unsafe = function(spot, hrp)
+            local humanoid = local_parts["Humanoid"]
+
+            if bait_health and humanoid and humanoid["Health"] < bait_health - 0.5 then
+                return true
+            end
+
+            local target = ragebot_target
+            local aim = ragebot_aim_position
+
+            if not target or not aim or aim["Magnitude"] > 9e5 then
+                return false
+            end
+
+            local character = target[3]
+            local their_tool = character and find_first_child_of_class(character, "Tool")
+            local their_range = their_tool and find_first_child(their_tool, "Range")
+
+            if not their_range then
+                return false
+            end
+
+            local away = (aim - spot)["Magnitude"]
+            local mine = 0
+
+            for _, data in local_guns do
+                if data[2] and (data[3] or 0) > 0 and data[2] > mine then
+                    mine = data[2]
+                end
+            end
+
+            if hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() then
+                mine += 15
+            end
+
+            return away <= their_range["Value"] + 15 and away > mine
+        end
+
         local bait_step = function(tick, hrp)
             local difference = tick - last_bait
 
@@ -40387,8 +40440,19 @@ end
                     bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
                 end
 
+                local humanoid = local_parts["Humanoid"]
+                bait_health = humanoid and humanoid["Health"] or nil
+
                 return false
             elseif difference < flags["void_hide_bait_time"] and bait_position then
+                -- (the visit ends now: the rest of it is spent in the void)
+                if bait_unsafe(bait_position["Position"], hrp) then
+                    last_bait = tick - flags["void_hide_bait_time"]
+                    hide_manager["bait_cut"] = (hide_manager["bait_cut"] or 0) + 1
+
+                    return false
+                end
+
                 if flags["void_hide_bait_freeze"] == true then
                     hrp["CFrame"] = bait_position
                     hrp["AssemblyLinearVelocity"] = vector3_zero
@@ -40398,6 +40462,7 @@ end
 
                 hide_manager["bait_visible_at"] = tick
                 hide_manager["bait_since"] = last_bait
+                hide_manager["bait_spot"] = hrp["Position"]
 
                 return true
             end
