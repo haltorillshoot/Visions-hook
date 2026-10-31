@@ -2,6 +2,27 @@
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+-- > ( Des Hood )
+-- Started in Des Hood: its own part (Des-Hood/Des-Hood.lua) runs instead of everything below, which is made for Da Hood. A copy in the executor's
+-- workspace (Des-Hood.lua) is used first, the one in the repo otherwise.
+if game.PlaceId == 82613047987648 then
+    local ok, source = pcall(readfile, "Des-Hood.lua")
+
+    if not ok or type(source) ~= "string" or source == "" then
+        ok, source = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/Des-Hood/Des-Hood.lua")
+    end
+
+    local run = ok and type(source) == "string" and loadstring(source, "=Des-Hood")
+
+    if run then
+        run()
+    else
+        warn("[Visions hook] The Des Hood part could not be loaded.")
+    end
+
+    return
+end
+
 if (identifyexecutor() == "AWP" or identifyexecutor() == "Nihon") then
     cleardrawcache()
 end
