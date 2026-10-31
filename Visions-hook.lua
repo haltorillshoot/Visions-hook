@@ -24967,7 +24967,22 @@ do
         local do_hit_notification = true
         local do_failed_notification = true
 
+        -- One hit is told once: with fake bullets in flight every attempt that was out when the shot landed confirmed the same health drop, and
+        -- one Revolver hit put 5 to 9 identical notifications up (watched in a fight).
+        local hit_last = {}
+
         local send_hit_notification = function(player, part, damage, _, message)
+            local key = player and (player["Name"] .. "|" .. tostring(damage))
+            local now = clock()
+
+            if key and hit_last[key] and now - hit_last[key] < 0.15 then
+                return
+            end
+
+            if key then
+                hit_last[key] = now
+            end
+
             if player and part then
                 new_notification(
                     "hit "..player["Name"].."'s "..(part["Name"]):lower().." for "..damage.." health "..(message or ""),
