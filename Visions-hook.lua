@@ -6308,6 +6308,8 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["auto_fire_always_fire"] = {"auto_fire_always_fire", "auto_fire_always_fire"},
 	["auto_fire_dont_render"] = {"auto_fire_dont_render", "auto_fire_dont_render"},
 	["auto_fire_show_attempts"] = {"auto_fire_show_attempts", "auto_fire_show_attempts"},
+	["auto_fire_pre_fire"] = {"auto_fire_pre_fire", "auto_fire_pre_fire"},
+	["auto_fire_pre_fire_time"] = {"auto_fire_pre_fire_time", "auto_fire_pre_fire_time"},
 	["auto_fire_bullet_manipulation"] = {"auto_fire_bullet_manipulation", "auto_fire_bullet_manipulation"},
 	["auto_fire_fast_retry"] = {"auto_fire_fast_retry", "auto_fire_fast_retry"},
 	["auto_fire_salvo"] = {"auto_fire_salvo", "auto_fire_salvo"},
@@ -6321,6 +6323,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["remove_recoil"] = {"remove_recoil", "remove_recoil"},
 	["range_enhancer"] = {"range_enhancer", "range_enhancer"},
 	["quick_draw"] = {"quick_draw", "quick_draw"},
+	["quick_draw_guns"] = {"quick_draw_guns", "quick_draw_guns", "list"},
 	["ragebot_lead_fast"] = {"ragebot_lead_fast", "ragebot_lead_fast"},
 	["dt"] = {"rapid_fire", "rapid_fire"},
 	-- Rapid fire's own settings, Fake Position, Network Desync, Velocity Desync and Sender Rate Value have no menu row (the engine's anti
@@ -10684,6 +10687,9 @@ function Session.buildSettingsPanels(rows)
 	panelToggle(autoFire, "Dont Render", "auto_fire_dont_render", false)
 	-- every attempt Auto Fire makes, fake bullets included, drawn at the target with the gun's sound
 	panelToggle(autoFire, "Show Fake Bullets", "auto_fire_show_attempts", true)
+	-- the fake bullets start before a closing target is in reach, by how far it comes in over Pre Fire Time (not the shotguns)
+	panelToggle(autoFire, "Pre Fire", "auto_fire_pre_fire", false)
+	panelSlider(autoFire, "Pre Fire Time", "auto_fire_pre_fire_time", 0, 200, 0, "ms", 60)
 	panelToggle(autoFire, "Bullet Manipulation", "auto_fire_bullet_manipulation", false)
 	panelToggle(autoFire, "Double Tap", "auto_fire_salvo", true)
 	-- the time between one gun's shot and the next gun's (0 sends them in consecutive frames)
@@ -10697,6 +10703,10 @@ function Session.buildSettingsPanels(rows)
 	panelList(equip, "Unequip When", "auto_equip_unequip_when", { "no target" }, { "no target" })
 	panelList(equip, "Guns", "auto_equip_gun", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "rifle", "double-barrel sg" })
 	panelToggle(equip, "Prioritize DB", "auto_equip_prioritize_db", false)
+
+	-- Quick Draw: which guns it may take out (of those, the one with the shortest range that still reaches)
+	local quickDraw = rows.quickDraw:AddOption()
+	panelList(quickDraw, "Guns", "quick_draw_guns", { "double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer" }, { "revolver", "double-barrel sg", "tacticalshotgun" })
 
 	-- Prediction --
 	local predictionPanel = rows.prediction:AddOption()
@@ -18292,6 +18302,7 @@ do
                         local early_gap = (origin - pos)["Magnitude"]
 
                         if early_gap ~= early_gap or early_gap > 2100 then
+                            hide_manager["shot_dropped"](handle)
                             return
                         end
 
@@ -18313,6 +18324,7 @@ do
                                 if claimed then
                                     origin, pos = routed_origin, claimed
                                 elseif walls_tool and string.find(walls_tool["Name"], "Shotgun") or (walls_tool and walls_tool["Name"] == "[Double-Barrel SG]") then
+                                    hide_manager["shot_dropped"](handle)
                                     return
                                 end
                             end
@@ -18326,7 +18338,7 @@ do
                             local range_value = range_tool and find_first_child(range_tool, "Range")
 
                             if range_value then
-                                pos = enhance(origin, pos, range_value["Value"])
+                                pos = enhance(origin, pos, range_value["Value"], nil, ragebot_aim_position)
 
                                 -- Past reach: the server measures from the shot's origin to where it has the target, and refuses anything past the Range
                                 -- (+ 15 with the Range Enhancer) whatever the claim. Measured in a fight, flying in on a standing target: every claim from
@@ -18335,7 +18347,12 @@ do
                                 local reach_limit = range_value["Value"] + (hide_manager["range_enhancer_on"]() and 15 or 0)
                                 local target_gap = (origin - ragebot_aim_position)["Magnitude"]
 
+                                if hide_manager["pre_fire_margin"] then
+                                    reach_limit += hide_manager["pre_fire_margin"](origin, ragebot_aim_position, range_tool)
+                                end
+
                                 if target_gap == target_gap and target_gap > reach_limit and not follow_reach then
+                                    hide_manager["shot_dropped"](handle)
                                     return
                                 end
                             end
@@ -18346,6 +18363,7 @@ do
                         local reach_gap = (origin - pos)["Magnitude"]
 
                         if reach_gap ~= reach_gap or reach_gap > 2000 then
+                            hide_manager["shot_dropped"](handle)
                             return
                         end
 
@@ -33135,6 +33153,8 @@ end
         menu_references["auto_fire_always_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "always fire"}, {["toggle"] = {["flag"] = "auto_fire_always_fire", ["default"] = true}})
         menu_references["auto_fire_dont_render"] = menu_references["auto_fire_settings"]:create_element({["name"] = "dont render"}, {["toggle"] = {["flag"] = "auto_fire_dont_render", ["default"] = false}})
         menu_references["auto_fire_show_attempts"] = menu_references["auto_fire_settings"]:create_element({["name"] = "show fake bullets"}, {["toggle"] = {["flag"] = "auto_fire_show_attempts", ["default"] = true}})
+        menu_references["auto_fire_pre_fire"] = menu_references["auto_fire_settings"]:create_element({["name"] = "pre fire"}, {["toggle"] = {["flag"] = "auto_fire_pre_fire", ["default"] = false}})
+        menu_references["auto_fire_pre_fire_time"] = menu_references["auto_fire_settings"]:create_element({["name"] = "pre fire time"}, {["slider"] = {["flag"] = "auto_fire_pre_fire_time", ["min"] = 0, ["max"] = 200, ["suffix"] = "ms", ["default"] = 60, ["decimals"] = 0}})
         menu_references["auto_fire_bullet_manipulation"] = menu_references["auto_fire_settings"]:create_element({["name"] = "bullet manipulation"}, {["toggle"] = {["flag"] = "auto_fire_bullet_manipulation", ["default"] = false}})
         menu_references["auto_fire_fast_retry"] = menu_references["auto_fire_settings"]:create_element({["name"] = "fast retry"}, {["toggle"] = {["flag"] = "auto_fire_fast_retry", ["default"] = false}})
         menu_references["auto_fire_salvo"] = menu_references["auto_fire_settings"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "auto_fire_salvo", ["default"] = true}})
@@ -33600,7 +33620,8 @@ end
 
     hide_manager["fake_bullet_due"] = function(tool)
         if tool:GetAttribute("SecurityTolerance") ~= nil then
-            return false
+            -- a shotgun's quick try after a refused shell counts as one here, or the same-gun wait holds it the whole cooldown
+            return hide_manager["shell_retry_due"] ~= nil and hide_manager["shell_retry_due"](tool)
         end
 
         local sent_at = hide_manager["gun_fired_at"][tool]
@@ -33614,6 +33635,80 @@ end
         local unconfirmed = sent_with ~= nil and ammo_value ~= nil and ammo_value["Value"] > 0 and ammo_value["Value"] >= sent_with
 
         return unconfirmed and clock() - sent_at >= FAKE_BULLET_INTERVAL
+    end
+
+    -- A shot the shot hook did not send (out of reach, no open line for a shotgun, the void): the gun's own script has already stamped it as
+    -- fired (LocalLastShotAt), and that stamp held the gun back a whole cooldown although the server never had the shot. Measured in a
+    -- Double-Barrel fight: the DB's clicks from 155 to 172 studs were dropped, and the 0.36 s they held the DB back was the moment the opponent
+    -- came in reach and one-shot the player, with a full DB in hand that never fired. A dropped shot's stamp is not counted (dropped_stamp), and
+    -- the Auto Fire's own mark of it is taken back. No method calls (it runs in the shot hook before old_namecall).
+    hide_manager["dropped_stamp"] = setmetatable({}, {["__mode"] = "k"})
+    hide_manager["quick_retries"] = setmetatable({}, {["__mode"] = "k"})
+
+    hide_manager["shot_dropped"] = function(handle)
+        local tool = typeof(handle) == "Instance" and handle["Parent"] or nil
+
+        if not tool then
+            return
+        end
+
+        hide_manager["dropped_stamp"][tool] = tool["GetAttribute"](tool, "LocalLastShotAt")
+
+        local fired_at = hide_manager["gun_fired_at"][tool]
+
+        if fired_at and clock() - fired_at < 0.1 then
+            hide_manager["gun_fired_at"][tool] = nil
+            hide_manager["gun_ammo_sent"][tool] = nil
+        end
+    end
+
+    -- the gun's own LocalLastShotAt, unless the shot it stamps was dropped by the shot hook
+    hide_manager["last_shot_stamp"] = function(tool)
+        local stamp = tool["GetAttribute"](tool, "LocalLastShotAt")
+
+        if stamp ~= nil and stamp == hide_manager["dropped_stamp"][tool] then
+            return nil
+        end
+
+        return stamp
+    end
+
+    -- (see gun_ready: the quick try after a refused shell. Also asked by Auto Fire's own same-gun wait, which held the shell back the whole
+    -- cooldown as well: in the fight after the change the next shell still came 0.36 s after every refused one.)
+    hide_manager["shell_retry_due"] = function(tool)
+        local cooldown = find_first_child(tool, "ShootingCooldown")
+        local wait_time = cooldown and cooldown["Value"] or 0
+        local fired_at = hide_manager["gun_fired_at"][tool]
+        local sent_with = hide_manager["gun_ammo_sent"][tool]
+        local ammo_value = find_first_child(tool, "Ammo")
+        local stamp = hide_manager["last_shot_stamp"](tool)
+
+        if not (fired_at and sent_with and ammo_value and ammo_value["Value"] >= sent_with and (not stamp or stamp <= fired_at + 0.02)
+            and clock() - fired_at >= math.max(local_ping / 1000 + 0.08, 0.12) and clock() - fired_at < wait_time + 0.0095) then
+            return false
+        end
+
+        local tries = hide_manager["quick_retries"][tool]
+        local now = clock()
+
+        if not tries or now - tries[1] > 2 then
+            tries = {now, 0}
+            hide_manager["quick_retries"][tool] = tries
+        end
+
+        -- (asked again for the same send, by the pick and then the send in one step: the same answer)
+        if tries[3] == fired_at then
+            return true
+        end
+
+        if tries[2] < 2 then
+            tries[2] += 1
+            tries[3] = fired_at
+
+            return true
+        end
+
+        return false
     end
 
     hide_manager["gun_ready"] = LPH_NO_VIRTUALIZE(function(tool, ammo)
@@ -33671,7 +33766,8 @@ end
             return elapsed >= wait_time + 0.0095
         end
 
-        if tool:GetAttribute("Cooldown") then
+        -- (the gun script's Cooldown after a shot the hook dropped holds nothing back: the server never had that shot)
+        if tool:GetAttribute("Cooldown") and hide_manager["last_shot_stamp"](tool) ~= nil then
             return false
         end
 
@@ -33685,8 +33781,16 @@ end
             end
         end
 
+        -- A shotgun shell the server turned away (its ammo still what it was a round trip after the send) started no cooldown there: the next one
+        -- goes after that round trip instead of the whole cooldown. Measured in a Double-Barrel fight: 29 of 43 shells were refused, none of them
+        -- took a round, the first try came at the edge of the reach (133 to 135 studs) and the next one only 0.36 s later, when the opponent had
+        -- already fired. At most 2 such quick tries in 2 s, so a run of refusals cannot spend the gun's SecurityTolerance.
+        if policed and cooldown and hide_manager["shell_retry_due"](tool) then
+            return true
+        end
+
         if cooldown then
-            local last = math.max(tool:GetAttribute("LocalLastShotAt") or -math.huge, hide_manager["gun_fired_at"][tool] or -math.huge)
+            local last = math.max(hide_manager["last_shot_stamp"](tool) or -math.huge, hide_manager["gun_fired_at"][tool] or -math.huge)
 
             -- The gun's own script turns a pull away until cooldown + 0.0095 + 0.05; the server takes the shot from cooldown + 0.0095 (measured: the
             -- DB 0.36 s, against 0.41 s here). With Maximum Fire Rate the script's wait is patched out, so only the server's is kept.
@@ -36307,6 +36411,10 @@ end
                     fire_reach += 15
                 end
 
+                if fire_reach and hide_manager["pre_fire_margin"] then
+                    fire_reach += hide_manager["pre_fire_margin"](local_server_position, ragebot_aim_position)
+                end
+
                 if aim_valid and local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and phase == nil and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= fire_reach) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown and not shot_pending)) then
                     local delay = follow_burst and 0 or flags["shot_delay"]
                     local stale = false
@@ -36462,6 +36570,11 @@ end
                                 end
                                 local away = (ragebot_aim_position - shot_origin)["Magnitude"]
                                 local reach = candidate[2] + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"]() and 15 or 0)
+
+                                if hide_manager["pre_fire_margin"] then
+                                    reach += hide_manager["pre_fire_margin"](shot_origin, ragebot_aim_position, tool)
+                                end
+
                                 within_reach = away ~= away or away <= reach
                             end
 
@@ -38128,7 +38241,7 @@ end
         hide_manager["gun_due"] = function(tool)
             local cooldown = find_first_child(tool, "ShootingCooldown")
             local wait_time = cooldown and tonumber(cooldown["Value"]) or 0
-            local last = math.max(tool:GetAttribute("LocalLastShotAt") or -math.huge, hide_manager["gun_fired_at"] and hide_manager["gun_fired_at"][tool] or -math.huge)
+            local last = math.max((hide_manager["last_shot_stamp"] and hide_manager["last_shot_stamp"](tool)) or -math.huge, hide_manager["gun_fired_at"] and hide_manager["gun_fired_at"][tool] or -math.huge)
             local margin = tool:GetAttribute("SecurityTolerance") ~= nil and 0.0095 or 0.0015
 
             -- Double Tap: the server fires the held half of a pair one cooldown after the first, so the next shot waits a second cooldown (sent
@@ -41509,6 +41622,8 @@ local get_silent_aim_position = nil
         menu_references["remove_recoil"] = menu_references["legitbot_other_section"]:create_element({["name"] = "remove recoil"}, {["toggle"] = {["flag"] = "remove_recoil"}})
         menu_references["range_enhancer"] = menu_references["legitbot_other_section"]:create_element({["name"] = "range enhancer"}, {["toggle"] = {["flag"] = "range_enhancer"}})
         menu_references["quick_draw"] = menu_references["legitbot_other_section"]:create_element({["name"] = "quick draw"}, {["toggle"] = {["flag"] = "quick_draw"}})
+        menu_references["quick_draw_settings"] = menu_references["quick_draw"]:create_settings()
+        menu_references["quick_draw_guns"] = menu_references["quick_draw_settings"]:create_element({["name"] = "guns"}, {["dropdown"] = {["flag"] = "quick_draw_guns", ["default"] = {"revolver", "double-barrel sg", "tacticalshotgun"}, ["options"] = {"double-barrel sg", "shotgun", "tacticalshotgun", "drum-shotgun", "rifle", "flintlock", "aug", "lmg", "smg", "p90", "silencerar", "ak47", "ar", "drumgun", "revolver", "glock", "silencer"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["ragebot_lead_fast"] = menu_references["legitbot_other_section"]:create_element({["name"] = "lead fast targets"}, {["toggle"] = {["flag"] = "ragebot_lead_fast", ["default"] = true}})
 
     -- >> ( legitbot master )
@@ -43141,7 +43256,11 @@ do
         return flags["range_enhancer"] == true or (legit == true and flags["legit_range_enhancer"] == true)
     end
 
-    hide_manager["range_enhance"] = function(origin, position, range, legit)
+    -- (aim: where the target is taken to be. A claim the 20 studs do not bring back within the Range, or that they leave further than 20 studs from
+    -- the target, goes on the line to the target at the Range instead: measured in a Double-Barrel fight, every shell claimed further than about
+    -- 120 studs out was refused (none of about 20 landed) and the hits all came from claims at 117, while the shells' claims, half the lead out
+    -- and pulled back no more than 20, sat at 124 to 159 against a flier.)
+    hide_manager["range_enhance"] = function(origin, position, range, legit, aim)
         if not hide_manager["range_enhancer_on"](legit) or typeof(origin) ~= "Vector3" or typeof(position) ~= "Vector3" or type(range) ~= "number" then
             return position
         end
@@ -43154,7 +43273,22 @@ do
             return position
         end
 
-        return position - offset["Unit"] * math.min(over, 20)
+        local pulled = position - offset["Unit"] * math.min(over, 20)
+
+        if typeof(aim) == "Vector3" then
+            local towards = aim - origin
+            local aim_distance = towards["Magnitude"]
+
+            if aim_distance == aim_distance and aim_distance > range - 3 then
+                local on_line = origin + towards["Unit"] * (range - 3)
+
+                if (on_line - aim)["Magnitude"] <= 20 and (over > 20 or (pulled - aim)["Magnitude"] > 20) then
+                    return on_line
+                end
+            end
+        end
+
+        return pulled
     end
 
     -- >> ( hitbox expander )
@@ -43279,11 +43413,27 @@ do
 
             local target = flags["ragebot"] and ragebot_target or nil
             local target_root = target and not target[7] and not target[18] and target[4] and target[4]["HumanoidRootPart"]
-            local distance = target_root and (target_root["Position"] - root["Position"])["Magnitude"] or nil
+            -- Measured the way Auto Fire measures its reach: from where the shot starts (hide_manager.shot_origin, moved ahead when closing in fast)
+            -- to the aim position, so the gun comes out by the time Auto Fire would shoot with it, Pre Fire's margin included (pre_fire_margin).
+            local aim_at = target_root and (ragebot_aim_position or target_root["Position"])
+            local from = root["Position"]
+
+            if aim_at and hide_manager["shot_origin"] and not local_following then
+                from = hide_manager["shot_origin"]() or from
+
+                if hide_manager["advance_origin"] then
+                    from = hide_manager["advance_origin"](from, aim_at)
+                end
+            end
+
+            local distance = aim_at and (aim_at - from)["Magnitude"] or nil
+            local reach_of = function(tool, range_value)
+                return range_value + extra + (hide_manager["pre_fire_margin"] and hide_manager["pre_fire_margin"](from, aim_at, tool) or 0)
+            end
 
             if distance and distance == distance then
                 -- the gun already out still reaches: kept (an empty one too, so it can be reloaded, unless another loaded gun reaches)
-                local keep = held_gun and drawn and drawn.gun == held and distance <= held_range["Value"] + extra
+                local keep = held_gun and drawn and drawn.gun == held and distance <= reach_of(held, held_range["Value"])
 
                 if keep then
                     drawn.seen = now
@@ -43300,11 +43450,26 @@ do
 
                 local best, best_range = nil, nil
 
+                -- the guns ticked in Quick Draw's Guns (by the menu's names: "[Double-Barrel SG]" is "double-barrel sg"); none ticked: any gun
+                local allowed = nil
+
+                if type(flags["quick_draw_guns"]) == "table" and #flags["quick_draw_guns"] > 0 then
+                    allowed = {}
+
+                    for _, name in flags["quick_draw_guns"] do
+                        allowed[string.lower(tostring(name))] = true
+                    end
+                end
+
                 for _, tool in get_children(backpack) do
                     local range = find_first_child(tool, "Range")
                     local ammo = find_first_child(tool, "Ammo")
 
-                    if range and ammo and ammo["Value"] > 0 and distance <= range["Value"] + extra and (not best_range or range["Value"] < best_range) then
+                    if allowed and not allowed[string.lower(string.sub(tool["Name"], 2, -2))] then
+                        range = nil
+                    end
+
+                    if range and ammo and ammo["Value"] > 0 and distance <= reach_of(tool, range["Value"]) and (not best_range or range["Value"] < best_range) then
                         best, best_range = tool, range["Value"]
                     end
                 end
@@ -43436,6 +43601,44 @@ do
         end
 
         return origin + way * 10
+    end
+
+    -- Pre Fire (Auto Fire's settings): a send reaches the server a moment after it leaves, and a target closing in is nearer by then. While
+    -- the gap closes, the reach checks (the gun pick and the shot hook) take that much more: the closing speed times Pre Fire Time (at most 40
+    -- studs), so the fake bullets start that much before the target is in reach and the first one lands as it comes in. The claim is Force
+    -- Hit's as always. Not for a shotgun (its refused calls count against its SecurityTolerance). No method calls in here (shot hook).
+    hide_manager["pre_fire_margin"] = function(origin, target_position, tool)
+        if flags["auto_fire_pre_fire"] ~= true or typeof(origin) ~= "Vector3" or typeof(target_position) ~= "Vector3" then
+            return 0
+        end
+
+        if tool and (tool["GetAttribute"](tool, "SecurityTolerance") ~= nil or string.find(tool["Name"], "Shotgun") or tool["Name"] == "[Double-Barrel SG]") then
+            return 0
+        end
+
+        local towards = target_position - origin
+        local distance = towards["Magnitude"]
+
+        if distance ~= distance or distance < 1 then
+            return 0
+        end
+
+        local way = towards / distance
+        local _, mine = hide_manager["trail_speed"]()
+        local theirs = hide_manager["aim_velocity"]
+        mine = typeof(mine) == "Vector3" and mine or vector3_zero
+        theirs = typeof(theirs) == "Vector3" and theirs or vector3_zero
+
+        local relative = theirs - mine
+        local closing = -(relative["X"] * way["X"] + relative["Y"] * way["Y"] + relative["Z"] * way["Z"])
+
+        if closing ~= closing or closing <= 0 then
+            return 0
+        end
+
+        local lead_time = (tonumber(flags["auto_fire_pre_fire_time"]) or 60) / 1000
+
+        return math.min(closing * lead_time, 40)
     end
 
     -- Where the shot hook starts a ragebot shot from (the lagged body, Origin Lag, plus the gun's height): the reach checks measure from here too.
