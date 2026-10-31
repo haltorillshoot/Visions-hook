@@ -6208,6 +6208,7 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["void_hide_bait_spot"] = {"void_hide_bait_spot", "void_hide_bait_spot", "list"},
 	["void_hide_deep_distance"] = {"void_hide_deep_distance", "void_hide_deep_distance"},
 	["void_hide_out_with_target"] = {"void_hide_out_with_target", "void_hide_out_with_target"},
+	["void_hide_hide_while_target_hides"] = {"void_hide_hide_while_target_hides", "void_hide_hide_while_target_hides"},
 	["follow_target_lead"] = {"follow_target_lead", "follow_target_lead"},
 	["follow_target_void_spammers"] = {"follow_target_void_spammers", "follow_target_void_spammers"},
 	["follow_target_lead_time"] = {"follow_target_lead_time", "follow_target_lead_time"},
@@ -10612,6 +10613,8 @@ function Session.buildSettingsPanels(rows)
 	table.insert(spamRows, select(2, panelToggle(voidHide, "Stop If Forced", "void_hide_stop_if_forced", false)))
 	-- out of the void with the target: the moment it comes out onto the map the body goes onto it, until it hides again
 	table.insert(spamRows, select(2, panelToggle(voidHide, "Out With Target", "void_hide_out_with_target", true)))
+	-- no windows out of the void while the target's own void spot keeps jumping (nothing can be shot at it then)
+	table.insert(spamRows, select(2, panelToggle(voidHide, "Hide While Target Hides", "void_hide_hide_while_target_hides", true)))
 	table.insert(spamRows, select(2, panelSlider(voidHide, "Offset", "void_hide_offset", 0, 250, 0, " studs", 0, { [0] = "off" })))
 	table.insert(spamRows, select(2, panelSlider(voidHide, "Void Time", "void_hide_void_time", 0.01, 2, 3, "s", 0.47)))
 	table.insert(spamRows, select(2, panelSlider(voidHide, "Teleport Time", "void_hide_teleport_time", 0.01, 2, 3, "s", 0.1)))
@@ -33156,11 +33159,13 @@ end
         menu_references["void_hide_exploit"] = menu_references["void_hide_settings"]:create_element({["name"] = "spam"}, {["toggle"] = {["flag"] = "void_hide_exploit"}})
         menu_references["void_hide_stop_if_forced"] = menu_references["void_hide_settings"]:create_element({["name"] = "stop if forced"}, {["toggle"] = {["flag"] = "void_hide_stop_if_forced"}})
         menu_references["void_hide_out_with_target"] = menu_references["void_hide_settings"]:create_element({["name"] = "out with target"}, {["toggle"] = {["flag"] = "void_hide_out_with_target", ["default"] = true}})
+        menu_references["void_hide_hide_while_target_hides"] = menu_references["void_hide_settings"]:create_element({["name"] = "hide while target hides"}, {["toggle"] = {["flag"] = "void_hide_hide_while_target_hides", ["default"] = true}})
         menu_references["void_hide_offset"] = menu_references["void_hide_settings"]:create_element({["name"] = "offset"}, {["slider"] = {["min"] = 0, ["max"] = 250, ["flag"] = "void_hide_offset", ["min_text"] = "off", ["suffix"] = "studs"}})
         menu_references["void_hide_void_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "void time"}, {["slider"] = {["min"] = 0.01, ["max"] = 2, ["decimals"] = 3, ["default"] = 0.47, ["flag"] = "void_hide_void_time", ["suffix"] = "s"}})
         menu_references["void_hide_teleport_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "teleport time"}, {["slider"] = {["min"] = 0.01, ["max"] = 2, ["decimals"] = 3, ["default"] = 0.1, ["flag"] = "void_hide_teleport_time", ["suffix"] = "s"}})
         menu_references["void_hide_stop_if_forced"]:set_visible(false)
         menu_references["void_hide_out_with_target"]:set_visible(false)
+        menu_references["void_hide_hide_while_target_hides"]:set_visible(false)
     menu_references["utility_section"] = menu["groups"]["main"]:create_section("ragebot", "utility", 2, 0.7, 0.3)
         menu_references["safe_purchasing"] = menu_references["utility_section"]:create_element({["name"] = "safe purchasing"}, {["toggle"] = {["flag"] = "safe_purchasing"}})
         menu_references["safe_purchasing_settings"] = menu_references["safe_purchasing"]:create_settings()
@@ -40304,6 +40309,7 @@ end
             menu_references["void_hide_void_time"]:set_visible(value)
             menu_references["void_hide_stop_if_forced"]:set_visible(value)
             menu_references["void_hide_out_with_target"]:set_visible(value)
+            menu_references["void_hide_hide_while_target_hides"]:set_visible(value)
         end)
 
         menu_references["void_hide_offset"]:set_visible(false)
@@ -40586,6 +40592,12 @@ end
                         and ragebot_aim_position["Magnitude"] < 9e5 and not ragebot_target[7] and not ragebot_target[18]
                         and not (hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position))
 
+                    -- Hide While Target Hides (Spam's gear, on by default): while the target's own void spot keeps jumping nothing can be shot at it
+                    -- (the ragebot holds its shots), so the spam's windows out of the void are skipped and the body stays hidden. Measured over 18
+                    -- minutes against a target that void spams: every one of the 7 hits taken came while the body was out, 4 of them in those windows.
+                    local target_hidden = spam_on_target and flags["void_hide_hide_while_target_hides"] ~= false and ragebot_aim_position ~= nil
+                        and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position)
+
                     if target_out then
                         if not spam_out_since then
                             spam_out_since = tick
@@ -40593,11 +40605,11 @@ end
                         end
 
                         in_void = false
-                    elseif tick - last > void_hide_void_time then
+                    elseif not target_hidden and tick - last > void_hide_void_time then
                         last = tick
                         hide_manager["spam_cycle_start"] = tick
                         in_void = false
-                    elseif tick - last < void_hide_teleport_time then
+                    elseif not target_hidden and tick - last < void_hide_teleport_time then
                         in_void = false
                     elseif do_void_hide then
                         spam_out_since = nil
