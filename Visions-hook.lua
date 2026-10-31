@@ -6204,6 +6204,11 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["void_hide_bait_distance"] = {"void_hide_bait_distance", "void_hide_bait_distance"},
 	["void_hide_bait_cooldown"] = {"void_hide_bait_cooldown", "void_hide_bait_cooldown"},
 	["void_hide_bait_time"] = {"void_hide_bait_time", "void_hide_bait_time"},
+	["void_hide_bait_freeze"] = {"void_hide_bait_freeze", "void_hide_bait_freeze"},
+	["void_hide_bait_spot"] = {"void_hide_bait_spot", "void_hide_bait_spot", "list"},
+	["void_hide_deep_distance"] = {"void_hide_deep_distance", "void_hide_deep_distance"},
+	["follow_target_lead"] = {"follow_target_lead", "follow_target_lead"},
+	["follow_target_lead_time"] = {"follow_target_lead_time", "follow_target_lead_time"},
 	["void_hide_disable_when"] = {"void_hide_disable_when", "void_hide_disable_when", "list"},
 	["void_hide_force_when"] = {"void_hide_force_when", "void_hide_force_when", "list"},
 	["void_hide_exploit"] = {"void_hide_exploit", "void_hide_exploit"},
@@ -6230,6 +6235,8 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["follow_target_teleport_max"] = {"follow_target_teleport_max", "follow_target_teleport_max"},
 	["follow_target_sky_min"] = {"follow_target_sky_min", "follow_target_sky_min"},
 	["follow_target_sky_max"] = {"follow_target_sky_max", "follow_target_sky_max"},
+	["follow_target_zigzag_height"] = {"follow_target_zigzag_height", "follow_target_zigzag_height"},
+	["follow_target_zigzag_speed"] = {"follow_target_zigzag_speed", "follow_target_zigzag_speed"},
 	["follow_target_visualize"] = {"follow_target_visualize", "follow_target_visualize"},
 	["follow_target_visualize_color"] = {"follow_target_visualize_color", "follow_target_visualize_color", "color"},
 	["follow_target_adjust"] = {"follow_target_adjust", "follow_target_adjust"},
@@ -10433,8 +10440,8 @@ function Session.buildSettingsPanels(rows)
 	panelSlider(loadout, "Ammo", "auto_loadout_ammo", 0, 50, 0, "x", 5)
 
 	local follow = rows.followTarget:AddOption()
-	local strafeRows, randomizeRows, skyRows = {}, {}, {}
-	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above", "hold" }, "random", function(value)
+	local strafeRows, randomizeRows, skyRows, zigzagRows = {}, {}, {}, {}
+	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above", "zig zag" }, "random", function(value)
 		for _, row in ipairs(strafeRows) do
 			row:SetVisible(isPicked(value, "strafe"))
 		end
@@ -10446,12 +10453,19 @@ function Session.buildSettingsPanels(rows)
 		for _, row in ipairs(skyRows) do
 			row:SetVisible(isPicked(value, "above"))
 		end
+
+		for _, row in ipairs(zigzagRows) do
+			row:SetVisible(isPicked(value, "zig zag"))
+		end
 	end)
 	panelList(follow, "Stop If", "follow_target_stop_if", { "no gun equipped", "target knocked", "reloading" }, { "no gun equipped", "target knocked", "reloading" })
 	panelSlider(follow, "Distance", "follow_target_distance", 2, 200, 0, " studs", 15)
 	panelToggle(follow, "Follow Into Void", "follow_target_into_void", true)
 	panelToggle(follow, "Adjust", "follow_target_adjust", false)
-	-- Random, Randomize, Above and Hold keep one place this long before taking a new one (0 = a new place every frame). The server has the body
+	-- Lead: a fast target is followed to where it will be by the time the server has the body there (its speed times Lead Time, up to 60 studs)
+	panelToggle(follow, "Lead", "follow_target_lead", true)
+	panelSlider(follow, "Lead Time", "follow_target_lead_time", 0, 300, 0, "ms", 80)
+	-- Random, Randomize and Above keep one place this long before taking a new one (0 = a new place every frame); Zig Zag switches sides this often. The server has the body
 	-- about 0.1 s late and takes a shot only from near where it has it, so a place that changes every frame gets many shots refused.
 	panelSlider(follow, "Reposition Every", "follow_target_reposition", 0, 2, 2, "s", 0.15)
 	table.insert(strafeRows, select(2, panelSlider(follow, "Height", "follow_target_height", -200, 200, 0, " studs", 0)))
@@ -10462,6 +10476,9 @@ function Session.buildSettingsPanels(rows)
 	table.insert(randomizeRows, select(2, panelSlider(follow, "Teleport Max", "follow_target_teleport_max", 2, 200, 0, " studs", 17)))
 	table.insert(skyRows, select(2, panelSlider(follow, "Height Min", "follow_target_sky_min", 1, 100, 0, " studs", 10)))
 	table.insert(skyRows, select(2, panelSlider(follow, "Height Max", "follow_target_sky_max", 2, 200, 0, " studs", 20)))
+	-- Zig Zag: how high over the target, and how fast it crosses from one side to the other (the same multiplier as Misc's Speed: 1x = 16 studs/s)
+	table.insert(zigzagRows, select(2, panelSlider(follow, "Zig Zag Height", "follow_target_zigzag_height", -200, 200, 0, " studs", 3)))
+	table.insert(zigzagRows, select(2, panelSlider(follow, "Zig Zag Speed", "follow_target_zigzag_speed", 1, 100, 0, "x", 35)))
 	panelToggle(follow, "Visualize", "follow_target_visualize", false)
 	panelColor(follow, "Visualize Color", "follow_target_visualize_color", Color3.fromRGB(255, 194, 254))
 
@@ -10560,17 +10577,27 @@ function Session.buildSettingsPanels(rows)
 
 	-- Void hide --
 	local voidHide = rows.voidHide:AddOption()
-	local voidHideTypes = game.PlaceId == 7213786345 and { "vc server" } or { "random", "bait" }
+	local voidHideTypes = game.PlaceId == 7213786345 and { "vc server" } or { "random", "bait", "deep" }
 	local baitRows = {}
+	local deepRows = {}
 	local spamRows = {}
 	panelList(voidHide, "Type", "void_hide_type", voidHideTypes, voidHideTypes[1], function(value)
 		for _, row in ipairs(baitRows) do
 			row:SetVisible(isPicked(value, "bait"))
 		end
+
+		for _, row in ipairs(deepRows) do
+			row:SetVisible(isPicked(value, "deep"))
+		end
 	end)
 	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Distance", "void_hide_bait_distance", 200, 2500, 0, " studs", 250)))
 	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Cooldown", "void_hide_bait_cooldown", 0.01, 1.5, 2, "s", 0.5)))
-	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Time", "void_hide_bait_time", 0.01, 0.3, 2, "s", 0.03)))
+	-- Bait Time: how long the body stands on the map as bait (with Bait Freeze it stands still there, and the ragebot shoots from it)
+	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Time", "void_hide_bait_time", 0.01, 1, 2, "s", 0.03)))
+	table.insert(baitRows, select(2, panelToggle(voidHide, "Bait Freeze", "void_hide_bait_freeze", false)))
+	table.insert(baitRows, select(2, panelList(voidHide, "Bait Spot", "void_hide_bait_spot", { "random", "where you stood" }, "random")))
+	-- Deep: one spot this far out, held still, so a follower that comes after the body is dragged out there with it
+	table.insert(deepRows, select(2, panelSlider(voidHide, "Deep Distance", "void_hide_deep_distance", 1, 1000, 0, "m studs", 100)))
 	panelList(voidHide, "Disable When", "void_hide_disable_when", { "target selected", "following target", "target knocked", "purchasing" }, {})
 	panelList(voidHide, "Force When", "void_hide_force_when", { "not full health", "tabbed out", "reloading" }, {})
 	panelToggle(voidHide, "Spam", "void_hide_exploit", false, function(value)
@@ -10583,8 +10610,12 @@ function Session.buildSettingsPanels(rows)
 	table.insert(spamRows, select(2, panelSlider(voidHide, "Void Time", "void_hide_void_time", 0.01, 2, 3, "s", 0.47)))
 	table.insert(spamRows, select(2, panelSlider(voidHide, "Teleport Time", "void_hide_teleport_time", 0.01, 2, 3, "s", 0.1)))
 
-	-- Bait settings need the bait type; the spam timings need spam on.
+	-- Bait settings need the bait type, Deep's distance the deep type; the spam timings need spam on.
 	for _, row in ipairs(baitRows) do
+		row:SetVisible(false)
+	end
+
+	for _, row in ipairs(deepRows) do
 		row:SetVisible(false)
 	end
 
@@ -33098,10 +33129,13 @@ end
         menu_references["sleep_rate"] = menu_references["fake_position_settings"]:create_element({["name"] = "sleep rate"}, {["slider"] = {["flag"] = "sleep_rate", ["min"] = 1, ["max"] = 100, ["default"] = 1, ["suffix"] = "%"}})
         menu_references["void_hide"] = menu_references["anti_section"]:create_element({["name"] = "void hide"}, {["toggle"] = {["flag"] = "void_hide"}})
         menu_references["void_hide_settings"] = menu_references["void_hide"]:create_settings()
-        menu_references["void_hide_type"] = menu_references["void_hide_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["options"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random", "bait"}, ["flag"] = "void_hide_type", ["requires_one"] = true, ["default"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random"}}})
+        menu_references["void_hide_type"] = menu_references["void_hide_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["options"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random", "bait", "deep"}, ["flag"] = "void_hide_type", ["requires_one"] = true, ["default"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random"}}})
         menu_references["void_hide_bait_distance"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait distance"}, {["slider"] = {["min"] = 200, ["max"] = 2500, ["decimals"] = 0, ["default"] = 250, ["flag"] = "void_hide_bait_distance", ["suffix"] = " studs"}})
         menu_references["void_hide_bait_cooldown"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait cooldown"}, {["slider"] = {["min"] = 0.01, ["max"] = 1.5, ["decimals"] = 2, ["default"] = 0.5, ["flag"] = "void_hide_bait_cooldown", ["suffix"] = "s"}})
-        menu_references["void_hide_bait_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait time"}, {["slider"] = {["min"] = 0.01, ["max"] = 0.3, ["decimals"] = 2, ["default"] = 0.03, ["flag"] = "void_hide_bait_time", ["suffix"] = "s"}})
+        menu_references["void_hide_bait_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait time"}, {["slider"] = {["min"] = 0.01, ["max"] = 1, ["decimals"] = 2, ["default"] = 0.03, ["flag"] = "void_hide_bait_time", ["suffix"] = "s"}})
+        menu_references["void_hide_bait_freeze"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait freeze"}, {["toggle"] = {["flag"] = "void_hide_bait_freeze", ["default"] = false}})
+        menu_references["void_hide_bait_spot"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait spot"}, {["dropdown"] = {["flag"] = "void_hide_bait_spot", ["options"] = {"random", "where you stood"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["void_hide_deep_distance"] = menu_references["void_hide_settings"]:create_element({["name"] = "deep distance"}, {["slider"] = {["min"] = 1, ["max"] = 1000, ["decimals"] = 0, ["default"] = 100, ["flag"] = "void_hide_deep_distance", ["suffix"] = "m studs"}})
         menu_references["void_hide_disable_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"target selected", "following target", "target knocked", "purchasing"}, ["flag"] = "void_hide_disable_when", ["multi"] = true, ["requires_one"] = false}})
         menu_references["void_hide_force_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "force when"}, {["dropdown"] = {["options"] = {"not full health", "tabbed out", "reloading"}, ["flag"] = "void_hide_force_when", ["multi"] = true, ["requires_one"] = false}})
         menu_references["void_hide_exploit"] = menu_references["void_hide_settings"]:create_element({["name"] = "spam"}, {["toggle"] = {["flag"] = "void_hide_exploit"}})
@@ -33121,11 +33155,13 @@ end
         menu_references["auto_loadout_ammo"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "ammo"}, {["slider"] = {["flag"] = "auto_loadout_ammo", ["min"] = 0, ["max"] = 50, ["default"] = 5, ["suffix"] = "x"}})
         menu_references["follow_target"] = menu_references["utility_section"]:create_element({["name"] = "follow target"}, {["toggle"] = {["flag"] = "follow_target"}})
         menu_references["follow_target_settings"] = menu_references["follow_target"]:create_settings()
-        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "hold"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "zig zag"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["follow_target_stop_if"] = menu_references["follow_target_settings"]:create_element({["name"] = "stop if"}, {["dropdown"] = {["flag"] = "follow_target_stop_if", ["options"] = {"no gun equipped", "target knocked", "reloading"}, ["default"] = {"no gun equipped", "target knocked", "reloading"}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
         menu_references["follow_target_into_void"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow into void"}, {["toggle"] = {["flag"] = "follow_target_into_void", ["default"] = true}})
         menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
+        menu_references["follow_target_lead"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead"}, {["toggle"] = {["flag"] = "follow_target_lead", ["default"] = true}})
+        menu_references["follow_target_lead_time"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead time"}, {["slider"] = {["flag"] = "follow_target_lead_time", ["min"] = 0, ["max"] = 300, ["default"] = 80, ["decimals"] = 0, ["suffix"] = "ms"}})
         menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.15, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["follow_target_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "height"}, {["slider"] = {["flag"] = "follow_target_height", ["min"] = -200, ["max"] = 200, ["default"] = 0, ["suffix"] = " studs"}})
         menu_references["follow_target_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "follow_target_speed", ["min"] = 1, ["max"] = 100, ["default"] = 75, ["suffix"] = "%"}})
@@ -33134,6 +33170,8 @@ end
         menu_references["follow_target_teleport_max"] = menu_references["follow_target_settings"]:create_element({["name"] = "teleport max"}, {["slider"] = {["flag"] = "follow_target_teleport_max", ["min"] = 2, ["max"] = 200, ["default"] = 17, ["suffix"] = " studs"}})
         menu_references["follow_target_sky_min"] = menu_references["follow_target_settings"]:create_element({["name"] = "height min"}, {["slider"] = {["flag"] = "follow_target_sky_min", ["min"] = 1, ["max"] = 100, ["default"] = 10, ["suffix"] = " studs"}})
         menu_references["follow_target_sky_max"] = menu_references["follow_target_settings"]:create_element({["name"] = "height max"}, {["slider"] = {["flag"] = "follow_target_sky_max", ["min"] = 2, ["max"] = 200, ["default"] = 20, ["suffix"] = " studs"}})
+        menu_references["follow_target_zigzag_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "zig zag height"}, {["slider"] = {["flag"] = "follow_target_zigzag_height", ["min"] = -200, ["max"] = 200, ["default"] = 3, ["suffix"] = " studs"}})
+        menu_references["follow_target_zigzag_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "zig zag speed"}, {["slider"] = {["flag"] = "follow_target_zigzag_speed", ["min"] = 1, ["max"] = 100, ["default"] = 35, ["suffix"] = "x", ["prefix"] = ""}})
         menu_references["follow_target_visualize"] = menu_references["follow_target_settings"]:create_element({["name"] = "visualize"}, {["toggle"] = {["flag"] = "follow_target_visualize", ["default"] = false}})
         menu_references["follow_target_visualize_color"] = menu_references["follow_target_settings"]:create_element({["name"] = "visualize color"}, {["colorpicker"] = {["color_flag"] = "follow_target_visualize_color", ["transparency_flag"] = "follow_target_visualize_transparency", ["default_color"] = color3_fromrgb(255, 194, 254), ["default_transparency"] = 0}})
         menu_references["follow_target_height"]:set_visible(false)
@@ -33143,6 +33181,8 @@ end
         menu_references["follow_target_teleport_max"]:set_visible(false)
         menu_references["follow_target_sky_min"]:set_visible(false)
         menu_references["follow_target_sky_max"]:set_visible(false)
+        menu_references["follow_target_zigzag_height"]:set_visible(false)
+        menu_references["follow_target_zigzag_speed"]:set_visible(false)
         menu_references["auto_stomp"] = menu_references["utility_section"]:create_element({["name"] = "auto stomp"}, {["toggle"] = {["flag"] = "auto_stomp"}})
         menu_references["auto_stomp_settings"] = menu_references["auto_stomp"]:create_settings()
         menu_references["auto_stomp_stop_when_dead"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "stop when target dead"}, {["toggle"] = {["flag"] = "auto_stomp_stop_when_dead", ["default"] = false}})
@@ -36158,7 +36198,10 @@ end
                 if aim_valid and not invulnerable_void_active and clock() - (hide_manager["spam_cycle_at"] or -1) < 0.1 then
                     local settle = getgenv()["neverlose_spam_settle"] or math.min(local_ping/1000 + 0.03, 0.15)
 
-                    if in_void == true or clock() - (hide_manager["spam_cycle_start"] or 0) < settle then
+                    -- (standing on the map as bait: the ragebot shoots from there once the server has had the body there for the settle time)
+                    local baiting = clock() - (hide_manager["bait_visible_at"] or -1) < 0.1 and clock() - (hide_manager["bait_since"] or 0) >= settle
+
+                    if not baiting and (in_void == true or clock() - (hide_manager["spam_cycle_start"] or 0) < settle) then
                         aim_valid = false
                     end
                 end
@@ -36219,10 +36262,20 @@ end
 
                     if reach == nil or reach > 15 then
                         if not lock or now >= lock[1] then
-                            local offset = local_server_position - ragebot_aim_position
+                            -- the next hold is at the follow style's next place (the lock is over, so follow_cframe gives it), not where the body is
+                            -- now: taking the body's place held it there again and again, so Zig Zag changed place 4 times in 3 s
+                            local next_cframe = hide_manager["follow_cframe"] and hide_manager["follow_cframe"](ragebot_aim_position, false, true)
+                            local offset = next_cframe and (next_cframe["Position"] - ragebot_aim_position) or (local_server_position - ragebot_aim_position)
 
                             if offset["Magnitude"] == offset["Magnitude"] and offset["Magnitude"] < 200 then
-                                hide_manager["shot_lock"] = {now + 0.6, offset, now}
+                                -- held for Reposition Every (at least the round trip it waits plus 0.05 s, so the place gets shots): it used to be held
+                                -- 0.6 s and pushed on 0.25 s by every shot, and with fake bullets going out all the time the follow never moved again
+                                -- (Zig Zag at 0.22 s: 14 places in 10 s instead of about 45)
+                                local settle = math.max(local_ping / 1000 + 0.06, 0.1)
+                                local hold_time = hide_manager["follow_hold_time"] and hide_manager["follow_hold_time"]() or tonumber(flags["follow_target_reposition"]) or 0.6
+                                local hold = math.max(hold_time, settle + 0.05)
+
+                                hide_manager["shot_lock"] = {now + hold, offset, now, now + hold}
                                 aim_valid = false
                             end
                         elseif now - lock[3] < math.max(local_ping / 1000 + 0.06, 0.1) then
@@ -36535,7 +36588,7 @@ end
                                 -- the held place stays until a moment after the last shot (Shot Lock above)
                                 local lock = hide_manager["shot_lock"]
                                 if lock and clock() < lock[1] then
-                                    lock[1] = math.max(lock[1], clock() + 0.25)
+                                    lock[1] = math.min(math.max(lock[1], clock() + 0.25), lock[4] or math.huge)
                                 end
 
                                 -- bullet manipulation: the gun shoots by itself, aimed by the hook above
@@ -37210,7 +37263,11 @@ end
 
             local now = clock()
 
-            if not adjust_state["aim"] or (aim - adjust_state["aim"])["Magnitude"] > 4 or now - adjust_state["at"] > 0.25 then
+            -- (searched again every Reposition Every, at most every 0.25 s as before: with a short Reposition Every the adjusted place held for a
+            -- quarter of a second and was always the same nearest spot, so Random did not move at all while its places were behind walls)
+            local research = math.min(math.max(tonumber(flags["follow_target_reposition"]) or 0.25, 0.02), 0.25)
+
+            if not adjust_state["aim"] or (aim - adjust_state["aim"])["Magnitude"] > 4 or now - adjust_state["at"] > research then
                 adjust_state["at"] = now
                 adjust_state["aim"] = aim
                 adjust_state["offset"] = nil
@@ -37228,13 +37285,14 @@ end
                     end
                 end
 
-                -- the nearest to the target first; among the same distance the one on the style's side
+                -- the nearest to the style's own place first (so a style that moves keeps moving: Random's new place each Reposition Every gives a new
+                -- adjusted one); among the same, the nearer to the target
                 table.sort(candidates, function(a, b)
-                    if a[3] ~= b[3] then
-                        return a[3] < b[3]
+                    if math.abs(a[2] - b[2]) > 0.5 then
+                        return a[2] < b[2]
                     end
 
-                    return a[2] < b[2]
+                    return a[3] < b[3]
                 end)
 
                 for _, candidate in candidates do
@@ -37258,40 +37316,45 @@ end
         -- The follow step uses it every frame, and so does the Void Hide Spam for the windows it spends out of the void on the target: `window` is that, and
         -- Random Spam then leaves out its jumps into the void (the cycle has the void already). `quiet` keeps Visualize from drawing.
         -- Reposition Every: the place Random, Randomize and Above last took (as an offset from the target, and its turn), kept until it is that old.
-        -- Hold: one place Distance studs out and above the target with a clear line to it, kept until it is blocked or Reposition Every (at least
-        -- half a second) has gone by.
         local held = {["style"] = nil, ["offset"] = nil, ["turn"] = nil, ["at"] = -1}
 
-        local hold_place = function(aim)
-            local clear = hide_manager["walls_clear"]
-            local lift = vector3_new(0, 3.0208, 0)
+        -- Zig Zag: Distance studs out and Zig Zag Height over the target, switching from one side of it to the other (at Zig Zag Speed) while the line it swings across turns round the target (25 degrees a switch), so the body goes back and forth across the target
+        -- and on round it.
+        local zigzag = {["base"] = math_random() * 2 * math["pi"], ["side"] = 1, ["at"] = -1, ["offset"] = nil}
+
+        -- Zig Zag Speed (the same multiplier as Misc's Speed, 1x = 16 studs/s): a switch comes once a body going that fast would have crossed from the
+        -- last place to the next (2 * Distance * sin 55, plus the turn), so a faster Speed or a shorter Distance switches sides more often.
+        local zigzag_every = function()
+            local speed = (tonumber(flags["follow_target_zigzag_speed"]) or 35) * 16
+            local leg = 2 * distance * math["sin"](rad(55)) + distance * rad(25)
+
+            return math.max(leg / math.max(speed, 1), 0.03)
+        end
+
+        -- how long the Shot Lock holds one place: Zig Zag's switch time, Reposition Every for the others
+        hide_manager["follow_hold_time"] = function()
+            if follow_target_style == "zig zag" then
+                return zigzag_every()
+            end
+
+            return tonumber(flags["follow_target_reposition"]) or 0.6
+        end
+
+        local zigzag_place = function()
             local now = clock()
-            local offset = held["style"] == "hold" and held["offset"]
-            local keep = math.max(tonumber(flags["follow_target_reposition"]) or 0.15, 0.5)
+            local every = zigzag_every()
 
-            if offset and now - held["at"] < keep and (not clear or clear(aim + offset + lift, aim)) then
-                return offset
+            if not zigzag["offset"] or now - zigzag["at"] >= every then
+                zigzag["side"] = -zigzag["side"]
+                zigzag["base"] = (zigzag["base"] + rad(25)) % (2 * math["pi"])
+
+                local angle = zigzag["base"] + zigzag["side"] * rad(55)
+
+                zigzag["offset"] = vector3_new(math["cos"](angle) * distance, (tonumber(flags["follow_target_zigzag_height"]) or 3) + math_random() * 2, math["sin"](angle) * distance)
+                zigzag["at"] = now
             end
 
-            local fallback
-
-            for _ = 1, 10 do
-                local angle = math_random() * 2 * math["pi"]
-                local up = 0.25 + math_random() * 0.6
-                local flat = math["sqrt"](1 - up * up)
-                local candidate = vector3_new(math["cos"](angle) * flat, up, math["sin"](angle) * flat) * distance
-
-                fallback = fallback or candidate
-
-                if not clear or clear(aim + candidate + lift, aim) then
-                    offset = candidate
-                    break
-                end
-            end
-
-            held["style"], held["offset"], held["turn"], held["at"] = "hold", offset or fallback, nil, now
-
-            return held["offset"]
+            return zigzag["offset"]
         end
 
         -- How far from the target the current follow style can put the body (nil when it can go farther than the follow's own reach: Random Spam's
@@ -37303,8 +37366,10 @@ end
 
             if follow_target_style == "strafe" then
                 return math.sqrt(distance * distance + height["Y"] * height["Y"])
-            elseif follow_target_style == "hold" then
-                return distance
+            elseif follow_target_style == "zig zag" then
+                local over = math.abs(tonumber(flags["follow_target_zigzag_height"]) or 3) + 2
+
+                return math.sqrt(distance * distance + over * over)
             elseif follow_target_style == "randomize" then
                 local high = math.max(flags["follow_target_teleport_max"] or 17, flags["follow_target_teleport_min"] or 2)
                 return math.sqrt(high * high + 25)
@@ -37329,9 +37394,8 @@ end
             local reposition = tonumber(flags["follow_target_reposition"]) or 0.15
             local reuse = reposition > 0 and held["style"] == follow_target_style and held["offset"] and clock() - held["at"] < reposition
 
-            if follow_target_style == "hold" then
-                local offset = hold_place(aim)
-                new_cframe = cframe_new(aim + offset, aim)
+            if follow_target_style == "zig zag" then
+                new_cframe = cframe_new(aim + zigzag_place(), aim)
             elseif reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above") then
                 new_cframe = cframe_new(aim + held["offset"]) * held["turn"]
             elseif follow_target_style == "random" then
@@ -37402,6 +37466,56 @@ end
             return new_cframe
         end
 
+        -- Follow Into Void leaves the body where the follow put it: when the follow stops on a spot out in the void (the target's void spot jumped,
+        -- it died, a Stop If reason) the body used to stay out there until it died. Out in the void (over 900,000 studs, or under the kill height)
+        -- with nothing holding it there (no follow, no void hide step, no hide reason, no purchase) for 0.15 s, it goes back to the last place it
+        -- stood on the map.
+        do
+            local last_map_cframe = nil
+            local stray_since = nil
+
+            create_connection(run_service["Heartbeat"], function()
+                local hrp = local_character and find_first_child(local_character, "HumanoidRootPart")
+
+                if not hrp then
+                    last_map_cframe, stray_since = nil, nil
+                    return
+                end
+
+                if in_void or invulnerable_void_active or purchasing then
+                    stray_since = nil
+                    return
+                end
+
+                local position = hrp["Position"]
+                local kill_height = workspace["FallenPartsDestroyHeight"]
+                local out_there = position["Magnitude"] > 9e5 or (kill_height == kill_height and position["Y"] < kill_height + 25)
+
+                if not out_there then
+                    if not local_following or (ragebot_aim_position and ragebot_aim_position["Magnitude"] < 9e5) then
+                        last_map_cframe = hrp["CFrame"]
+                        hide_manager["last_map_cframe"] = last_map_cframe
+                    end
+
+                    stray_since = nil
+                    return
+                end
+
+                if local_following then
+                    stray_since = nil
+                    return
+                end
+
+                stray_since = stray_since or clock()
+
+                if clock() - stray_since > 0.15 and last_map_cframe then
+                    hrp["CFrame"] = last_map_cframe
+                    hrp["AssemblyLinearVelocity"] = vector3_zero
+                    stray_since = nil
+                end
+            end)
+        end
+
         -- rays for the follow's move carry-over: the character itself and the game's Ignored folder are not walls
         local move_params = RaycastParams["new"]()
         move_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
@@ -37457,7 +37571,12 @@ end
                 return
             end
 
-            if ragebot_target and hrp and ((not in_void and not stomping and not purchasing) or bypass) and ragebot_aim_position and ragebot_aim_position["Magnitude"] < void_limit and not ragebot_target[7] then
+            -- ...and never to a spot under the game's kill height (FallenPartsDestroyHeight): a target that hides down there keeps its character
+            -- with its own script, the body sent after it is destroyed (measured: followed into the void, then dead about 3 s later).
+            local kill_height = workspace["FallenPartsDestroyHeight"]
+            local under_kill = ragebot_aim_position ~= nil and kill_height == kill_height and ragebot_aim_position["Y"] < kill_height + 25
+
+            if ragebot_target and hrp and (((not in_void or hide_manager["prefollow_hiding"]) and not stomping and not purchasing) or bypass) and ragebot_aim_position and ragebot_aim_position["Magnitude"] < void_limit and not under_kill and not ragebot_target[7] then
                 if follow_target_stop_if_reloading and local_reloading then -- theres a reason for not using else ifs i think? i forget but im not risking it
                     local_following = false
                     return
@@ -37476,9 +37595,30 @@ end
                 -- The position saved at the start of this frame, before any anti aim step moved the character: every step then
                 -- restores the same value whatever order they run in.
                 local old_cframe = local_client_position
-                local new_cframe = hide_manager["follow_cframe"](ragebot_aim_position, false, bypass)
+
+                -- Lead (Follow Target's gear, on by default): the aim already leads the target by what this client sees late; the body put next to
+                -- it reaches the server another one-way trip and a tick later, and a target going 100 studs/s or more has moved on by then, so the
+                -- place goes that much further along (speed times Lead Time, at most 60 studs, only for a speed both readings agree on).
+                local follow_aim = ragebot_aim_position
+                local target_speed = hide_manager["aim_velocity"]
+
+                if flags["follow_target_lead"] ~= false and not bypass and typeof(target_speed) == "Vector3" and target_speed["Magnitude"] > 40 and hide_manager["aim_trusted"] then
+                    local ahead = target_speed * ((tonumber(flags["follow_target_lead_time"]) or 80) / 1000)
+
+                    if ahead["Magnitude"] > 60 then
+                        ahead = ahead["Unit"] * 60
+                    end
+
+                    follow_aim = ragebot_aim_position + ahead
+                end
+
+                local new_cframe = hide_manager["follow_cframe"](follow_aim, false, bypass)
 
                 local_following = true
+
+                if not bypass then
+                    hide_manager["follow_ready_at"] = clock()
+                end
 
                 if bypass then
                     return new_cframe
@@ -37575,6 +37715,8 @@ end
             menu_references["follow_target_teleport_max"]:set_visible(follow_target_style == "randomize")
             menu_references["follow_target_sky_min"]:set_visible(follow_target_style == "above")
             menu_references["follow_target_sky_max"]:set_visible(follow_target_style == "above")
+            menu_references["follow_target_zigzag_height"]:set_visible(follow_target_style == "zig zag")
+            menu_references["follow_target_zigzag_speed"]:set_visible(follow_target_style == "zig zag")
             hide_manager["follow_visual_clear"]()
         end)
 
@@ -40183,11 +40325,17 @@ end
             menu_references["void_hide_bait_distance"]:set_visible(is_bait)
             menu_references["void_hide_bait_time"]:set_visible(is_bait)
             menu_references["void_hide_bait_cooldown"]:set_visible(is_bait)
+            menu_references["void_hide_bait_freeze"]:set_visible(is_bait)
+            menu_references["void_hide_bait_spot"]:set_visible(is_bait)
+            menu_references["void_hide_deep_distance"]:set_visible(value[1] == "deep")
 
         end)
         menu_references["void_hide_bait_distance"]:set_visible(false)
         menu_references["void_hide_bait_time"]:set_visible(false)
         menu_references["void_hide_bait_cooldown"]:set_visible(false)
+        menu_references["void_hide_bait_freeze"]:set_visible(false)
+        menu_references["void_hide_bait_spot"]:set_visible(false)
+        menu_references["void_hide_deep_distance"]:set_visible(false)
 
         local cframe_angles = CFrame["Angles"]
         local rad = math["rad"]
@@ -40218,6 +40366,63 @@ end
 
         local new_cframe = cframe_new()
         
+
+        -- Bait: a visit to a spot on the map every Bait Cooldown, Bait Time long, so a target that follows the body comes after it. Bait Spot
+        -- picks the spot (anywhere within Bait Distance, or the last place the body stood on the map); Bait Freeze keeps the body still there
+        -- (no Offset), and the ragebot shoots from it (hide_manager.bait_visible_at / bait_since): a target that came for the bait is shot at.
+        -- With Spam the bait visit takes the place of the void for its time, as it does without.
+        local bait_step = function(tick, hrp)
+            local difference = tick - last_bait
+
+            if difference > flags["void_hide_bait_cooldown"] then
+                last_bait = tick
+
+                local spot_type = flags["void_hide_bait_spot"]
+                local stood = type(spot_type) == "table" and spot_type[1] == "where you stood" and hide_manager["last_map_cframe"]
+
+                if stood and stood["Position"]["Magnitude"] < 9e5 then
+                    bait_position = cframe_new(stood["Position"])
+                else
+                    local bait_range = flags["void_hide_bait_distance"]
+                    bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
+                end
+
+                return false
+            elseif difference < flags["void_hide_bait_time"] and bait_position then
+                if flags["void_hide_bait_freeze"] == true then
+                    hrp["CFrame"] = bait_position
+                    hrp["AssemblyLinearVelocity"] = vector3_zero
+                else
+                    hrp["CFrame"] = bait_position + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset))
+                end
+
+                hide_manager["bait_visible_at"] = tick
+                hide_manager["bait_since"] = last_bait
+
+                return true
+            end
+
+            return false
+        end
+
+        -- Deep: one spot far out in the void (Deep Distance million studs along a random direction, high above the kill height), held still for
+        -- the life instead of a new spot every frame, so a target whose follow comes after the body is taken out there with it, where it can
+        -- barely move; Spam's windows then take the body back to the target to shoot it (Follow Into Void follows it out there).
+        local deep_spot = nil
+        local deep_for = nil
+
+        local deep_cframe = function()
+            if not deep_spot or deep_for ~= local_character then
+                local far = (tonumber(flags["void_hide_deep_distance"]) or 100) * 1e6
+                local angle = math_random() * 2 * math["pi"]
+
+                deep_spot = cframe_new(vector3_new(math["cos"](angle) * far, far * 0.1, math["sin"](angle) * far))
+                deep_for = local_character
+            end
+
+            return deep_spot
+        end
+
         local do_void_hide = LPH_JIT_MAX(function(dt, hrp)
             -- A purchase owns the character while it runs (see purchase coordination in the shop section).
             local purchase_holds_void = hide_manager["purchase_holds_void"]
@@ -40238,8 +40443,21 @@ end
             -- loading or protected, or a reload pending), or by the Spam toggle once a target is picked: then the exploit's
             -- void / teleport cycle below runs on the target. The Void Hide toggle adds no permanent hide on top of that.
             local spam_on_target = flags["ragebot"] and flags["void_hide_exploit"] and ragebot_target ~= nil
+            local humanoid = local_parts["Humanoid"]
 
-            if flags["ragebot"] and not invulnerable_void_active and not spam_on_target then
+            -- Force When (reloading, tabbed out, not full health) hides with the ragebot on too: it used to be worked out only after the ragebot's
+            -- early return below, so with the ragebot on a reload never hid the character.
+            local forced = (void_hide_force_when_reloading and local_reloading) or (void_hide_force_when_tabbed_out and not isrbxactive()) or (void_hide_force_when_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
+
+            -- Void Hide with Follow Target: the character stays in the void until the follow takes it to the target (follow_ready_at, written by
+            -- the follow step when it moves the character), instead of standing in the open from the moment the ragebot was on until the follow
+            -- began. The follow may start from this hide (prefollow_hiding), or the two would wait on each other.
+            local waiting_for_follow = flags["ragebot"] and flags["void_hide"] and flags["follow_target"] and not invulnerable_void_active
+                and clock() - (hide_manager["follow_ready_at"] or -1) > 0.1
+
+            hide_manager["prefollow_hiding"] = waiting_for_follow and not forced
+
+            if flags["ragebot"] and not invulnerable_void_active and not spam_on_target and not forced and not waiting_for_follow then
                 in_void = false
                 return
             end
@@ -40251,12 +40469,8 @@ end
                 return
             end
 
-            local humanoid = local_parts["Humanoid"]
-
-            local forced = (void_hide_force_when_reloading and local_reloading) or (void_hide_force_when_tabbed_out and not isrbxactive()) or (void_hide_force_when_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
-
             if not forced and not invulnerable_void_active then
-                if (void_hide_disable_when_forced_position and ragebot_force_position) or (void_hide_disable_when_target_selected and ragebot_target and not spam_on_target) or (void_hide_disable_when_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18])) or (void_hide_disable_when_following_target and local_following) or (void_hide_disable_when_purchasing and purchasing) then
+                if (void_hide_disable_when_forced_position and ragebot_force_position) or (void_hide_disable_when_target_selected and ragebot_target and not spam_on_target and not waiting_for_follow) or (void_hide_disable_when_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18])) or (void_hide_disable_when_following_target and local_following) or (void_hide_disable_when_purchasing and purchasing) then
                     -- Not hiding this frame: a stale in_void from the last step would keep following and stomping switched off.
                     in_void = false
                     return
@@ -40296,18 +40510,8 @@ end
                         in_void = true
                         local fake_in_void = true
                         if void_type == "bait" then
-                            local bait_range = flags["void_hide_bait_distance"]
-                            local difference = tick - last_bait
-                            -- The same bait as without Spam: the Bait Cooldown slider, and the body really goes to the bait spot for the bait time.
-                            if difference > flags["void_hide_bait_cooldown"] then
-                                last_bait = tick
-                                bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
-                            elseif difference < flags["void_hide_bait_time"] and bait_position then
-                                fake_in_void = false
-                                hrp["CFrame"] = bait_position + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset))
-                            else
-                                fake_in_void = true
-                            end
+                            -- the same bait as without Spam (bait_step)
+                            fake_in_void = not bait_step(tick, hrp)
                         elseif void_type == "meta" then
                             fake_in_void = false
                             local diff = tick - last_meta_switch
@@ -40328,7 +40532,9 @@ end
                                 hrp["CFrame"] = new_cframe
                             end
                         end
-                        if fake_in_void then
+                        if fake_in_void and void_type == "deep" then
+                            hrp["CFrame"] = deep_cframe()
+                        elseif fake_in_void then
                             hrp["CFrame"] = ((void_type == "vc server" and cframe_new(vector3_new(0, math_random(-2147483647, 2147483647), 0)) or cframe_new(vector3_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647)))) + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset)))*cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
                         end
                     end
@@ -40336,17 +40542,7 @@ end
                     in_void = true
                     local fake_in_void = true
                     if void_type == "bait" then
-                        local bait_range = flags["void_hide_bait_distance"]
-                        local difference = tick - last_bait
-                        if difference > flags["void_hide_bait_cooldown"] then
-                            last_bait = tick
-                            bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
-                        elseif difference < flags["void_hide_bait_time"] and bait_position then
-                            fake_in_void = false
-                            hrp["CFrame"] = bait_position + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset))
-                        else
-                            fake_in_void = true
-                        end
+                        fake_in_void = not bait_step(tick, hrp)
                     elseif void_type == "meta" then
                         fake_in_void = false
                         local diff = tick - last_meta_switch
@@ -40367,7 +40563,9 @@ end
                             hrp["CFrame"] = new_cframe
                         end
                     end
-                    if fake_in_void then
+                    if fake_in_void and void_type == "deep" then
+                        hrp["CFrame"] = deep_cframe()
+                    elseif fake_in_void then
                         hrp["CFrame"] = ((void_type == "vc server" and cframe_new(vector3_new(0, math_random(-2147483647, 2147483647), 0)) or cframe_new(vector3_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647)))) + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset)))*cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
                     end
                 end
