@@ -40524,7 +40524,8 @@ local get_silent_aim_position = nil
                     end
 
                     -- Max Distance 0 is the gun's own Range; with a Range Enhancer on, the 15 studs past it the server still takes (hide_manager.range_enhance)
-                    if legitbot_max_distance == 2500 or (hrp_position-local_client_position["p"])["Magnitude"] < (legitbot_max_distance == 0 and ((local_gun or 200) + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)) or legitbot_max_distance) then
+                    -- (Bullet Manipulation reaches any distance: the body is taken to the target for the server, see do_range_hop)
+                    if legitbot_max_distance == 2500 or flags["silent_aim_bullet_manipulation"] == true or (hrp_position-local_client_position["p"])["Magnitude"] < (legitbot_max_distance == 0 and ((local_gun or 200) + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)) or legitbot_max_distance) then
                         local position, on_screen = world_to_viewport_point(camera, hrp_position)
 
                         if legitbot_untarget_when_off_screen and not on_screen then
@@ -40596,7 +40597,7 @@ local get_silent_aim_position = nil
                         local hrp_position = hrp["Position"]
                         local position, on_screen = world_to_viewport_point(camera, hrp_position)
 
-                        if on_screen and (legitbot_max_distance == 2500 or (hrp_position-local_client_position)["Magnitude"] < (legitbot_max_distance == 0 and ((local_gun or 200) + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)) or legitbot_max_distance)) then
+                        if on_screen and (legitbot_max_distance == 2500 or flags["silent_aim_bullet_manipulation"] == true or (hrp_position-local_client_position)["Magnitude"] < (legitbot_max_distance == 0 and ((local_gun or 200) + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)) or legitbot_max_distance)) then
                             if legitbot_ignore_if_invulnerable and (hide_manager["is_protected"](data) or parts["GRABBING_CONSTRAINT"]) then
                                 continue
                             end
@@ -41364,7 +41365,7 @@ local get_silent_aim_position = nil
             return false
         end
 
-        if silent_aim_max_distance ~= 2500 and local_gun and distance > local_gun + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0) then
+        if silent_aim_max_distance ~= 2500 and flags["silent_aim_bullet_manipulation"] ~= true and local_gun and distance > local_gun + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0) then
             return false
         end
 
@@ -41489,6 +41490,16 @@ local get_silent_aim_position = nil
 
         local tool = handle["Parent"]
         local range = tool and find_first_child(tool, "Range")
+
+        -- Bullet Manipulation's infinite range: while the body is held near this target for the server (see do_range_hop), the shot is claimed from
+        -- there, not from where the gun is on this screen
+        local hop = manipulate and hide_manager["range_hop_spot"]
+
+        if hop and hop[3] == data and clock() - hop[2] < 0.2 then
+            origin = hop[1] + vector3_new(0, 1.5, 0)
+            offset = position - origin
+            distance = offset["Magnitude"]
+        end
 
         -- Range Enhancer: the server takes a target up to 15 studs past the Range when the claim is pulled back inside it (below)
         local reach = range and range["Value"] + (hide_manager["range_enhancer_on"] and hide_manager["range_enhancer_on"](true) and 15 or 0)
@@ -42075,10 +42086,42 @@ do
     -- there. Measured: a body held near the target for 0.25 s hit from 467 studs (34 damage), 0.1 s was not long enough for the server to have it
     -- there. It stops as soon as the target is within reach again, and while the gun is empty, a stomp or a follow moves the body, or the target
     -- can't be hit.
-    local do_range_hop = LPH_NO_VIRTUALIZE(function(dt, hrp)
-        local target = ragebot_target
+    --
+    -- Bullet Manipulation gets the same: the Rage one (Auto Fire's gear) for the ragebot's target, the Legit one (Silent Aim's) for the legitbot's,
+    -- whose clicks are then claimed from that spot (hide_manager.range_hop_spot, read by legit_rebuild) instead of from where you stand.
+    local range_hop_target = function()
+        local rage = flags["ragebot"] and (flags["range_enhancer"] == true or flags["auto_fire_bullet_manipulation"] == true) and ragebot_target
 
-        if not (hrp and flags["ragebot"] and flags["range_enhancer"] == true and target and not target[7] and not target[18]) or local_knocked or purchasing or stomping or local_following then
+        if rage then
+            return rage
+        end
+
+        if flags["silent_aim"] and flags["silent_aim_bullet_manipulation"] == true and not ragebot_aim_position and legitbot_target then
+            return legitbot_target[1]
+        end
+
+        return nil
+    end
+
+    -- Where you really are while the body is held out. local_client_position is read at Stepped, and with the game window not being drawn the
+    -- put-back waits for the next physics step, after the next Stepped: the held spot was then read as your place and the body stayed out there
+    -- (measured: left 230 studs from the target, the hold distance). So the step keeps its own record and puts the body back itself when it stops.
+    local hop_home, hop_spot = nil, nil
+
+    local settle_hop = function(hrp)
+        if hop_home and hop_spot and hrp and (hrp["Position"] - hop_spot)["Magnitude"] < 2 then
+            hrp["CFrame"] = hop_home
+            hrp["AssemblyLinearVelocity"] = vector3_zero
+        end
+
+        hop_home, hop_spot = nil, nil
+    end
+
+    local do_range_hop = LPH_NO_VIRTUALIZE(function(dt, hrp)
+        local target = range_hop_target()
+
+        if not (hrp and target and not target[7] and not target[18]) or local_knocked or purchasing or stomping or local_following then
+            settle_hop(hrp)
             return
         end
 
@@ -42087,6 +42130,7 @@ do
         local root = parts["HumanoidRootPart"]
 
         if not head or not root or root["Position"]["Magnitude"] > 9e5 or hide_manager["get_target_phase"](target) ~= nil then
+            settle_hop(hrp)
             return
         end
 
@@ -42095,27 +42139,40 @@ do
         local ammo = tool and find_first_child(tool, "Ammo")
 
         if not range or not ammo or ammo["Value"] <= 0 then
+            settle_hop(hrp)
             return
         end
 
         local home = local_client_position
+
+        -- still at last frame's spot: the put-back has not come yet, so the real place is the one kept
+        if hop_home and hop_spot and (home["Position"] - hop_spot)["Magnitude"] < 2 then
+            home = hop_home
+        end
+
         local away = home["Position"] - head["Position"]
         local distance = away["Magnitude"]
 
         if distance ~= distance or distance <= range["Value"] + 10 then
+            settle_hop(hrp)
             return
         end
 
         -- Not on top of them: only as far in as the gun needs, on the line from them back to where you stand, the Range less 20 studs out from
         -- them (a hit claimed from where you really are was refused every way it was tried: at the Range on the line, at the head, and from an
         -- origin claimed next to them).
-        hrp["CFrame"] = cframe_new(head["Position"] + away / distance * math.max(range["Value"] - 20, 10) + vector3_new(0, 3, 0))
+        local spot = head["Position"] + away / distance * math.max(range["Value"] - 20, 10) + vector3_new(0, 3, 0)
+
+        hop_home, hop_spot = home, spot
+        hrp["CFrame"] = cframe_new(spot)
         hrp["AssemblyLinearVelocity"] = vector3_zero
+        hide_manager["range_hop_spot"] = {spot, clock(), target}
         render_stepped_wait(render_stepped)
         hrp["CFrame"] = home
     end)
 
-    create_connection(menu_references["range_enhancer"]["on_toggle_change"], function(value)
+    -- in the step list while any of the three is on
+    local sync_range_hop = function()
         for i = 1, #anti_aim do
             if anti_aim[i] == do_range_hop then
                 remove(anti_aim, i)
@@ -42123,10 +42180,18 @@ do
             end
         end
 
-        if value then
+        if flags["range_enhancer"] == true or flags["auto_fire_bullet_manipulation"] == true or flags["silent_aim_bullet_manipulation"] == true then
             anti_aim[#anti_aim+1] = do_range_hop
+        else
+            settle_hop(local_parts["HumanoidRootPart"])
         end
-    end)
+    end
+
+    for _, name in {"range_enhancer", "auto_fire_bullet_manipulation", "silent_aim_bullet_manipulation"} do
+        create_connection(menu_references[name]["on_toggle_change"], function()
+            spawn(sync_range_hop)
+        end)
+    end
 
     -- >> ( hitbox expander )
     -- Part of the ragebot (no toggle): while it is on, its target's head has a 24 stud box around it on this client, invisible, so the gun's own ray (held
