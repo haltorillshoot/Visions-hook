@@ -15992,7 +15992,9 @@ local function startFullAuto()
 		end
 		local speedItem = NeverLose.Flags["full_auto_speed"]
 		local speed = speedItem and tonumber(speedItem:GetValue()) or 100
-		local interval = (cooldown + 0.015) / (math.max(speed, 1) / 100)
+		-- Speed 100 is the gun's own rate and 0 a quarter of it: 0 used to mean 1%, a shot every 20 s or so, and Full Auto looked like it did not shoot
+		-- (measured: Speed at 0 in the Default config, 0 shots in a second held, with any gun)
+		local interval = (cooldown + 0.015) / (0.25 + 0.75 * math.clamp(speed, 0, 100) / 100)
 		local now = os.clock()
 
 		if now - FullAuto.Last >= interval then
