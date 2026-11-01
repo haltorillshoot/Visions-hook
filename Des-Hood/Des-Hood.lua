@@ -10397,7 +10397,6 @@ function Session.buildSettingsPanels(rows)
 	forceRow = select(2, panelToggle(selection, "Force", "target_selection_target_when_shot_at_force", false))
 	panelToggle(selection, "Wait For Spawn Protection", "target_selection_wait_for_protection", true)
 	-- off: the character is not hidden in the void while the target respawns, loads or has its spawn protection
-	panelToggle(selection, "Void While Waiting", "target_selection_void_while_waiting", true)
 	forceRow:SetVisible(false)
 	panelList(selection, "Untarget When", "target_selection_untarget_when", { "better target", "knocked", "flung", "dead" }, { "dead" })
 	panelList(selection, "Target Statuses", "target_statuses", { "friendly", "neutral", "enemy" }, { "neutral" })
@@ -10543,57 +10542,6 @@ function Session.buildSettingsPanels(rows)
 	-- How much of the worked-out lead is used: under 100% for targets that keep turning back, over it for fast flyers the shots trail
 	panelSlider(predictionPanel, "Strength", "prediction_strength", 50, 200, 0, "%", 100)
 
-	-- Void hide --
-	local voidHide = rows.voidHide:AddOption()
-	local voidHideTypes = game.PlaceId == 7213786345 and { "vc server" } or { "random", "bait", "deep" }
-	local baitRows = {}
-	local deepRows = {}
-	local spamRows = {}
-	panelList(voidHide, "Type", "void_hide_type", voidHideTypes, voidHideTypes[1], function(value)
-		for _, row in ipairs(baitRows) do
-			row:SetVisible(isPicked(value, "bait"))
-		end
-
-		for _, row in ipairs(deepRows) do
-			row:SetVisible(isPicked(value, "deep"))
-		end
-	end)
-	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Distance", "void_hide_bait_distance", 200, 2500, 0, " studs", 250)))
-	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Cooldown", "void_hide_bait_cooldown", 0.01, 1.5, 2, "s", 0.5)))
-	-- Bait Time: how long the body stands on the map as bait (with Bait Freeze it stands still there, and the ragebot shoots from it)
-	table.insert(baitRows, select(2, panelSlider(voidHide, "Bait Time", "void_hide_bait_time", 0.01, 1, 2, "s", 0.03)))
-	table.insert(baitRows, select(2, panelToggle(voidHide, "Bait Freeze", "void_hide_bait_freeze", false)))
-	table.insert(baitRows, select(2, panelList(voidHide, "Bait Spot", "void_hide_bait_spot", { "random", "where you stood" }, "random")))
-	-- Deep: one spot this far out, held still, so a follower that comes after the body is dragged out there with it
-	table.insert(deepRows, select(2, panelSlider(voidHide, "Deep Distance", "void_hide_deep_distance", 1, 1000, 0, "m studs", 100)))
-	panelList(voidHide, "Disable When", "void_hide_disable_when", { "target selected", "following target", "target knocked", "purchasing" }, {})
-	panelList(voidHide, "Force When", "void_hide_force_when", { "not full health", "tabbed out", "reloading" }, {})
-	panelToggle(voidHide, "Spam", "void_hide_exploit", false, function(value)
-		for _, row in ipairs(spamRows) do
-			row:SetVisible(value)
-		end
-	end)
-	table.insert(spamRows, select(2, panelToggle(voidHide, "Stop If Forced", "void_hide_stop_if_forced", false)))
-	-- out of the void with the target: the moment it comes out onto the map the body goes onto it, until it hides again
-	table.insert(spamRows, select(2, panelToggle(voidHide, "Out With Target", "void_hide_out_with_target", true)))
-	-- no windows out of the void while the target's own void spot keeps jumping (nothing can be shot at it then)
-	table.insert(spamRows, select(2, panelToggle(voidHide, "Hide While Target Hides", "void_hide_hide_while_target_hides", true)))
-	table.insert(spamRows, select(2, panelSlider(voidHide, "Offset", "void_hide_offset", 0, 250, 0, " studs", 0, { [0] = "off" })))
-	table.insert(spamRows, select(2, panelSlider(voidHide, "Void Time", "void_hide_void_time", 0.01, 2, 3, "s", 0.47)))
-	table.insert(spamRows, select(2, panelSlider(voidHide, "Teleport Time", "void_hide_teleport_time", 0.01, 2, 3, "s", 0.1)))
-
-	-- Bait settings need the bait type, Deep's distance the deep type; the spam timings need spam on.
-	for _, row in ipairs(baitRows) do
-		row:SetVisible(false)
-	end
-
-	for _, row in ipairs(deepRows) do
-		row:SetVisible(false)
-	end
-
-	for _, row in ipairs(spamRows) do
-		row:SetVisible(false)
-	end
 end
 
 ---------- Engine tabs ------------
@@ -16246,11 +16194,6 @@ local function buildInterface()
 	})
 	Session.NativeSections.RageOther = Other
 
-	local FakePos = Rage:AddSection({
-		Name = "VOID",
-		Position = "right",
-	})
-
 	local rows = {}
 
 	-- AddSlider that shows words like "auto" or "none" for the values that mean something special.
@@ -16602,14 +16545,6 @@ local function buildInterface()
 		Default = true,
 		Flag = "anti_afk",
 		Callback = onChanged("anti_afk"),
-	})
-
-	-- Sender rate, network and velocity desync and the fake position are not in the menu any more: Void is the only row here.
-	rows.voidHide = FakePos:AddLabel("Void")
-	addBindableToggle(rows.voidHide, "Void", {
-		Default = false,
-		Flag = "void_hide",
-		Callback = onChanged("void_hide"),
 	})
 
 	-- Gear menus for the rows above.
@@ -20554,8 +20489,10 @@ do
         end
 
         local body_effects = wait_while_current(character, "BodyEffects")
-        local really_dead = body_effects and wait_while_current(body_effects, "SDeath")
-        local dead = really_dead and wait_while_current(body_effects, "Dead")
+        -- Des Hood's BodyEffects has no SDeath (waiting for it parked this for good, so no player's knocked, dead or armor state was ever read):
+        -- its Dead value stands for both there.
+        local dead = body_effects and wait_while_current(body_effects, "Dead")
+        local really_dead = dead and (find_first_child(body_effects, "SDeath") or dead)
 
         local armor = dead and wait_while_current(body_effects, "Armor")
         local knocked = armor and wait_while_current(body_effects, "K.O")
@@ -32590,6 +32527,54 @@ end
     -- body sits away from the real one) it was refused, so it is not used here.
     hide_manager["gun_fired_at"] = setmetatable({}, {["__mode"] = "k"})
 
+    -- Des Hood's server takes a shot only from the FIRST tool in the character (measured: with three guns held the other two's shots and clicks
+    -- were refused; a gun stepped out of the character for a frame and back puts the rest ahead of it). The guns ahead of this one step into the
+    -- backpack for its call and come back on the next drawn frame, behind it, so with several guns held every one of them can shoot, in one
+    -- frame if need be (the Tactical and the Revolver were both taken that way). No method calls: dot calls only.
+    local stepped_out = {}
+
+    hide_manager["make_first_gun"] = function(tool)
+        local character = tool and tool["Parent"]
+        local backpack = character and character == local_character and find_first_child_of_class(local_player, "Backpack")
+
+        if not backpack then
+            return
+        end
+
+        local moved = false
+
+        for _, child in get_children(character) do
+            if child == tool then
+                break
+            end
+
+            if child["ClassName"] == "Tool" then
+                child["Parent"] = backpack
+                stepped_out[child] = character
+                moved = true
+            end
+        end
+
+        if moved and not stepped_out["__returning"] then
+            stepped_out["__returning"] = true
+
+            spawn(function()
+                render_stepped_wait(render_stepped)
+                stepped_out["__returning"] = nil
+
+                for gun, home in stepped_out do
+                    if typeof(gun) == "Instance" then
+                        stepped_out[gun] = nil
+
+                        if gun["Parent"] == backpack and home["Parent"] then
+                            gun["Parent"] = home
+                        end
+                    end
+                end
+            end)
+        end
+    end
+
     -- Slow guns (the Rifle's 1.3 s, the Flintlock's 2 s) used to be asked for a shot on every step the ragebot ran (the fire cooldown
     -- defaults to 5 ms) while the gun can only fire once per ShootingCooldown. They are now sent once that cooldown (+ 0.0095, the game's own
     -- slack) is over. A send the server did not take (the ammo is still what it was) is asked again after a round trip instead, so a
@@ -32976,15 +32961,17 @@ end
         if cooldown then
             local last = math.max(hide_manager["last_shot_stamp"](tool) or -math.huge, hide_manager["gun_fired_at"][tool] or -math.huge)
 
-            -- The gun's own script turns a pull away until cooldown + 0.0095 + 0.05; the server takes the shot from cooldown + 0.0095 (measured: the
-            -- DB 0.36 s, against 0.41 s here). With Maximum Fire Rate the script's wait is patched out, so only the server's is kept.
-            if clock() - last < wait_time + (flags["rapid_fire"] == true and 0.0095 or 0.0595) then
+            -- The gun's own script turns a pull away until cooldown + 0.0095 + 0.05. Des Hood's server took every Tactical volley sent cooldown + 0.025
+            -- apart (3 of 3, measured), so with Maximum Fire Rate the script's 0.05 is cut to 0.015 and the shotguns go at cooldown + 0.0245.
+            if clock() - last < wait_time + (flags["rapid_fire"] == true and 0.0245 or 0.0595) then
                 return false
             end
         end
 
         return true
-    end)    local fov_circle = nil
+    end)
+
+    local fov_circle = nil
     local fov_circle_outline = nil
     local shoot = nil
 
@@ -34154,9 +34141,9 @@ end
             -- not waited for in the void (respawning always is: it can't be hit and is on its way back).
             local waiting = phase == "respawning" or (phase ~= nil and wait_out_protection(target))
 
-            -- Void While Waiting (Target Selection's gear, on by default): off, the character stays where it is while the target respawns, loads or
-            -- has its spawn protection (the ragebot still waits for it; it only does not hide in the void for it)
-            local void_wait = flags["target_selection_void_while_waiting"] ~= false
+            -- Void While Waiting is gone for now: the character stays where it is while the target respawns, loads or has its spawn protection
+            -- (the ragebot still waits for it; it only does not hide in the void for it)
+            local void_wait = false
 
             local want_protected = not target[7] and not target[18] and ((phase == "protected" and waiting and void_wait) or target[4]["GRABBING_CONSTRAINT"]) and true or false
 
@@ -34265,17 +34252,17 @@ end
                 local previous = getgenv()[key]
                 local top = previous and (previous["dispatch"] or previous["replacement"])
 
-                if top and previous["handler"] == handler and handler["getAim"] == top and type(previous["original"]) == "function" then
+                if top and previous["handler"] == handler and handler["GetAim"] == top and type(previous["original"]) == "function" then
                     peeled = pcall(function()
-                        handler["getAim"] = previous["original"]
+                        handler["GetAim"] = previous["original"]
                     end) or peeled
                 end
 
                 local can_top = previous and previous["can_dispatch"]
 
-                if can_top and previous["handler"] == handler and handler["getCanShoot"] == can_top and type(previous["can_original"]) == "function" then
+                if can_top and previous["handler"] == handler and handler["GetCanShoot"] == can_top and type(previous["can_original"]) == "function" then
                     peeled = pcall(function()
-                        handler["getCanShoot"] = previous["can_original"]
+                        handler["GetCanShoot"] = previous["can_original"]
                     end) or peeled
                 end
             end
@@ -34302,7 +34289,7 @@ end
             return false, "module"
         end
 
-        local current = handler["getAim"]
+        local current = handler["GetAim"]
 
         if type(current) ~= "function" then
             return false, "module"
@@ -34326,7 +34313,7 @@ end
         end
 
         aim_chain["installed"] = pcall(function()
-            handler["getAim"] = aim_chain["dispatch"]
+            handler["GetAim"] = aim_chain["dispatch"]
         end)
 
         if not aim_chain["installed"] then
@@ -34337,7 +34324,7 @@ end
         -- character: its ammo, its cooldown, the gun that fired last. With several guns in the hand (auto equip) a gun that is not first was
         -- judged by another gun's state and turned its own pull away without sending anything (measured: 24 pulls, no shot). A gun the ragebot
         -- is pulling the trigger of is judged by its own state instead (hide_manager.can_shoot_tool); every other call goes to the game's own.
-        local can_current = handler["getCanShoot"]
+        local can_current = handler["GetCanShoot"]
 
         if type(can_current) == "function" then
             aim_chain["can_original"] = can_current
@@ -34362,7 +34349,7 @@ end
             end
 
             pcall(function()
-                handler["getCanShoot"] = aim_chain["can_dispatch"]
+                handler["GetCanShoot"] = aim_chain["can_dispatch"]
             end)
         end
 
@@ -34381,14 +34368,14 @@ end
 
         local handler = aim_chain["handler"]
 
-        if aim_chain["installed"] and handler and handler["getAim"] == aim_chain["dispatch"] then
+        if aim_chain["installed"] and handler and handler["GetAim"] == aim_chain["dispatch"] then
             pcall(function()
-                handler["getAim"] = aim_chain["original"]
+                handler["GetAim"] = aim_chain["original"]
             end)
 
-            if aim_chain["can_dispatch"] and handler["getCanShoot"] == aim_chain["can_dispatch"] then
+            if aim_chain["can_dispatch"] and handler["GetCanShoot"] == aim_chain["can_dispatch"] then
                 pcall(function()
-                    handler["getCanShoot"] = aim_chain["can_original"]
+                    handler["GetCanShoot"] = aim_chain["can_original"]
                 end)
             end
 
@@ -34404,7 +34391,7 @@ end
     -- ever drawn. Looked for once, when an attempt first wants drawing; nil when it is not there (nothing is drawn then, nobody is kicked).
     hide_manager["resolve_shoot"] = LPH_NO_VIRTUALIZE(function()
         local handler = get_aim_handler()
-        local outer = handler and rawget(handler, "shoot")
+        local outer = handler and (rawget(handler, "Shoot") or rawget(handler, "shoot"))
 
         if type(outer) ~= "function" then
             return nil
@@ -35701,6 +35688,11 @@ end
                         local chosen_gun = nil
                         local slow_waiting = false
                         local pick_time = clock()
+                        -- Gun Gap 0 ("at once"): every gun that is ready goes this tick. Des Hood keeps no window between two guns' shots (measured:
+                        -- the Tactical and the Revolver both taken in one frame); its only rule is that a shot comes from the first gun in the
+                        -- character, which hide_manager.make_first_gun takes care of before each send.
+                        local at_once = all_guns and volley_gap <= 0
+                        local chosen_guns = {}
 
                         for i = 1, #new_local_guns do
                             local candidate = new_local_guns[i]
@@ -35739,6 +35731,15 @@ end
                                 end
 
                                 within_reach = away ~= away or away <= reach
+                            end
+
+                            if at_once then
+                                if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
+                                    chosen_guns[candidate] = true
+                                    chosen_gun = chosen_gun or candidate
+                                end
+
+                                continue
                             end
 
                             if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
@@ -35841,8 +35842,8 @@ end
 
                             local local_gun = new_local_guns[i]
 
-                            -- only the gun picked above is sent this tick
-                            if local_gun ~= chosen_gun then
+                            -- only the gun picked above is sent this tick (every ready one with Gun Gap 0)
+                            if local_gun ~= chosen_gun and not chosen_guns[local_gun] then
                                 continue
                             end
 
@@ -35912,6 +35913,8 @@ end
                                 local shot_direction = (Magnitude <= 0 or Magnitude ~= Magnitude) and ((handle["Position"])-pos)["Unit"] or dir
                                 -- Des Hood takes a shot as one call, a shotgun's pellets inside it (neverlose_des_shot builds it). The shot hook
                                 -- then claims it from where the server has the body, so what is sent here is only the target and the gun.
+                                hide_manager["make_first_gun"](handle["Parent"])
+
                                 for i = 1, ragebot_force_position and 2 or 1 do
                                     event:FireServer(getgenv()["neverlose_des_shot"](handle, origin, pos, hitbox, nil))
                                 end
@@ -37188,7 +37191,7 @@ end
             local last = math.max((hide_manager["last_shot_stamp"] and hide_manager["last_shot_stamp"](tool)) or -math.huge, hide_manager["gun_fired_at"] and hide_manager["gun_fired_at"][tool] or -math.huge)
             -- A policed gun's own script waits its cooldown + 0.0095 + 0.05 (the 0.05 is its margin for the trip): asking sooner only gets the pull turned
             -- away by the script, and it never sends early.
-            local margin = tool:GetAttribute("SecurityTolerance") ~= nil and 0.0595 or 0.0015
+            local margin = tool:GetAttribute("SecurityTolerance") ~= nil and (flags["rapid_fire"] == true and 0.0245 or 0.0595) or 0.0015
 
             -- Double Tap: the server fires the held half of a pair one cooldown after the first, so the next shot waits a second cooldown (sent
             -- earlier it lands on the held one and is refused)
@@ -37229,10 +37232,28 @@ end
                 return
             end
 
-            -- The guns the server polices (a SecurityTolerance on the tool: the shotguns) keep their script's own wait. It is the server's cooldown with
-            -- a margin for the trip, and a call that arrives early is counted against the tolerance (past it the gun is locked for the server).
-            -- Held and Full Auto shots still go out the moment that wait is over (gun_due).
+            -- The guns the server polices (a SecurityTolerance on the tool: the shotguns) keep their cooldown: a call that arrives early is counted
+            -- against the tolerance (past it the gun is locked for the server). Only the script's own margin for the trip (0.05 on top of cooldown
+            -- + 0.0095) is cut to 0.015: Des Hood's server took every Tactical volley sent cooldown + 0.025 apart (3 of 3, measured), against the
+            -- script's cooldown + 0.06. The DB goes from 4.8 to 5.7 shots a second, the Tactical from 2.2 to 2.3.
             if tool["GetAttribute"](tool, "SecurityTolerance") ~= nil then
+                local shell_constants = getconstants(old)
+
+                for i, constant in shell_constants do
+                    if constant == 0.05 then
+                        patched[old] = {["constant"] = {i, constant}}
+                        setconstant(old, i, 0.015)
+
+                        if not (hide_manager["rapid_fire_logged"] or {})[tool["Name"]] then
+                            hide_manager["rapid_fire_logged"] = hide_manager["rapid_fire_logged"] or {}
+                            hide_manager["rapid_fire_logged"][tool["Name"]] = "shell"
+                            print("[Visions hook] rapid fire: " .. tool["Name"] .. " margin 0.05 -> 0.015 (constant #" .. i .. ")")
+                        end
+
+                        break
+                    end
+                end
+
                 return
             end
 
@@ -42046,6 +42067,60 @@ do
 
         return pulled
     end
+
+    -- Infinite range (the Rage tab's Range Enhancer). Des Hood's server judges a hit from where it has the body: a claim from past the gun's Range
+    -- is taken but does no damage, and an origin moved more than about 25 studs from the body is refused (both measured). So while the ragebot's
+    -- target is past the reach of the gun in hand, the body is put 6 studs over the target's head for the server every frame (moved at Stepped,
+    -- back at the next drawn frame, as Follow Target does; this screen keeps its own place) and Auto Fire shoots from there. Measured: a body
+    -- held there for 0.25 s hit from 467 studs (34 damage), 0.1 s was not long enough for the server to have it there. It stops as soon as the
+    -- target is within reach again, and while the gun is empty, a stomp or a follow moves the body, or the target can't be hit.
+    local do_range_hop = LPH_NO_VIRTUALIZE(function(dt, hrp)
+        local target = ragebot_target
+
+        if not (hrp and flags["ragebot"] and flags["range_enhancer"] == true and target and not target[7] and not target[18]) or local_knocked or purchasing or stomping or local_following then
+            return
+        end
+
+        local parts = target[4]
+        local head = parts["Head"]
+        local root = parts["HumanoidRootPart"]
+
+        if not head or not root or root["Position"]["Magnitude"] > 9e5 or hide_manager["get_target_phase"](target) ~= nil then
+            return
+        end
+
+        local tool = local_character and find_first_child_of_class(local_character, "Tool")
+        local range = tool and find_first_child(tool, "Range")
+        local ammo = tool and find_first_child(tool, "Ammo")
+
+        if not range or not ammo or ammo["Value"] <= 0 then
+            return
+        end
+
+        local home = local_client_position
+
+        if (home["Position"] - head["Position"])["Magnitude"] <= range["Value"] + 10 then
+            return
+        end
+
+        hrp["CFrame"] = cframe_new(head["Position"] + vector3_new(0, 6, 0))
+        hrp["AssemblyLinearVelocity"] = vector3_zero
+        render_stepped_wait(render_stepped)
+        hrp["CFrame"] = home
+    end)
+
+    create_connection(menu_references["range_enhancer"]["on_toggle_change"], function(value)
+        for i = 1, #anti_aim do
+            if anti_aim[i] == do_range_hop then
+                remove(anti_aim, i)
+                break
+            end
+        end
+
+        if value then
+            anti_aim[#anti_aim+1] = do_range_hop
+        end
+    end)
 
     -- >> ( hitbox expander )
     -- Part of the ragebot (no toggle): while it is on, its target's head has a 24 stud box around it on this client, invisible, so the gun's own ray (held
