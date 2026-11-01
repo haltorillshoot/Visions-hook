@@ -18870,6 +18870,66 @@ do
     menu_references["jump_power_settings"] = menu_references["jump_power"]:create_settings()
     menu_references["jump_power_value"] = menu_references["jump_power_settings"]:create_element({["name"] = "power"}, {["slider"] = {["flag"] = "jump_power_value", ["min"] = 0, ["max"] = 1000, ["default"] = 50}})
 
+    -- The game lets the jump start at the Jump Power (measured: 159 studs/s up at 150) and cuts the upward speed to its own, about 64, the frame
+    -- the fall starts, so a jump at 150 rose 12.6 studs instead of 57. The speed the jump should still have is put back before every physics step
+    -- (once after the cut was not enough: the game wrote its own again after it) until it is down to the game's own jump speed, and not while a
+    -- ceiling is right overhead. (Not while flying: Flight holds the body's speed itself.)
+    do
+        local jump_started, jump_speed = nil, 0
+        local ceiling_params = RaycastParams["new"]()
+        ceiling_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+        local watched_humanoid, state_connection = nil, nil
+
+        local keep_jump = LPH_NO_VIRTUALIZE(function(dt, hrp)
+            local humanoid = local_parts["Humanoid"]
+
+            if humanoid ~= watched_humanoid then
+                if state_connection then
+                    state_connection:Disconnect()
+                    state_connection = nil
+                end
+
+                watched_humanoid = humanoid
+
+                if humanoid then
+                    state_connection = create_connection(humanoid["StateChanged"], function(_, new)
+                        if new == Enum["HumanoidStateType"]["Jumping"] and flags["jump_power"] == true then
+                            jump_started, jump_speed = clock(), tonumber(flags["jump_power_value"]) or 0
+                        end
+                    end)
+                end
+            end
+
+            if not jump_started or not hrp then
+                return
+            end
+
+            local expected = jump_speed - workspace["Gravity"] * (clock() - jump_started)
+
+            if flags["jump_power"] ~= true or flags["flight"] == true or expected <= 70 then
+                jump_started = nil
+                return
+            end
+
+            ceiling_params["FilterDescendantsInstances"] = {local_character, find_first_child(workspace, "Ignored")}
+
+            if workspace:Raycast(hrp["Position"], vector3_new(0, 6, 0), ceiling_params) then
+                jump_started = nil
+                return
+            end
+
+            local velocity = hrp["AssemblyLinearVelocity"]
+
+            if velocity["Y"] < expected - 4 then
+                hrp["AssemblyLinearVelocity"] = vector3_new(velocity["X"], expected, velocity["Z"])
+            end
+        end)
+
+        create_connection(game:GetService("RunService")["Stepped"], function()
+            keep_jump(nil, local_parts["HumanoidRootPart"])
+        end)
+    end
+
     -- >> ( anti sit )
 
     menu_references["anti_trip"] = menu_references["movement_section"]:create_element({["name"] = "anti trip"}, {["toggle"] = {["flag"] = "anti_trip"}})
@@ -19046,6 +19106,7 @@ do
 
         if humanoid and humanoid["Parent"] then
             local target = math.max(16, walk_speed)
+            hide_manager["speed_target"] = target
 
             if humanoid["WalkSpeed"] ~= target then
                 humanoid["WalkSpeed"] = target
@@ -19090,6 +19151,7 @@ do
         end
 
         release_speed_humanoid()
+        hide_manager["speed_target"] = nil
 
         if value then
             heartbeat[#heartbeat+1] = do_speed
@@ -39296,12 +39358,50 @@ end
                     hrp["CFrame"] = resting_cframe
                 end
                 render_stepped_wait(render_stepped)
+
+                -- The frame's own movement happened in the void and was lost with the put-back: with Void on, Speed, Flight and plain walking
+                -- moved the body 0 studs (measured, against 117 to 160 with it off). It is carried over here: Flight's velocity, otherwise the
+                -- walk direction at the walk speed (Speed's when it is on), flat, and never into a wall.
+                local carried = vector3_zero
+                local flying = flags["flight"] == true and hide_manager["flight_velocity"]
+
+                if flying then
+                    carried = flying * dt
+                elseif humanoid and humanoid["Parent"] then
+                    local direction = humanoid["MoveDirection"]
+
+                    if direction["Magnitude"] > 0.01 then
+                        carried = vector3_new(direction["X"], 0, direction["Z"]) * (hide_manager["speed_target"] or humanoid["WalkSpeed"]) * dt
+                    end
+                end
+
+                local carried_length = carried["Magnitude"]
+                local saved_cframe = old_cframe
+
+                if carried_length > 0 and carried_length < 200 then
+                    local carry_params = hide_manager["carry_params"]
+
+                    if not carry_params then
+                        carry_params = RaycastParams["new"]()
+                        carry_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+                        hide_manager["carry_params"] = carry_params
+                    end
+
+                    carry_params["FilterDescendantsInstances"] = {local_character, find_first_child(workspace, "Ignored")}
+
+                    if not workspace:Raycast(old_cframe["Position"], carried["Unit"] * (carried_length + 1.5), carry_params) then
+                        old_cframe = old_cframe + carried
+                    end
+                end
+
                 hrp["CFrame"] = old_cframe
-                hrp["Velocity"] = old_velocity
+                hrp["Velocity"] = flying or old_velocity
 
                 -- Back where it belongs: nothing is pending any more unless a newer step has taken over.
+                -- (against the place it was saved with: the carried one never matched it, the record was never cleared and every later frame
+                -- went back to that stale place, measured)
                 local current = hide_manager["pending"]
-                if current and current[2] == old_cframe then
+                if current and current[2] == saved_cframe then
                     hide_manager["pending"] = nil
                 end
             else
