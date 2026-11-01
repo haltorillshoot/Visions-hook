@@ -6176,6 +6176,8 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["ad_strafe_interval"] = {"ad_strafe_interval", "ad_strafe_interval"},
 	["auto_fire_gun_gap"] = {"auto_fire_gun_gap", "auto_fire_gun_gap"},
 	["autostomp"] = {"auto_stomp", "auto_stomp"},
+	["anti_bounty"] = {"anti_bounty", "anti_bounty"},
+	["auto_bounty"] = {"auto_bounty", "auto_bounty"},
 	["hitboxes"] = {"ragebot_hitbox", "ragebot_hitbox", "hitbox"},
 	["removespread"] = {"reduce_shotgun_spread", "reduce_shotgun_spread"},
 	["removespread_amount"] = {"reduce_shotgun_spread_amount", "reduce_shotgun_spread_amount"},
@@ -16630,6 +16632,22 @@ local function buildInterface()
 		Default = false,
 		Flag = "autostomp",
 		Callback = onChanged("autostomp"),
+	})
+
+	rows.antiBounty = Other:AddLabel("Anti Bounty")
+	rows.antiBounty:ToolTip("Leaves the server the moment a bounty is put on you")
+	addBindableToggle(rows.antiBounty, "Anti Bounty", {
+		Default = false,
+		Flag = "anti_bounty",
+		Callback = onChanged("anti_bounty"),
+	})
+
+	rows.autoBounty = Other:AddLabel("Auto Bounty")
+	rows.autoBounty:ToolTip("Goes after whoever has the bounty: turns on the Ragebot, Follow Target, Auto Equip, Automatic Fire, Auto Stomp and Auto Reload with them as the target, and turns back off what it turned on once nobody here has the bounty")
+	addBindableToggle(rows.autoBounty, "Auto Bounty", {
+		Default = false,
+		Flag = "auto_bounty",
+		Callback = onChanged("auto_bounty"),
 	})
 
 	rows.safePurchasing = Other:AddLabel("Safe Purchasing")
@@ -33233,6 +33251,8 @@ end
         menu_references["auto_stomp_target_statuses"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "target statuses"}, {["dropdown"] = {["flag"] = "auto_stomp_target_statuses", ["options"] = {"friendly", "neutral", "target", "enemy"}, ["default"] = {"target"}, ["multi"] = true, ["requires_one"] = true}})
         menu_references["auto_stomp_wait_for_all"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "wait for all targets knocked"}, {["toggle"] = {["flag"] = "auto_stomp_wait_for_all", ["default"] = false}})
         menu_references["auto_stomp_prioritize_over_reload"] = menu_references["auto_stomp_settings"]:create_element({["name"] = "prioritize over reloading"}, {["toggle"] = {["flag"] = "auto_stomp_prioritize_over_reload", ["default"] = false}})
+        menu_references["anti_bounty"] = menu_references["utility_section"]:create_element({["name"] = "anti bounty"}, {["toggle"] = {["flag"] = "anti_bounty"}})
+        menu_references["auto_bounty"] = menu_references["utility_section"]:create_element({["name"] = "auto bounty"}, {["toggle"] = {["flag"] = "auto_bounty"}})
         menu_references["auto_ammo"] = menu_references["utility_section"]:create_element({["name"] = "auto ammo"}, {["toggle"] = {["flag"] = "auto_ammo"}})
         menu_references["auto_ammo_settings"] = menu_references["auto_ammo"]:create_settings()
         menu_references["auto_ammo_disable_when"] = menu_references["auto_ammo_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"target alive"}, ["flag"] = "auto_ammo_disable_when", ["multi"] = true, ["requires_one"] = false}})
@@ -40316,6 +40336,145 @@ end
                     auto_stomp_target_enemy = true
                 end
             end
+        end)
+    end
+
+    -- >> ( bounty )
+    -- Da Hood shows the one bounty there is on every poster in Workspace.MAP.BountyPosters: Texts.PlayerName and Texts.Bounty, a SurfaceGui
+    -- TextLabel each, blank while nobody has one (read in a public server: 21 posters, all the same). So the posters are read twice a second.
+    --   Anti Bounty: your name on the posters, and you leave the server.
+    --   Auto Bounty: whoever is on the posters becomes the ragebot's target, and the Ragebot, Follow Target, Auto Equip, Automatic Fire, Auto Stomp
+    --   and Auto Reload are switched on for it. Once nobody here has the bounty (it was claimed, or they left) what it switched on goes back off.
+    -- The posters go blank the moment the bounty is claimed (measured on two accounts).
+    do
+        -- Auto Reload too: with empty guns in hand nothing is shot (measured: 12 s on the target with an empty Rifle, DB and Flintlock and no shot;
+        -- with Auto Reload on as well the target was knocked 6.5 s in and stomped half a second later)
+        local AUTO_BOUNTY_FLAGS = {"ragebot", "follow_target", "auto_equip", "auto_fire", "auto_stomp", "auto_reload"}
+        -- a newer run of the script ends this one's loop
+        local bounty_generation = getgenv()["neverlose_bypass_generation"]
+        local turned_on = {}
+        local bounty_target = nil
+        local left = false
+
+        local poster_label = function(poster, name)
+            local texts = find_first_child(poster, "Texts")
+            local holder = texts and find_first_child(texts, name)
+            local gui = holder and find_first_child_of_class(holder, "SurfaceGui")
+
+            return gui and find_first_child_of_class(gui, "TextLabel")
+        end
+
+        -- the name on the first poster that has one (they all show the same bounty)
+        local bounty_player = function()
+            local map = find_first_child(workspace, "MAP")
+            local posters = map and find_first_child(map, "BountyPosters")
+
+            for _, poster in posters and get_children(posters) or {} do
+                local label = poster_label(poster, "PlayerName")
+                local name = label and label["Text"]
+
+                if name and name ~= "" then
+                    return find_first_child(players_service, name), name
+                end
+            end
+
+            return nil, nil
+        end
+
+        local set_flag = function(name, value)
+            local api = getgenv()["neverlose"]
+
+            if api and api["set_flag"] then
+                pcall(api["set_flag"], name, value)
+            end
+        end
+
+        local release = function()
+            for name in turned_on do
+                set_flag(name, false)
+            end
+
+            turned_on = {}
+
+            if bounty_target and ragebot_target == player_data[bounty_target] then
+                set_ragebot_target(nil, "auto bounty: nobody here has the bounty now")
+            end
+
+            bounty_target = nil
+        end
+
+        local check_bounty = LPH_NO_VIRTUALIZE(function()
+            local player, name = bounty_player()
+
+            if flags["anti_bounty"] == true and player == local_player and not left then
+                left = true
+                new_notification("anti bounty: a bounty was put on you, leaving the server", 3)
+
+                pcall(function()
+                    local_player:Kick("Anti Bounty: a bounty was put on you, so you left the server.")
+                end)
+
+                return
+            end
+
+            if flags["auto_bounty"] ~= true then
+                if next(turned_on) or bounty_target then
+                    release()
+                end
+
+                return
+            end
+
+            local data = player and player ~= local_player and player_data[player]
+
+            if not data then
+                if next(turned_on) or bounty_target then
+                    release()
+                end
+
+                return
+            end
+
+            for i = 1, #AUTO_BOUNTY_FLAGS do
+                local flag = AUTO_BOUNTY_FLAGS[i]
+
+                if flags[flag] ~= true then
+                    set_flag(flag, true)
+                    turned_on[flag] = true
+                end
+            end
+
+            if bounty_target ~= player then
+                bounty_target = player
+                new_notification("auto bounty: going after "..name, 3)
+            end
+
+            if ragebot_target ~= data then
+                set_ragebot_target(data, "auto bounty: ragebot target set to "..name)
+            end
+        end)
+
+        -- twice a second: the posters change when a bounty is set, the target dies, respawns or leaves, and the other features may be switched
+        spawn(function()
+            while wait(0.5) do
+                if getgenv()["neverlose_bypass_generation"] ~= bounty_generation then
+                    break
+                end
+
+                pcall(check_bounty)
+            end
+        end)
+
+        create_connection(menu_references["auto_bounty"]["on_toggle_change"], function(value)
+            if not value then
+                release()
+            end
+
+            spawn(check_bounty)
+        end)
+
+        create_connection(menu_references["anti_bounty"]["on_toggle_change"], function(value)
+            spawn(check_bounty)
         end)
     end
 
