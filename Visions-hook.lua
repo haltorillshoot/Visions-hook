@@ -11686,6 +11686,8 @@ do
 			["enabled"] = false,
 			["remove face accessories"] = true,
 		},
+		-- off: every tool keeps (or gets back) the game's own look; the picked skins are kept for when it is on again
+		["skin changer"] = true,
 		["skins"] = {
 			["[Knife]"] = "",
 			["[Bat]"] = "",
@@ -12430,7 +12432,7 @@ do
 			Semi.Skins.reset(tool)
 
 			local skin = config["skins"][tool.Name]
-			if not Semi.Alive or not skin or skin == "" then
+			if not Semi.Alive or config["skin changer"] == false or not skin or skin == "" then
 				return
 			end
 
@@ -12455,6 +12457,22 @@ do
 				if holder then
 					for _, tool in ipairs(holder:GetChildren()) do
 						if tool:IsA("Tool") and tool.Name == toolName then
+							Semi.Skins.applyTool(tool, holder == character and character or nil)
+						end
+					end
+				end
+			end
+		end
+
+		---Re-applies the skins of every tool in the character and the backpack (the Skin Changer switch).
+		function Semi.Skins.refreshAll()
+			local character = localplayer.Character
+			local backpack = localplayer:FindFirstChildOfClass("Backpack")
+
+			for _, holder in ipairs({ character or false, backpack or false }) do
+				if holder then
+					for _, tool in ipairs(holder:GetChildren()) do
+						if tool:IsA("Tool") then
 							Semi.Skins.applyTool(tool, holder == character and character or nil)
 						end
 					end
@@ -14599,6 +14617,7 @@ end
 -- while that tab is open. What was applied is saved to SKINS_FILE and restored on the next run.
 local SKINS_FILE = CONFIG_FOLDER .. "/skins.json"
 local SKIN_DEFAULT = "Default"
+local SKIN_CHANGER_KEY = "!skin changer"
 
 local function loadSavedSkins()
 	if type(readfile) ~= "function" or type(isfile) ~= "function" then
@@ -14612,6 +14631,11 @@ local function loadSavedSkins()
 
 		local saved = HttpService:JSONDecode(readfile(SKINS_FILE))
 		local skins = Session.Semi.Config["skins"]
+
+		if saved[SKIN_CHANGER_KEY] ~= nil then
+			Session.Semi.Config["skin changer"] = saved[SKIN_CHANGER_KEY] ~= "off"
+			saved[SKIN_CHANGER_KEY] = nil
+		end
 
 		for toolName, skinName in pairs(saved) do
 			if type(toolName) == "string" and type(skinName) == "string" then
@@ -14637,6 +14661,8 @@ local function saveSkins()
 				data[toolName] = skinName
 			end
 		end
+
+		data[SKIN_CHANGER_KEY] = Session.Semi.Config["skin changer"] == false and "off" or "on"
 
 		writefile(SKINS_FILE, HttpService:JSONEncode(data))
 	end)
@@ -14828,6 +14854,34 @@ local function buildSkinsTab()
 
 	local previewCard = newCard(UDim2.new(0.51, 4, 0, 8), UDim2.new(0.49, -12, 1, -16))
 	newTitle(previewCard, "PREVIEW")
+
+	-- Skin Changer: off puts every tool back to the game's own look (the picked skins stay picked)
+	local changerButton = newButton(previewCard, "", 23)
+	changerButton.AnchorPoint = Vector2.new(1, 0)
+	changerButton.Position = UDim2.new(1, -8, 0, 4)
+	changerButton.Size = UDim2.fromOffset(118, 20)
+
+	local function updateChangerButton()
+		local on = Semi.Config["skin changer"] ~= false
+		changerButton.Text = on and "Skin Changer: on" or "Skin Changer: off"
+		changerButton.TextTransparency = on and 0 or 0.4
+	end
+	updateChangerButton()
+
+	track(changerButton.MouseButton1Click:Connect(function()
+		Semi.Config["skin changer"] = Semi.Config["skin changer"] == false
+		saveSkins()
+		updateChangerButton()
+
+		if type(Skins.refreshAll) == "function" then
+			local ok, err = pcall(Skins.refreshAll)
+			if not ok then
+				warn("[Visions hook] Switching the skin changer failed: " .. tostring(err))
+			end
+		end
+
+		log("paint-bucket", Semi.Config["skin changer"] == false and "Skin Changer off" or "Skin Changer on", 3)
+	end))
 
 	local viewport = Instance.new("ViewportFrame")
 	viewport.Ambient = Color3.fromRGB(150, 150, 165)
@@ -33607,10 +33661,11 @@ end
 
     -- Fast guns that still take a held shot when it is the player's own (a click or Full Auto, `manual`): the Revolver (0.2 s cooldown). The ragebot
     -- already sends it on every server window, so a pair there only adds a refused call; on a click the second shot comes 0.21 s later on its own.
+    -- Those pairs are the Legit tab's Double Tap (flag legit_double_tap); the Rage tab's Double Tap (auto_fire_salvo) pairs the slow guns.
     local salvo_manual_guns = {["[Revolver]"] = true}
 
     hide_manager["salvo_extra"] = function(handle, manual)
-        if flags["auto_fire_salvo"] ~= true or hide_manager["salvo_busy"] == true or typeof(handle) ~= "Instance" then
+        if hide_manager["salvo_busy"] == true or typeof(handle) ~= "Instance" then
             return false
         end
 
@@ -33620,9 +33675,14 @@ end
             return false
         end
 
+        local fast_ok = manual == true and flags["legit_double_tap"] == true and salvo_manual_guns[tool["Name"]] == true
+
+        if flags["auto_fire_salvo"] ~= true and not fast_ok then
+            return false
+        end
+
         local cooldown = find_first_child(tool, "ShootingCooldown")
         local ammo = find_first_child(tool, "Ammo")
-        local fast_ok = manual == true and salvo_manual_guns[tool["Name"]] == true
 
         if not cooldown or (cooldown["Value"] < 0.25 and not fast_ok) or not ammo or ammo["Value"] < 2 then
             return false
@@ -42058,6 +42118,8 @@ local get_silent_aim_position = nil
         menu_references["silent_aim_hit_checker"] = menu_references["silent_aim_bullet_manipulation_settings"]:create_element({["name"] = "hit checker"}, {["toggle"] = {["flag"] = "silent_aim_hit_checker", ["default"] = true}})
         menu_references["silent_aim_manipulated_indicator"] = menu_references["silent_aim_bullet_manipulation_settings"]:create_element({["name"] = "manipulated indicator"}, {["toggle"] = {["flag"] = "silent_aim_manipulated_indicator", ["default"] = true}})
         menu_references["legit_range_enhancer"] = menu_references["silent_aim_section"]:create_element({["name"] = "range enhancer"}, {["toggle"] = {["flag"] = "legit_range_enhancer", ["default"] = false}})
+        -- the Revolver's shots of your own (a click, Full Auto) go out twice, the second held by the server behind the first (hide_manager.salvo_extra)
+        menu_references["legit_double_tap"] = menu_references["silent_aim_section"]:create_element({["name"] = "double tap"}, {["toggle"] = {["flag"] = "legit_double_tap", ["default"] = false}})
 
     menu_references["triggerbot_section"] = menu["groups"]["main"]:create_section("legitbot", "trigger", 2, 0.09, 0)
         menu_references["triggerbot"] = menu_references["triggerbot_section"]:create_element({["name"] = "triggerbot"}, {["toggle"] = {["flag"] = "triggerbot"}})
