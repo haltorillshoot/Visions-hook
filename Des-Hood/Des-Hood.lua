@@ -42070,10 +42070,11 @@ do
 
     -- Infinite range (the Rage tab's Range Enhancer). Des Hood's server judges a hit from where it has the body: a claim from past the gun's Range
     -- is taken but does no damage, and an origin moved more than about 25 studs from the body is refused (both measured). So while the ragebot's
-    -- target is past the reach of the gun in hand, the body is put 6 studs over the target's head for the server every frame (moved at Stepped,
-    -- back at the next drawn frame, as Follow Target does; this screen keeps its own place) and Auto Fire shoots from there. Measured: a body
-    -- held there for 0.25 s hit from 467 studs (34 damage), 0.1 s was not long enough for the server to have it there. It stops as soon as the
-    -- target is within reach again, and while the gun is empty, a stomp or a follow moves the body, or the target can't be hit.
+    -- target is past the reach of the gun in hand, the body is put at the edge of the gun's Range from the target for the server every frame
+    -- (moved at Stepped, back at the next drawn frame, as Follow Target does; on this screen you stay where you are) and Auto Fire shoots from
+    -- there. Measured: a body held near the target for 0.25 s hit from 467 studs (34 damage), 0.1 s was not long enough for the server to have it
+    -- there. It stops as soon as the target is within reach again, and while the gun is empty, a stomp or a follow moves the body, or the target
+    -- can't be hit.
     local do_range_hop = LPH_NO_VIRTUALIZE(function(dt, hrp)
         local target = ragebot_target
 
@@ -42098,12 +42099,17 @@ do
         end
 
         local home = local_client_position
+        local away = home["Position"] - head["Position"]
+        local distance = away["Magnitude"]
 
-        if (home["Position"] - head["Position"])["Magnitude"] <= range["Value"] + 10 then
+        if distance ~= distance or distance <= range["Value"] + 10 then
             return
         end
 
-        hrp["CFrame"] = cframe_new(head["Position"] + vector3_new(0, 6, 0))
+        -- Not on top of them: only as far in as the gun needs, on the line from them back to where you stand, the Range less 20 studs out from
+        -- them (a hit claimed from where you really are was refused every way it was tried: at the Range on the line, at the head, and from an
+        -- origin claimed next to them).
+        hrp["CFrame"] = cframe_new(head["Position"] + away / distance * math.max(range["Value"] - 20, 10) + vector3_new(0, 3, 0))
         hrp["AssemblyLinearVelocity"] = vector3_zero
         render_stepped_wait(render_stepped)
         hrp["CFrame"] = home
