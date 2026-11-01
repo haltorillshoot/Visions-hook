@@ -15923,7 +15923,59 @@ end
 -- so Speed is a share of the gun's own fire rate: 100 is as fast as the gun allows, 50 is every second shot, 1 the slowest (0 counts as 1).
 -- It only reacts to a click that reached the game (not one on the menu or on a game window), only with a gun that has ammo in it, and never
 -- after an Anti Report shutdown.
-local FullAuto = { Held = false, Last = 0 }
+local FullAuto = { Held = false, Last = 0, Handler = nil }
+
+-- One round of a burst gun, fired the way its own script fires each round of a burst: the gun module draws it (beam, sound) and the shot goes
+-- to the server as the script sends it. At identity 2, as the gun module is required, so it never sees this environment.
+local function fireBurstRound(tool)
+	local handle = tool:FindFirstChild("Handle")
+	local replicatedStorage = game:GetService("ReplicatedStorage")
+	local remote = replicatedStorage:FindFirstChild("MainEvent")
+	local character = LocalPlayer.Character
+
+	if not FullAuto.Handler then
+		local modules = replicatedStorage:FindFirstChild("Modules")
+		local module = modules and modules:FindFirstChild("GunHandler")
+		local identity = getthreadidentity()
+		setthreadidentity(2)
+		local ok, handler = pcall(require, module)
+		setthreadidentity(identity)
+		FullAuto.Handler = ok and type(handler) == "table" and handler or nil
+	end
+
+	local handler = FullAuto.Handler
+
+	if not (handle and remote and handler and character) then
+		return
+	end
+
+	local default = tool:FindFirstChild("Default")
+	local mesh = default and default:FindFirstChild("Mesh")
+	local muzzle = mesh and mesh:FindFirstChild("Muzzle")
+	local origin = muzzle and muzzle.WorldPosition or (handle.CFrame * CFrame.new(-0.1, 0.4, 1.8)).Position
+	local range = tool:FindFirstChild("Range")
+
+	local identity = getthreadidentity()
+	setthreadidentity(2)
+	local ok, position, part, normal = pcall(function()
+		if handler.getCanShoot and not handler.getCanShoot(character) then
+			return nil
+		end
+
+		return handler.shoot({
+			Shooter = character,
+			Handle = handle,
+			ForcedOrigin = origin,
+			AimPosition = origin + handler.getAim(origin) * 200,
+			Range = range and range.Value or 200,
+		})
+	end)
+	setthreadidentity(identity)
+
+	if ok and position then
+		remote:FireServer("ShootGun", handle, origin, position, part, normal)
+	end
+end
 
 local function startFullAuto()
 	track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -15979,6 +16031,24 @@ local function startFullAuto()
 
 		local cooldownValue = tool:FindFirstChild("ShootingCooldown")
 		local cooldown = cooldownValue and tonumber(cooldownValue.Value) or 0.3
+
+		-- Burst guns (the AUG: GunClientBurst) fire three rounds a click and then refuse clicks for their ToleranceCooldown (0.6 s), so held they
+		-- gave about 6 shots a second. The server takes their shots one at a time at the gun's cooldown (measured: 17 of 17 sent 0.06 s apart), so
+		-- Full Auto fires their rounds itself, one each time the gun is ready (its cooldown + 0.0095, what its own script waits between rounds).
+		if tool:FindFirstChild("GunClientBurst") then
+			local burstSpeed = NeverLose.Flags["full_auto_speed"]
+			local burstShare = 0.25 + 0.75 * math.clamp(burstSpeed and tonumber(burstSpeed:GetValue()) or 100, 0, 100) / 100
+			local burstRapid = NeverLose.Flags["dt"]
+			local burstInterval = (cooldown + 0.0095) / ((burstRapid and burstRapid:GetValue() == true) and 1 or burstShare)
+			local now = os.clock()
+
+			if now - FullAuto.Last >= burstInterval then
+				FullAuto.Last = now
+				fireBurstRound(tool)
+			end
+
+			return
+		end
 
 		-- Maximum Fire Rate: the trigger is pulled when the gun is due again at the server (the engine's gun_due), not on a timer of our own
 		local rapid = NeverLose.Flags["dt"]
