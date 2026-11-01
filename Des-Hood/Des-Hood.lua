@@ -15878,7 +15878,10 @@ local function startFullAuto()
 		-- last shot), so the shots come the moment the gun can fire, not up to a cooldown late off a timer of ours that is out of step with the gun's.
 		local speedItem = NeverLose.Flags["full_auto_speed"]
 		local speed = speedItem and tonumber(speedItem:GetValue()) or 100
-		local interval = type(gunDue) == "function" and cooldown / (math.max(speed, 1) / 100) or (cooldown + 0.015) / (math.max(speed, 1) / 100)
+		-- Speed 100 is the gun's own rate and 0 a quarter of it: 0 used to mean 1%, a shot every 20 s or so, and Full Auto looked like it did not shoot
+		-- (measured: Speed at 0 in the Default config, 0 shots in a second held, with any gun)
+		local share = 0.25 + 0.75 * math.clamp(speed, 0, 100) / 100
+		local interval = type(gunDue) == "function" and cooldown / share or (cooldown + 0.015) / share
 		local now = os.clock()
 
 		if now - FullAuto.Last >= interval and (type(gunDue) ~= "function" or gunDue(tool)) then
