@@ -4062,6 +4062,7 @@ local function createJujuLib()
 		window.UserSettings = settingsTab:AddSection({ Name = "MENU", Position = "right" })
 
 		local folder = tostring(config.ConfigFolder)
+		local CONFIG_VERSION = 2
 		-- Selected is the row picked in the list; Active is the config the menu is in right now (Default until another one is loaded, created or overwritten).
 		local configState = { Selected = "Default", Active = "Default", Loaded = false }
 		Lib.ConfigState = configState
@@ -4150,6 +4151,18 @@ local function createJujuLib()
 				end
 			end
 
+			-- What the rows do not hold goes along under a key no row has (a file from before this is read as it always was)
+			local extras = {}
+
+			for name, extra in pairs(Lib.ConfigExtras or {}) do
+				local okExtra, value = pcall(extra.get)
+				if okExtra then
+					extras[name] = value
+				end
+			end
+
+			table.insert(list, { Idx = "__meta", Value = { Version = CONFIG_VERSION, Extras = extras } })
+
 			return HttpService:JSONEncode(list)
 		end
 
@@ -4157,18 +4170,127 @@ local function createJujuLib()
 			return base64Encode(shiftEncode(Lib:GetConfigJSON()))
 		end
 
+		-- The rows' starting values, taken before anything is loaded: a row a config has no value for goes back to this, it does not keep what the
+		-- config before it left there.
+		local configDefaults = nil
+
+		local function snapshotDefaults()
+			if configDefaults then
+				return
+			end
+
+			configDefaults = {}
+
+			for flag, item in pairs(Lib.Flags) do
+				if item and item.GetValue then
+					local okValue, value = pcall(item.GetValue, item)
+					if okValue then
+						configDefaults[flag] = value
+					end
+				end
+			end
+		end
+
+		-- Applies a config and says what happened: { Applied, Reset, Failed = { flag, ... }, Version }. A file that cannot be read throws, and nothing is changed.
 		function Lib:LoadConfigData(data)
 			local decoded = HttpService:JSONDecode(shiftDecode(base64Decode((data:gsub("%s", "")))))
 
-			for _, entry in ipairs(decoded) do
-				local item = entry.Idx and Lib.Flags[entry.Idx]
+			if type(decoded) ~= "table" or #decoded == 0 then
+				error("the file holds no settings")
+			end
 
-				if item and not (Lib.NoConfig and Lib.NoConfig[entry.Idx]) then
+			local report = { Applied = 0, Reset = 0, Failed = {}, Version = 1 }
+			local seen = {}
+			local meta = nil
+
+			for _, entry in ipairs(decoded) do
+				local flag = type(entry) == "table" and entry.Idx or nil
+				local item = flag and Lib.Flags[flag]
+
+				if flag == "__meta" then
+					meta = entry.Value
+				elseif item and not (Lib.NoConfig and Lib.NoConfig[flag]) then
+					seen[flag] = true
+
+					-- a value of the wrong kind (a file edited by hand, a row that changed kind) counts as not there
+					local current = item.GetValue and select(2, pcall(item.GetValue, item))
+					local wrongKind = (type(current) == "boolean" or type(current) == "number") and type(entry.Value) ~= type(current)
+
+					if wrongKind then
+						seen[flag] = nil
+					else
+						task.spawn(function()
+							local okSet = pcall(item.SetValue, item, entry.Value)
+							if okSet then
+								report.Applied += 1
+							else
+								table.insert(report.Failed, flag)
+							end
+						end)
+					end
+				end
+			end
+
+			for flag, item in pairs(Lib.Flags) do
+				if not seen[flag] and not (Lib.NoConfig and Lib.NoConfig[flag]) and configDefaults and configDefaults[flag] ~= nil and item.SetValue then
 					task.spawn(function()
-						pcall(item.SetValue, item, entry.Value)
+						if pcall(item.SetValue, item, configDefaults[flag]) then
+							report.Reset += 1
+						else
+							table.insert(report.Failed, flag)
+						end
 					end)
 				end
 			end
+
+			if type(meta) == "table" then
+				report.Version = tonumber(meta.Version) or 1
+
+				for name, extra in pairs(Lib.ConfigExtras or {}) do
+					if type(meta.Extras) == "table" and meta.Extras[name] ~= nil and not pcall(extra.set, meta.Extras[name]) then
+						table.insert(report.Failed, name)
+					end
+				end
+			end
+
+			return report
+		end
+
+		-- A write is only done once the file reads back as written; if it does not, what was there before goes back.
+		local function writeConfig(path)
+			local data = Lib:GetConfigData()
+			HttpService:JSONDecode(shiftDecode(base64Decode(data)))
+
+			local previous = type(isfile) == "function" and isfile(path) and readfile(path) or nil
+			writefile(path, data)
+
+			if readfile(path) ~= data then
+				if previous then
+					writefile(path, previous)
+				end
+				error("the file did not save correctly")
+			end
+		end
+
+		-- The config to start in next time (it has a dot, so it is not listed as a config)
+		local function rememberConfig(name)
+			pcall(writefile, folder .. "/last_config.txt", tostring(name))
+		end
+
+		local function loadedMessage(name, report)
+			local message = "Loaded " .. name
+
+			if report.Reset > 0 then
+				message ..= " (" .. report.Reset .. " not in it, set to default)"
+			end
+
+			if #report.Failed > 0 then
+				table.sort(report.Failed)
+				warn("[Visions hook] Could not apply from " .. name .. ": " .. table.concat(report.Failed, ", "))
+				message ..= ", " .. #report.Failed .. " could not be applied (see console)"
+			end
+
+			return message
 		end
 
 		local configList = nil
@@ -4295,13 +4417,14 @@ local function createJujuLib()
 				local path = folder .. "/" .. tostring(configState.Selected)
 
 				if type(isfile) == "function" and isfile(path) then
-					local ok, err = pcall(function()
-						Lib:LoadConfigData(readfile(path))
+					local ok, result = pcall(function()
+						return Lib:LoadConfigData(readfile(path))
 					end)
 					if ok then
 						configState.Active = configState.Selected
+						rememberConfig(configState.Active)
 					end
-					logger.new("", ok and ("Loaded " .. configState.Selected) or ("Could not load " .. configState.Selected .. ": " .. tostring(err)), 3.5)
+					logger.new("", ok and loadedMessage(configState.Selected, result) or ("Could not load " .. configState.Selected .. ": " .. tostring(result)), 3.5)
 				else
 					-- the file was deleted or moved outside the menu: say so and bring the list up to date
 					logger.new("", "Could not load " .. tostring(configState.Selected) .. ": the file is not there", 3.5)
@@ -4339,11 +4462,10 @@ local function createJujuLib()
 				overwriteArmedName = nil
 				overwriteButton.Root.Text = "Overwrite Selected"
 
-				local ok, err = pcall(function()
-					writefile(folder .. "/" .. name, Lib:GetConfigData())
-				end)
+				local ok, err = pcall(writeConfig, folder .. "/" .. name)
 				if ok then
 					configState.Active = name
+					rememberConfig(name)
 				end
 				logger.new("", ok and ("Overwrote " .. name) or ("Could not overwrite " .. name .. ": " .. tostring(err)), 3.5)
 				refreshConfigs()
@@ -4365,13 +4487,21 @@ local function createJujuLib()
 					logger.new("", "Windows keeps that name for itself, pick another one", 3.5)
 				else
 					text = string.match(string.sub(text, 1, 24), "^%s*(.-)%s*$")
-					local ok, err = pcall(function()
-						writefile(folder .. "/" .. text, Lib:GetConfigData())
-					end)
+
+					-- Windows file names ignore case, so "HVH" would have replaced "hvh" without a word
+					for _, existing in ipairs(listConfigs()) do
+						if string.upper(existing) == string.upper(text) then
+							logger.new("", existing .. " already exists: select it and use Overwrite Selected", 3.5)
+							return
+						end
+					end
+
+					local ok, err = pcall(writeConfig, folder .. "/" .. text)
 
 					if ok then
 						configState.Selected = text
 						configState.Active = text
+						rememberConfig(text)
 						nameInput:SetValue("")
 						refreshConfigs()
 						configList:SetValue(text)
@@ -4406,6 +4536,7 @@ local function createJujuLib()
 				-- The menu still holds the deleted config's settings: they must not be written over Default, so nothing is in use until one is loaded.
 				if configState.Active == configState.Selected then
 					configState.Active = nil
+					rememberConfig("Default")
 				end
 				configState.Selected = "Default"
 				refreshConfigs()
@@ -4420,9 +4551,7 @@ local function createJujuLib()
 			local path = folder .. "/Default"
 
 			if configState.Loaded and configState.Active == "Default" and gui and type(isfile) == "function" and isfile(path) then
-				return pcall(function()
-					writefile(path, Lib:GetConfigData())
-				end)
+				return pcall(writeConfig, path)
 			end
 
 			return false
@@ -4435,17 +4564,28 @@ local function createJujuLib()
 			end
 
 			configState.Loaded = true
+			snapshotDefaults()
 			refreshConfigs()
 
 			local path = folder .. "/Default"
+			local startName = "Default"
 
-			if type(isfile) == "function" and isfile(path) then
+			-- The script starts in the config it was last in; only a file that is still there counts
+			local okLast, last = pcall(readfile, folder .. "/last_config.txt")
+			if okLast and type(last) == "string" and last ~= "" and last ~= "Default" and isfile(folder .. "/" .. last) then
+				startName = last
+			end
+
+			if type(isfile) == "function" and isfile(folder .. "/" .. startName) then
 				local ok, err = pcall(function()
-					Lib:LoadConfigData(readfile(path))
+					return Lib:LoadConfigData(readfile(folder .. "/" .. startName))
 				end)
 
 				if ok then
-					logger.new("", "Loaded Default Config", 3.5)
+					configState.Selected = startName
+					configState.Active = startName
+					configList:SetValue(startName)
+					logger.new("", loadedMessage(startName, err), 3.5)
 				else
 					-- Nothing is in use until a config is loaded (as after Delete): the autosave and the unload save would otherwise write the
 					-- menu's defaults over the file within seconds, and the user's settings would be gone.
@@ -6657,6 +6797,42 @@ local function loadBinds()
 	end)
 end
 
+-- A config carries the keys bound to its rows, and loading it replaces them (a row it has no key for has none)
+NeverLose.ConfigExtras = NeverLose.ConfigExtras or {}
+NeverLose.ConfigExtras.binds = {
+	get = function()
+		local data = {}
+
+		for flag, entry in pairs(Binds.Entries) do
+			if entry.Key ~= "None" then
+				data[flag] = { Key = entry.Key, Mode = entry.Mode }
+			end
+		end
+
+		return data
+	end,
+	set = function(data)
+		if type(data) ~= "table" then
+			return
+		end
+
+		for flag, entry in pairs(Binds.Entries) do
+			local saved = data[flag]
+
+			if entry.Held then
+				entry.Held = false
+				pcall(entry.Toggle.SetValue, entry.Toggle, false)
+			end
+
+			entry.Key = type(saved) == "table" and type(saved.Key) == "string" and saved.Key or "None"
+			entry.Mode = type(saved) == "table" and saved.Mode == "Hold" and "Hold" or "Toggle"
+		end
+
+		refreshKeybindList()
+		queueSaveBinds()
+	end,
+}
+
 local function refreshBindPopup()
 	local entry = BindPopup.Entry
 	if not (entry and BindPopup.Frame) then
@@ -7717,11 +7893,21 @@ local function refreshTargetList()
 	end
 end
 
----Target key: adds the player under the cursor to the Target List. A cursor that is on a wall or
----missed by a little falls back to the player closest to it on screen.
+---Target key: a toggle. With a target picked it clears the pick, wherever the cursor is; with none it picks the player under the cursor. A cursor
+---that is on a wall or missed by a little falls back to the player closest to it on screen.
 function Session.addTarget()
 	local camera = workspace.CurrentCamera
 	if not (Session.Alive and camera and targetList) then
+		return
+	end
+
+	if #selectedPlayers > 0 then
+		local cleared = table.concat(selectedPlayers, ", ")
+
+		-- The dropdown's callback applies the pick; if it did not run, apply it directly.
+		pcall(targetList.SetValue, targetList, {})
+		setSelection({})
+		log("crosshairs", "Target cleared: " .. cleared, 3)
 		return
 	end
 
@@ -7770,23 +7956,12 @@ function Session.addTarget()
 	end
 
 	-- The target key picks ONE player: the Target List becomes just them (it used to add them to whoever was already in it, so the list
-	-- filled up and the ragebot went on to those others after every kill). The same key on the player already picked clears the list.
-	local picked = {}
-	local only = #selectedPlayers == 1 and selectedPlayers[1] == found.Name
+	-- filled up and the ragebot went on to those others after every kill).
+	local picked = { [found.Name] = true }
 
-	if not only then
-		picked[found.Name] = true
-	end
-
-	-- The dropdown's callback applies the pick; if it did not run, apply it directly.
 	pcall(targetList.SetValue, targetList, picked)
 	setSelection(picked)
-
-	if only then
-		log("crosshairs", "Target cleared: " .. found.Name, 3)
-	else
-		log("crosshairs", "Target: " .. found.Name, 3)
-	end
+	log("crosshairs", "Target: " .. found.Name, 3)
 end
 
 ---------- Keybind list ------------
@@ -8815,6 +8990,16 @@ local VisualSettings = {
 	LocalTracerLifetime = 0.8,
 	LocalTracerServerOrigin = true,
 	LocalTracerOneLine = false,
+	LocalTracerThickness = 100,
+	LocalTracerTransparency = 0,
+	LocalTracerSpeed = 100,
+	LocalTracerGlow = 0,
+	LocalTracerLength = 100,
+	PlayerTracerThickness = 100,
+	PlayerTracerTransparency = 0,
+	PlayerTracerSpeed = 100,
+	PlayerTracerGlow = 0,
+	PlayerTracerLength = 100,
 	PlayerTracerStyle = "laser",
 	PlayerTracerColor = Color3.fromRGB(133, 220, 255),
 	PlayerTracerGradient = Color3.fromRGB(241, 133, 255),
@@ -8838,6 +9023,20 @@ local TRACER_STYLES = {
 	laser = { Texture = 12781800668, Speed = 1.5, Length = 2, Width = 0.25, Brightness = 2.5, LightInfluence = 0, Wrap = false },
 	light = { Texture = 2382169232, Speed = 2, Length = 15, Width = 0.25, Brightness = 1, LightInfluence = 1, Wrap = true },
 	flow = { Texture = 12788927812, Speed = 2.5, Length = 1, Width = 0.2, Brightness = 5, LightInfluence = 0, Wrap = false },
+	neon = { Speed = 0, Length = 1, Width = 0.12, Brightness = 6, LightInfluence = 0, Wrap = false },
+	glow = { Speed = 0, Length = 1, Width = 0.12, Brightness = 4, LightInfluence = 0, Wrap = false, Glow = 0.6 },
+	gradient = { Speed = 0, Length = 1, Width = 0.16, Brightness = 3, LightInfluence = 0, Wrap = false },
+	custom = { Speed = 1, Length = 1, Width = 0.2, Brightness = 3, LightInfluence = 0, Wrap = false },
+	-- broken into pieces that jump around the line
+	lightning = { Speed = 0, Length = 1, Width = 0.1, Brightness = 6, LightInfluence = 0, Wrap = false, Jitter = 0.9, Refresh = 0.06, Glow = 0.25 },
+	electric = { Speed = 0, Length = 1, Width = 0.06, Brightness = 7, LightInfluence = 0, Wrap = false, Jitter = 0.35, Refresh = 0.03 },
+	-- colors of their own; the rainbow's scroll along the line
+	rainbow = { Speed = 0, Length = 1, Width = 0.15, Brightness = 4, LightInfluence = 0, Wrap = false, Rainbow = true },
+	fire = { Texture = 12788927812, Speed = 3, Length = 1, Width = 0.22, Brightness = 5, LightInfluence = 0, Wrap = false, Colors = { Color3.fromRGB(255, 80, 20), Color3.fromRGB(255, 210, 70) }, Glow = 0.3 },
+	-- the width beats
+	energy = { Texture = 12788927812, Speed = 4, Length = 1, Width = 0.18, Brightness = 6, LightInfluence = 0, Wrap = false, Pulse = true, Glow = 0.3 },
+	-- a thin line and a spark that runs along it, dropping particles
+	particle = { Speed = 0, Length = 1, Width = 0.04, Brightness = 2, LightInfluence = 0, Wrap = false, Particle = true },
 }
 
 local SOUND_EXTENSIONS = { ogg = true, mp3 = true, wav = true }
@@ -9272,45 +9471,188 @@ table.insert(Session.Cleanups, function()
 end)
 
 ---------- Bullet tracers and impacts ------------
+-- Every tracer alive, moved on by one Heartbeat connection that exists only while there are any. Past the cap the oldest goes: a Full Auto with
+-- long lifetimes used to leave a wait loop and two attachments behind per shot until each ran out.
+local ActiveTracers = {}
+local tracerConnection = nil
+local MAX_TRACERS = 80
+
+local function rainbowSequence(offset)
+	local points = {}
+
+	for index = 0, 6 do
+		local place = index / 6
+		points[index + 1] = ColorSequenceKeypoint.new(place, Color3.fromHSV((place + offset) % 1, 0.9, 1))
+	end
+
+	return ColorSequence.new(points)
+end
+
+local function dropTracer(index)
+	local tracer = table.remove(ActiveTracers, index)
+
+	for _, attachment in ipairs(tracer.Attachments) do
+		if ActiveEffects[attachment] then
+			dropEffect(attachment)
+		end
+	end
+end
+
+local function stepTracers()
+	local now = os.clock()
+
+	if not Session.Alive then
+		tracerConnection:Disconnect()
+		tracerConnection = nil
+		return
+	end
+
+	for index = #ActiveTracers, 1, -1 do
+		local tracer = ActiveTracers[index]
+		local age = now - tracer.Born
+
+		if age >= tracer.Lifetime + 0.2 or not ActiveEffects[tracer.Attachments[1]] then
+			dropTracer(index)
+		else
+			local fade = age > tracer.Lifetime and (age - tracer.Lifetime) / 0.2 or 0
+
+			if fade > 0 then
+				for _, entry in ipairs(tracer.Beams) do
+					entry.Beam.Transparency = NumberSequence.new(entry.Alpha + (1 - entry.Alpha) * fade)
+				end
+			end
+
+			if tracer.Style.Refresh and now >= tracer.NextRefresh then
+				tracer.NextRefresh = now + tracer.Style.Refresh
+
+				for step, attachment in ipairs(tracer.Joints) do
+					local jitter = tracer.Style.Jitter
+					attachment.WorldPosition = tracer.Start + tracer.Path * (step / (#tracer.Joints + 1))
+						+ Vector3.new((math.random() - 0.5) * 2 * jitter, (math.random() - 0.5) * 2 * jitter, (math.random() - 0.5) * 2 * jitter)
+				end
+			end
+
+			if tracer.Style.Rainbow then
+				local sequence = rainbowSequence(now * tracer.Speed)
+				for _, entry in ipairs(tracer.Beams) do
+					entry.Beam.Color = sequence
+				end
+			end
+
+			if tracer.Style.Pulse then
+				local width = tracer.Width * (1 + 0.5 * math.sin(now * 25 * tracer.Speed))
+				for _, entry in ipairs(tracer.Beams) do
+					entry.Beam.Width0 = width * entry.Scale
+					entry.Beam.Width1 = width * entry.Scale
+				end
+			end
+
+			if tracer.Runner then
+				tracer.Runner.WorldPosition = tracer.Start + tracer.Path * math.clamp(age * tracer.Speed / math.max(tracer.Lifetime, 0.05), 0, 1)
+			end
+		end
+	end
+
+	if #ActiveTracers == 0 then
+		tracerConnection:Disconnect()
+		tracerConnection = nil
+	end
+end
+
 local function drawTracer(startPosition, endPosition, isLocal)
-	local style = TRACER_STYLES[isLocal and VisualSettings.LocalTracerStyle or VisualSettings.PlayerTracerStyle] or TRACER_STYLES.laser
-	local color = isLocal and VisualSettings.LocalTracerColor or VisualSettings.PlayerTracerColor
-	local gradient = isLocal and VisualSettings.LocalTracerGradient or VisualSettings.PlayerTracerGradient
-	local lifetime = isLocal and VisualSettings.LocalTracerLifetime or VisualSettings.PlayerTracerLifetime
+	local prefix = isLocal and "LocalTracer" or "PlayerTracer"
+	local style = TRACER_STYLES[VisualSettings[prefix .. "Style"]] or TRACER_STYLES.laser
+	local color = VisualSettings[prefix .. "Color"]
+	local gradient = VisualSettings[prefix .. "Gradient"]
+	local lifetime = VisualSettings[prefix .. "Lifetime"]
+	local width = style.Width * VisualSettings[prefix .. "Thickness"] / 100
+	local alpha = math.clamp(VisualSettings[prefix .. "Transparency"] / 100, 0, 1)
+	local speed = VisualSettings[prefix .. "Speed"] / 100
+	local glow = math.max(style.Glow or 0, VisualSettings[prefix .. "Glow"] / 100)
+	local path = (endPosition - startPosition) * (VisualSettings[prefix .. "Length"] / 100)
 
-	local startAttachment = worldAttachment(startPosition)
-	local endAttachment = worldAttachment(endPosition)
+	if style.Colors then
+		color, gradient = style.Colors[1], style.Colors[2]
+	end
 
-	local beam = Instance.new("Beam")
-	beam.FaceCamera = true
-	beam.Texture = assetId(style.Texture)
-	beam.TextureSpeed = style.Speed
-	beam.TextureLength = style.Length
-	beam.TextureMode = style.Wrap and Enum.TextureMode.Wrap or Enum.TextureMode.Stretch
-	beam.Width0 = style.Width
-	beam.Width1 = style.Width
-	beam.Brightness = style.Brightness
-	beam.LightEmission = 3
-	beam.LightInfluence = style.LightInfluence
-	beam.Color = ColorSequence.new(color, gradient)
-	beam.Attachment0 = startAttachment
-	beam.Attachment1 = endAttachment
-	beam.Parent = startAttachment
+	while #ActiveTracers >= MAX_TRACERS do
+		dropTracer(1)
+	end
 
-	-- Beam transparency is a sequence, so it fades by hand instead of a tween.
-	task.delay(lifetime, function()
-		local started = os.clock()
-		while ActiveEffects[startAttachment] and os.clock() - started < 0.2 do
-			beam.Transparency = NumberSequence.new((os.clock() - started) / 0.2)
-			RunService.Heartbeat:Wait()
+	local tracer = { Attachments = {}, Beams = {}, Joints = {}, Style = style, Born = os.clock(), Lifetime = lifetime, Start = startPosition, Path = path, Speed = speed, Width = width, NextRefresh = 0 }
+
+	local function addBeam(from, to, scale, opacity)
+		local beam = Instance.new("Beam")
+		beam.FaceCamera = true
+		if style.Texture then
+			beam.Texture = assetId(style.Texture)
 		end
-		if ActiveEffects[startAttachment] then
-			dropEffect(startAttachment)
+		beam.TextureSpeed = style.Speed * speed
+		beam.TextureLength = style.Length
+		beam.TextureMode = style.Wrap and Enum.TextureMode.Wrap or Enum.TextureMode.Stretch
+		beam.Width0 = width * scale
+		beam.Width1 = width * scale
+		beam.Brightness = style.Brightness
+		beam.LightEmission = 3
+		beam.LightInfluence = style.LightInfluence
+		beam.Color = style.Rainbow and rainbowSequence(0) or ColorSequence.new(color, gradient)
+		beam.Transparency = NumberSequence.new(opacity)
+		beam.Attachment0 = from
+		beam.Attachment1 = to
+		beam.Parent = from
+		table.insert(tracer.Beams, { Beam = beam, Alpha = opacity, Scale = scale })
+	end
+
+	local function addAttachment(position)
+		local attachment = worldAttachment(position)
+		table.insert(tracer.Attachments, attachment)
+		return attachment
+	end
+
+	local previous = addAttachment(startPosition)
+	local first = previous
+
+	if style.Refresh then
+		local pieces = math.clamp(math.floor(path.Magnitude / 8), 3, 10)
+
+		for step = 1, pieces - 1 do
+			local joint = addAttachment(startPosition + path * (step / pieces))
+			table.insert(tracer.Joints, joint)
+			addBeam(previous, joint, 1, alpha)
+			previous = joint
 		end
-		if ActiveEffects[endAttachment] then
-			dropEffect(endAttachment)
-		end
-	end)
+	end
+
+	local last = addAttachment(startPosition + path)
+	addBeam(previous, last, 1, alpha)
+
+	-- the halo: the same line, wider and mostly see-through
+	if glow > 0 then
+		addBeam(first, last, 4, 1 - (1 - alpha) * 0.35 * glow)
+	end
+
+	if style.Particle then
+		local runner = addAttachment(startPosition)
+		tracer.Runner = runner
+
+		local emitter = Instance.new("ParticleEmitter")
+		emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+		emitter.Color = ColorSequence.new(color, gradient)
+		emitter.LightEmission = 1
+		emitter.Lifetime = NumberRange.new(0.2, 0.5)
+		emitter.Rate = 120
+		emitter.Speed = NumberRange.new(0.5, 2)
+		emitter.SpreadAngle = Vector2.new(180, 180)
+		emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3 * width / style.Width), NumberSequenceKeypoint.new(1, 0) })
+		emitter.Transparency = NumberSequence.new(alpha)
+		emitter.Parent = runner
+	end
+
+	table.insert(ActiveTracers, tracer)
+
+	if not tracerConnection then
+		tracerConnection = RunService.Heartbeat:Connect(stepTracers)
+	end
 end
 
 local function showImpact(position)
@@ -9722,13 +10064,24 @@ function buildGameSections(WorldTab)
 	visualToggle(Hits, "Hit Logs", "visual_hit_logs", "HitLogs")
 
 	-- Local bullet tracers --
-	local tracerStyles = { "laser", "light", "flow" }
+	local tracerStyles = { "laser", "light", "flow", "neon", "glow", "gradient", "lightning", "electric", "rainbow", "fire", "energy", "particle", "custom" }
+
+	-- Beams have no material property, so there is no Material row here
+	local function tracerLook(options, flag, prefix)
+		settingSlider(options, "Thickness", flag .. "_thickness", prefix .. "Thickness", 10, 400, 0, "%")
+		settingSlider(options, "Transparency", flag .. "_transparency", prefix .. "Transparency", 0, 90, 0, "%")
+		settingSlider(options, "Speed", flag .. "_speed", prefix .. "Speed", 0, 300, 0, "%")
+		settingSlider(options, "Glow", flag .. "_glow", prefix .. "Glow", 0, 100, 0, "%")
+		settingSlider(options, "Length", flag .. "_length", prefix .. "Length", 10, 100, 0, "%")
+	end
+
 	local localTracers = visualToggle(Bullets, "Bullet Tracers", "visual_local_tracers", "LocalTracers")
 	local localTracerOptions = localTracers:AddOption()
 	settingDropdown(localTracerOptions, "Style", "visual_local_tracer_style", "LocalTracerStyle", tracerStyles)
 	settingColor(localTracerOptions, "Color", "visual_local_tracer_color", "LocalTracerColor")
 	settingColor(localTracerOptions, "Gradient Color", "visual_local_tracer_gradient", "LocalTracerGradient")
 	settingSlider(localTracerOptions, "Lifetime", "visual_local_tracer_lifetime", "LocalTracerLifetime", 0.1, 1.5, 1, "s")
+	tracerLook(localTracerOptions, "visual_local_tracer", "LocalTracer")
 	localTracerOptions:AddLabel("From Server Position"):AddToggle({
 		Default = VisualSettings.LocalTracerServerOrigin,
 		Flag = "visual_local_tracer_server",
@@ -9748,6 +10101,7 @@ function buildGameSections(WorldTab)
 	settingColor(playerTracerOptions, "Color", "visual_player_tracer_color", "PlayerTracerColor")
 	settingColor(playerTracerOptions, "Gradient Color", "visual_player_tracer_gradient", "PlayerTracerGradient")
 	settingSlider(playerTracerOptions, "Lifetime", "visual_player_tracer_lifetime", "PlayerTracerLifetime", 0.1, 1.5, 1, "s")
+	tracerLook(playerTracerOptions, "visual_player_tracer", "PlayerTracer")
 
 	-- Bullet impacts --
 	local impacts = visualToggle(Bullets, "Bullet Impacts", "visual_impacts", "Impacts")
@@ -9805,6 +10159,15 @@ local PlayerSettings = {
 	HatScale = 1.7,
 	HatBrightness = 5,
 	AuraColor = Color3.fromRGB(133, 220, 255),
+	AuraStyle = "Sparkle",
+	AuraStyleColors = true,
+	AuraSize = 100,
+	AuraSpeed = 100,
+	AuraDensity = 100,
+	AuraLifetime = 100,
+	AuraTransparency = 0,
+	AuraRotation = 0,
+	AuraRadius = 2,
 	ToolMaterial = "Neon",
 	ToolColor = Color3.fromRGB(133, 220, 255),
 	RainbowSpeed = 30,
@@ -9816,7 +10179,7 @@ local PlayerSettings = {
 	SwayVerticalSpeed = 20,
 }
 
-local MATERIALS = { "ForceField", "Neon", "Glass", "SmoothPlastic", "Metal", "Foil" }
+local MATERIALS = { "ForceField", "Neon", "Glass", "SmoothPlastic", "Metal", "Foil", "Ice", "DiamondPlate", "Marble", "Granite", "Slate", "Concrete", "Wood", "Brick", "Sand", "Grass", "Fabric", "CorrodedMetal" }
 local ARM_PARTS = { "LeftHand", "LeftLowerArm", "LeftUpperArm", "RightHand", "RightLowerArm", "RightUpperArm", "Left Arm", "Right Arm" }
 
 local function materialNamed(name)
@@ -9869,6 +10232,18 @@ local function restoreMaterial()
 		pcall(function()
 			part.Material = original.Material
 			part.Color = original.Color
+
+			if original.TextureID then
+				part.TextureID = original.TextureID
+			end
+
+			if original.Mesh then
+				original.Mesh.TextureId = original.MeshTexture
+			end
+
+			for _, appearance in ipairs(original.Appearances) do
+				appearance.Parent = part
+			end
 		end)
 	end
 	table.clear(materialOriginals)
@@ -9884,7 +10259,27 @@ local function applyMaterial()
 
 	local material = materialNamed(PlayerSettings.Material)
 	for _, part in ipairs(characterParts(character)) do
-		materialOriginals[part] = { Material = part.Material, Color = part.Color }
+		local original = { Material = part.Material, Color = part.Color, Appearances = {} }
+		materialOriginals[part] = original
+
+		-- Why it only worked on some characters: a SurfaceAppearance or a mesh's own texture draws over the material and the color, so on layered
+		-- avatars and most accessories nothing changed. They are taken off while the material is on, and put back with it.
+		for _, child in ipairs(part:GetChildren()) do
+			if child:IsA("SurfaceAppearance") then
+				table.insert(original.Appearances, child)
+				child.Parent = nil
+			elseif child:IsA("SpecialMesh") then
+				original.Mesh = child
+				original.MeshTexture = child.TextureId
+				child.TextureId = ""
+			end
+		end
+
+		if part:IsA("MeshPart") then
+			original.TextureID = part.TextureID
+			part.TextureID = ""
+		end
+
 		part.Material = material
 		part.Color = PlayerSettings.MaterialColor
 	end
@@ -9939,10 +10334,57 @@ local function applyChinaHat()
 	chinaHat = cone
 end
 
--- Particle aura: sparkles drifting around you.
+-- Particle aura: particles around you, from a sphere that follows you (not one welded to you: it would be part of the character for everything
+-- that walks its parts). Colors are the style's own unless Style Colors is off or the style has none.
+local AURA_SPARKLE = "rbxasset://textures/particles/sparkles_main.dds"
+local AURA_FIRE = "rbxasset://textures/particles/fire_main.dds"
+local AURA_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
+
+local AURA_STYLES = {
+	Sparkle = { Texture = AURA_SPARKLE, Rate = 20, Lifetime = 1.25, Speed = 1.5, Size = 0.4, Light = 1, Alpha = 0.2 },
+	Fire = { Texture = AURA_FIRE, Rate = 45, Lifetime = 0.9, Speed = 3, Size = 1.2, Light = 1, Alpha = 0.25, Rise = 6, Colors = { Color3.fromRGB(255, 200, 70), Color3.fromRGB(255, 60, 15) } },
+	Flame = { Texture = AURA_FIRE, Rate = 25, Lifetime = 0.6, Speed = 5, Size = 0.7, Light = 1, Alpha = 0.1, Rise = 12, Colors = { Color3.fromRGB(120, 200, 255), Color3.fromRGB(40, 90, 255) } },
+	Smoke = { Texture = AURA_SMOKE, Rate = 18, Lifetime = 2.2, Speed = 1, Size = 2, Light = 0, Alpha = 0.55, Rise = 2, Colors = { Color3.fromRGB(150, 150, 155), Color3.fromRGB(60, 60, 65) } },
+	Spark = { Texture = AURA_SPARKLE, Rate = 60, Lifetime = 0.45, Speed = 9, Size = 0.25, Light = 1, Alpha = 0, Rise = -10, Colors = { Color3.fromRGB(255, 240, 170), Color3.fromRGB(255, 130, 40) } },
+	Star = { Texture = AURA_SPARKLE, Rate = 14, Lifetime = 2, Speed = 0.4, Size = 0.7, Light = 1, Alpha = 0, Spin = 90 },
+	Galaxy = { Texture = AURA_SPARKLE, Rate = 55, Lifetime = 2.5, Speed = 0.6, Size = 0.35, Light = 1, Alpha = 0.05, Spin = 45, Colors = { Color3.fromRGB(130, 70, 255), Color3.fromRGB(255, 90, 200), Color3.fromRGB(70, 170, 255) } },
+	Lightning = { Texture = AURA_SPARKLE, Rate = 90, Lifetime = 0.12, Speed = 14, Size = 0.5, Light = 1, Alpha = 0, Colors = { Color3.fromRGB(240, 245, 255), Color3.fromRGB(120, 170, 255) } },
+	Electric = { Texture = AURA_SPARKLE, Rate = 70, Lifetime = 0.2, Speed = 7, Size = 0.3, Light = 1, Alpha = 0, Spin = 400, Colors = { Color3.fromRGB(90, 240, 255), Color3.fromRGB(40, 120, 255) } },
+	Energy = { Texture = AURA_FIRE, Rate = 30, Lifetime = 0.8, Speed = 1, Size = 1, Light = 1, Alpha = 0.3 },
+	Neon = { Texture = AURA_SPARKLE, Rate = 35, Lifetime = 0.9, Speed = 0.8, Size = 0.6, Light = 1, Alpha = 0 },
+	Rainbow = { Texture = AURA_SPARKLE, Rate = 40, Lifetime = 1.5, Speed = 1.2, Size = 0.5, Light = 1, Alpha = 0.05, Colors = { Color3.fromRGB(255, 60, 60), Color3.fromRGB(255, 190, 40), Color3.fromRGB(70, 255, 90), Color3.fromRGB(60, 200, 255), Color3.fromRGB(190, 70, 255) } },
+	["Dark Energy"] = { Texture = AURA_SMOKE, Rate = 35, Lifetime = 1.2, Speed = 2, Size = 1.1, Light = 0, Alpha = 0.3, Spin = 60, Colors = { Color3.fromRGB(70, 20, 110), Color3.fromRGB(8, 4, 16) } },
+	Glowing = { Texture = AURA_SMOKE, Rate = 16, Lifetime = 1.4, Speed = 0.2, Size = 2.4, Light = 1, Alpha = 0.7 },
+	["Custom Color"] = { Texture = AURA_SPARKLE, Rate = 30, Lifetime = 1.25, Speed = 1.5, Size = 0.5, Light = 1, Alpha = 0.1 },
+}
+
+local AURA_STYLE_NAMES = { "Sparkle", "Fire", "Flame", "Smoke", "Spark", "Star", "Galaxy", "Lightning", "Electric", "Energy", "Neon", "Rainbow", "Dark Energy", "Glowing", "Custom Color" }
+
 local aura
+local auraFollow
+
+local function auraColors(style)
+	local colors = (PlayerSettings.AuraStyleColors and PlayerSettings.AuraStyle ~= "Custom Color" and style.Colors) or { PlayerSettings.AuraColor }
+
+	if #colors == 1 then
+		return ColorSequence.new(colors[1])
+	end
+
+	local points = {}
+
+	for index, color in ipairs(colors) do
+		points[index] = ColorSequenceKeypoint.new((index - 1) / (#colors - 1), color)
+	end
+
+	return ColorSequence.new(points)
+end
 
 local function applyAura()
+	if auraFollow then
+		auraFollow:Disconnect()
+		auraFollow = nil
+	end
+
 	if aura then
 		aura:Destroy()
 		aura = nil
@@ -9954,23 +10396,60 @@ local function applyAura()
 		return
 	end
 
-	local attachment = Instance.new("Attachment")
-	attachment.Name = "NeverLoseAura"
+	local style = AURA_STYLES[PlayerSettings.AuraStyle] or AURA_STYLES.Sparkle
+	local size = style.Size * PlayerSettings.AuraSize / 100
+	local speed = style.Speed * PlayerSettings.AuraSpeed / 100
+	local lifetime = style.Lifetime * PlayerSettings.AuraLifetime / 100
+	local alpha = 1 - (1 - style.Alpha) * (1 - PlayerSettings.AuraTransparency / 100)
+	local spin = (style.Spin or 0) + PlayerSettings.AuraRotation
+	local diameter = PlayerSettings.AuraRadius * 2
+
+	local sphere = Instance.new("Part")
+	sphere.Name = "NeverLoseAura"
+	sphere.Anchored = true
+	sphere.CanCollide = false
+	sphere.CanQuery = false
+	sphere.CanTouch = false
+	sphere.CastShadow = false
+	sphere.Transparency = 1
+	sphere.Size = Vector3.new(diameter, diameter, diameter)
+	sphere.CFrame = root.CFrame
 
 	local emitter = Instance.new("ParticleEmitter")
-	emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-	emitter.Color = ColorSequence.new(PlayerSettings.AuraColor)
-	emitter.LightEmission = 1
-	emitter.Lifetime = NumberRange.new(1, 1.5)
-	emitter.Rate = 20
-	emitter.Speed = NumberRange.new(1, 2)
+	emitter.Texture = style.Texture
+	emitter.Color = auraColors(style)
+	emitter.LightEmission = style.Light
+	emitter.Lifetime = NumberRange.new(lifetime * 0.8, lifetime * 1.2)
+	emitter.Rate = style.Rate * PlayerSettings.AuraDensity / 100
+	emitter.Speed = NumberRange.new(speed * 0.7, speed * 1.3)
 	emitter.SpreadAngle = Vector2.new(180, 180)
-	emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 0) })
-	emitter.Transparency = NumberSequence.new(0.2, 1)
-	emitter.Parent = attachment
+	emitter.Shape = Enum.ParticleEmitterShape.Sphere
+	emitter.ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface
+	emitter.Acceleration = Vector3.new(0, style.Rise or 0, 0)
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-spin, spin)
+	emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size), NumberSequenceKeypoint.new(1, 0) })
+	emitter.Transparency = NumberSequence.new(alpha, 1)
+	emitter.Parent = sphere
 
-	attachment.Parent = root
-	aura = attachment
+	sphere.Parent = workspace.Terrain
+	aura = sphere
+
+	auraFollow = RunService.Heartbeat:Connect(function()
+		if not Session.Alive or not root.Parent then
+			auraFollow:Disconnect()
+			auraFollow = nil
+			sphere:Destroy()
+
+			if aura == sphere then
+				aura = nil
+			end
+
+			return
+		end
+
+		sphere.CFrame = root.CFrame
+	end)
 end
 
 local function applyCharacterVisuals()
@@ -10249,7 +10728,21 @@ function buildPlayersTab()
 	playerSlider(hatOptions, "Light Brightness", "player_china_hat_brightness", "HatBrightness", 0, 10, 1, "", applyChinaHat)
 
 	local auraRow = playerToggle(LocalSection, "Particle Aura", "player_aura", "Aura", applyAura)
-	playerColor(auraRow:AddOption(), "Color", "player_aura_color", "AuraColor", applyAura)
+	local auraOptions = auraRow:AddOption()
+	playerDropdown(auraOptions, "Style", "player_aura_style", "AuraStyle", AURA_STYLE_NAMES, applyAura)
+	playerColor(auraOptions, "Color", "player_aura_color", "AuraColor", applyAura)
+	auraOptions:AddLabel("Style Colors"):AddToggle({
+		Default = PlayerSettings.AuraStyleColors,
+		Flag = "player_aura_style_colors",
+		Callback = onPlayerSetting("AuraStyleColors", applyAura),
+	})
+	playerSlider(auraOptions, "Size", "player_aura_size", "AuraSize", 10, 300, 0, "%", applyAura)
+	playerSlider(auraOptions, "Speed", "player_aura_speed", "AuraSpeed", 0, 300, 0, "%", applyAura)
+	playerSlider(auraOptions, "Density", "player_aura_density", "AuraDensity", 10, 300, 0, "%", applyAura)
+	playerSlider(auraOptions, "Lifetime", "player_aura_lifetime", "AuraLifetime", 20, 300, 0, "%", applyAura)
+	playerSlider(auraOptions, "Transparency", "player_aura_transparency", "AuraTransparency", 0, 90, 0, "%", applyAura)
+	playerSlider(auraOptions, "Rotation", "player_aura_rotation", "AuraRotation", 0, 360, 0, "", applyAura)
+	playerSlider(auraOptions, "Radius", "player_aura_radius", "AuraRadius", 1, 8, 1, " studs", applyAura)
 
 	-- Tools --
 	local toolRow = playerToggle(ToolsSection, "Material Tools", "player_tool_material", "ToolMaterial", refreshTool)
@@ -14667,6 +15160,46 @@ local function saveSkins()
 		writefile(SKINS_FILE, HttpService:JSONEncode(data))
 	end)
 end
+
+NeverLose.ConfigExtras = NeverLose.ConfigExtras or {}
+NeverLose.ConfigExtras.skins = {
+	get = function()
+		local data = { [SKIN_CHANGER_KEY] = Session.Semi.Config["skin changer"] == false and "off" or "on" }
+
+		for toolName, skinName in pairs(Session.Semi.Config["skins"]) do
+			if skinName ~= "" then
+				data[toolName] = skinName
+			end
+		end
+
+		return data
+	end,
+	set = function(data)
+		if type(data) ~= "table" then
+			return
+		end
+
+		local skins = Session.Semi.Config["skins"]
+
+		for toolName in pairs(skins) do
+			skins[toolName] = ""
+		end
+
+		for toolName, skinName in pairs(data) do
+			if toolName == SKIN_CHANGER_KEY then
+				Session.Semi.Config["skin changer"] = skinName ~= "off"
+			elseif type(toolName) == "string" and type(skinName) == "string" then
+				skins[toolName] = skinName
+			end
+		end
+
+		saveSkins()
+
+		if type(Session.Semi.Skins.refreshAll) == "function" then
+			pcall(Session.Semi.Skins.refreshAll)
+		end
+	end,
+}
 
 local function buildSkinsTab()
 	local Semi = Session.Semi
@@ -22298,7 +22831,7 @@ do
 
     menu_references["weather"] = menu_references["lighting_section"]:create_element({["name"] = "weather"}, {["toggle"] = {["flag"] = "weather"}})
         menu_references["weather_settings"] = menu_references["weather"]:create_settings()
-        menu_references["weather_type"] = menu_references["weather_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "weather_type", ["options"] = {"light rain", "rain", "snow"}, ["default"] = {"rain"}, ["requires_one"] = true}})
+        menu_references["weather_type"] = menu_references["weather_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "weather_type", ["options"] = {"light rain", "rain", "heavy rain", "storm", "thunderstorm", "snow", "heavy snow", "foggy", "cloudy", "clear sky", "sunrise", "sunset", "night sky", "stars"}, ["default"] = {"rain"}, ["requires_one"] = true}})
         menu_references["weather_color"] = menu_references["weather_settings"]:create_element({["name"] = "color"}, {["colorpicker"] = {["color_flag"] = "weather_color", ["default_color"] = color3_fromrgb(255, 255, 255), ["default_transparency"] = 0, ["transparency_flag"] = "weather_transparency"}})
         menu_references["weather_rate"] = menu_references["weather_settings"]:create_element({["name"] = "rate"}, {["slider"] = {["flag"] = "weather_rate", ["min"] = 1, ["max"] = 100, ["default"] = 100, ["suffix"] = "%"}})
 
@@ -22357,12 +22890,146 @@ do
         ["snow"] = {["texture"] = "dot", ["streak"] = false, ["rate"] = 500, ["speed"] = 9, ["size"] = 0.4, ["lifetime"] = 11, ["drift"] = 2, ["light"] = 0.15, ["alpha"] = 0.05, ["spin"] = 35, ["spread"] = 18}
     }
 
+    weather_types["heavy rain"] = {["texture"] = "streak", ["streak"] = true, ["rate"] = 6000, ["speed"] = 150, ["size"] = 4, ["lifetime"] = 0.7, ["drift"] = 0, ["light"] = 0.3, ["alpha"] = 0.2, ["spin"] = 0, ["spread"] = 4, ["sky"] = "overcast"}
+    weather_types["storm"] = {["texture"] = "streak", ["streak"] = true, ["rate"] = 6000, ["speed"] = 150, ["size"] = 4, ["lifetime"] = 0.7, ["drift"] = 70, ["light"] = 0.3, ["alpha"] = 0.2, ["spin"] = 0, ["spread"] = 8, ["sky"] = "storm"}
+    weather_types["thunderstorm"] = {["texture"] = "streak", ["streak"] = true, ["rate"] = 6000, ["speed"] = 150, ["size"] = 4, ["lifetime"] = 0.7, ["drift"] = 50, ["light"] = 0.3, ["alpha"] = 0.2, ["spin"] = 0, ["spread"] = 8, ["sky"] = "storm", ["lightning"] = true}
+    weather_types["heavy snow"] = {["texture"] = "dot", ["streak"] = false, ["rate"] = 1400, ["speed"] = 14, ["size"] = 0.55, ["lifetime"] = 8, ["drift"] = 6, ["light"] = 0.15, ["alpha"] = 0.05, ["spin"] = 60, ["spread"] = 24, ["sky"] = "overcast"}
+    weather_types["foggy"] = {["sky"] = "foggy"}
+    weather_types["cloudy"] = {["sky"] = "cloudy"}
+    weather_types["clear sky"] = {["sky"] = "clear"}
+    weather_types["sunrise"] = {["sky"] = "sunrise"}
+    weather_types["sunset"] = {["sky"] = "sunset"}
+    weather_types["night sky"] = {["sky"] = "night"}
+    weather_types["stars"] = {["sky"] = "stars"}
+
+    -- What the sky types set. All of it goes back when the weather stops or the type changes; World Time, when it is on, keeps the clock.
+    local weather_skies = {
+        ["overcast"] = {["clock"] = 14, ["fog_end"] = 1200, ["fog_color"] = color3_fromrgb(120, 125, 135), ["density"] = 0.4, ["haze"] = 2, ["atmosphere"] = color3_fromrgb(165, 170, 180), ["cover"] = 0.85, ["cloud_density"] = 0.8},
+        ["storm"] = {["clock"] = 16, ["fog_end"] = 700, ["fog_color"] = color3_fromrgb(62, 66, 76), ["density"] = 0.5, ["haze"] = 3, ["atmosphere"] = color3_fromrgb(90, 95, 108), ["cover"] = 1, ["cloud_density"] = 1},
+        ["foggy"] = {["clock"] = 10, ["fog_end"] = 220, ["fog_color"] = color3_fromrgb(190, 195, 200), ["density"] = 0.7, ["haze"] = 5, ["atmosphere"] = color3_fromrgb(200, 205, 210), ["cover"] = 0.6, ["cloud_density"] = 0.6},
+        ["cloudy"] = {["clock"] = 12, ["fog_end"] = 5000, ["fog_color"] = color3_fromrgb(190, 195, 205), ["density"] = 0.33, ["haze"] = 1, ["atmosphere"] = color3_fromrgb(205, 210, 220), ["cover"] = 0.8, ["cloud_density"] = 0.6},
+        ["clear"] = {["clock"] = 13, ["fog_end"] = 100000, ["fog_color"] = color3_fromrgb(190, 215, 240), ["density"] = 0.25, ["haze"] = 0, ["atmosphere"] = color3_fromrgb(200, 220, 245), ["cover"] = 0.1, ["cloud_density"] = 0.3},
+        ["sunrise"] = {["clock"] = 6.3, ["fog_end"] = 4000, ["fog_color"] = color3_fromrgb(255, 190, 150), ["density"] = 0.35, ["haze"] = 1.5, ["atmosphere"] = color3_fromrgb(255, 180, 140), ["cover"] = 0.4, ["cloud_density"] = 0.4},
+        ["sunset"] = {["clock"] = 17.8, ["fog_end"] = 4000, ["fog_color"] = color3_fromrgb(255, 140, 90), ["density"] = 0.38, ["haze"] = 2, ["atmosphere"] = color3_fromrgb(255, 130, 85), ["cover"] = 0.45, ["cloud_density"] = 0.45},
+        ["night"] = {["clock"] = 0, ["fog_end"] = 3000, ["fog_color"] = color3_fromrgb(12, 15, 28), ["density"] = 0.3, ["haze"] = 0.5, ["atmosphere"] = color3_fromrgb(30, 36, 60), ["cover"] = 0.3, ["cloud_density"] = 0.3},
+        ["stars"] = {["clock"] = 0, ["fog_end"] = 100000, ["fog_color"] = color3_fromrgb(8, 10, 22), ["density"] = 0.2, ["haze"] = 0, ["atmosphere"] = color3_fromrgb(20, 24, 45), ["cover"] = 0, ["cloud_density"] = 0, ["star_count"] = 5000},
+    }
+
+    local weather_tweens = game:GetService("TweenService")
+    local weather_sky_saved = nil
+    local weather_sky_tweens = {}
+    local weather_sky_clock = nil
+    local weather_flash = nil
+    local weather_next_flash = 0
+
+    -- The objects the sky types change: what the game has, or one of ours that is gone again afterwards
+    local weather_sky_object = function(parent, class)
+        local object = find_first_child_of_class(parent, class)
+
+        if object then
+            return object, false
+        end
+
+        return create_instance(class, {["Parent"] = parent}), true
+    end
+
+    local restore_weather_sky = LPH_NO_VIRTUALIZE(function()
+        weather_sky_clock = nil
+
+        -- a fade still running would finish over what is put back here
+        for _, tween in weather_sky_tweens do
+            tween:Cancel()
+        end
+
+        table["clear"](weather_sky_tweens)
+
+        if weather_flash then
+            destroy(weather_flash)
+            weather_flash = nil
+        end
+
+        local saved = weather_sky_saved
+        weather_sky_saved = nil
+
+        if not saved then
+            return
+        end
+
+        for _, entry in saved do
+            if entry["made"] then
+                destroy(entry["object"])
+            elseif entry["object"]["Parent"] then
+                for property, value in entry["properties"] do
+                    entry["object"][property] = value
+                end
+            end
+        end
+    end)
+
+    local apply_weather_sky = LPH_NO_VIRTUALIZE(function(name)
+        restore_weather_sky()
+
+        local look = weather_skies[name]
+
+        if not look then
+            return
+        end
+
+        local atmosphere, atmosphere_made = weather_sky_object(lighting, "Atmosphere")
+        local clouds, clouds_made = weather_sky_object(workspace["Terrain"], "Clouds")
+        local info = TweenInfo["new"](1.5)
+
+        weather_sky_saved = {
+            {["object"] = lighting, ["properties"] = {["ClockTime"] = lighting["ClockTime"], ["FogEnd"] = lighting["FogEnd"], ["FogColor"] = lighting["FogColor"]}},
+            {["object"] = atmosphere, ["made"] = atmosphere_made, ["properties"] = {["Density"] = atmosphere["Density"], ["Haze"] = atmosphere["Haze"], ["Color"] = atmosphere["Color"]}},
+            {["object"] = clouds, ["made"] = clouds_made, ["properties"] = {["Cover"] = clouds["Cover"], ["Density"] = clouds["Density"], ["Enabled"] = clouds["Enabled"]}},
+        }
+
+        local game_sky = find_first_child_of_class(lighting, "Sky")
+
+        if game_sky and look["star_count"] then
+            weather_sky_saved[#weather_sky_saved+1] = {["object"] = game_sky, ["properties"] = {["StarCount"] = game_sky["StarCount"], ["CelestialBodiesShown"] = game_sky["CelestialBodiesShown"]}}
+            game_sky["StarCount"] = look["star_count"]
+            game_sky["CelestialBodiesShown"] = true
+        end
+
+        clouds["Enabled"] = true
+        weather_sky_tweens = {
+            weather_tweens:Create(lighting, info, {["FogEnd"] = look["fog_end"], ["FogColor"] = look["fog_color"]}),
+            weather_tweens:Create(atmosphere, info, {["Density"] = look["density"], ["Haze"] = look["haze"], ["Color"] = look["atmosphere"]}),
+            weather_tweens:Create(clouds, info, {["Cover"] = look["cover"], ["Density"] = look["cloud_density"]}),
+        }
+
+        for _, tween in weather_sky_tweens do
+            tween:Play()
+        end
+
+        if not flags["world_time"] then
+            lighting["ClockTime"] = look["clock"]
+            weather_sky_clock = look["clock"]
+        end
+    end)
+
     local apply_weather = LPH_NO_VIRTUALIZE(function()
-        if not weather_particle then
+        if not weather_part then
             return
         end
 
         local preset = weather_types[weather_settings["type"]] or weather_types["rain"]
+
+        apply_weather_sky(preset["sky"])
+
+        if preset["lightning"] then
+            weather_flash = create_instance("ColorCorrectionEffect", {["Parent"] = lighting})
+            weather_next_flash = os.clock() + 2
+        end
+
+        -- a sky type has no particles
+        weather_particle["Enabled"] = preset["texture"] ~= nil
+
+        if not preset["texture"] then
+            return
+        end
 
         weather_particle["Texture"] = weather_texture(preset["texture"])
         weather_particle["Orientation"] = preset["streak"] and Enum["ParticleOrientation"]["VelocityParallel"] or Enum["ParticleOrientation"]["FacingCamera"]
@@ -22392,6 +23059,29 @@ do
 
             weather_part["CFrame"] = cframe_new(current_camera["CFrame"]["Position"] + vector3_new(0, weather_settings["height"], 0))
         end
+
+        -- the game moves its clock on: a sky type holds the time it is about
+        if weather_sky_clock and not flags["world_time"] and lighting["ClockTime"] ~= weather_sky_clock then
+            lighting["ClockTime"] = weather_sky_clock
+        end
+
+        -- Thunderstorm: two quick flashes every few seconds
+        if weather_flash and os.clock() >= weather_next_flash then
+            weather_next_flash = os.clock() + 4 + math.random() * 9
+
+            local flash = weather_flash
+            local flash_info = TweenInfo["new"](0.12)
+
+            task["spawn"](function()
+                for _, strength in {0.7, 0.45} do
+                    if flash["Parent"] then
+                        flash["Brightness"] = strength
+                        weather_tweens:Create(flash, flash_info, {["Brightness"] = 0}):Play()
+                        task["wait"](0.16)
+                    end
+                end
+            end)
+        end
     end)
 
     local stop_weather = LPH_NO_VIRTUALIZE(function()
@@ -22401,6 +23091,8 @@ do
                 break
             end
         end
+
+        restore_weather_sky()
 
         if weather_part then
             destroy(weather_part)
@@ -31528,6 +32220,16 @@ do
                         end)
                     end
                 end)
+            elseif holder then
+                -- This person has no package for the slot: it goes back to the character's own. It used to be skipped, so the previous person's
+                -- walk or idle stayed in it when switching people.
+                for _, item in get_children(holder) do
+                    -- (stop_animation_guards above has already cleared wanted_animations, so what was changed is what has an original kept)
+                    if item:IsA("Animation") and original_animations[item] ~= nil and item["AnimationId"] ~= original_animations[item] then
+                        item["AnimationId"] = original_animations[item]
+                        changed = true
+                    end
+                end
             end
         end
 
