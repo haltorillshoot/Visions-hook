@@ -10484,9 +10484,6 @@ function Session.buildSettingsPanels(rows)
 	end)
 	panelList(follow, "Stop If", "follow_target_stop_if", { "no gun equipped", "target knocked", "reloading" }, { "no gun equipped", "target knocked", "reloading" })
 	panelSlider(follow, "Distance", "follow_target_distance", 2, 200, 0, " studs", 15)
-	panelToggle(follow, "Follow Into Void", "follow_target_into_void", true)
-	-- a target whose void spot keeps jumping (void spam) is followed too
-	panelToggle(follow, "Follow Void Spammers", "follow_target_void_spammers", true)
 	panelToggle(follow, "Adjust", "follow_target_adjust", false)
 	-- Lead: a fast target is followed to where it will be by the time the server has the body there (its speed times Lead Time, up to 60 studs)
 	panelToggle(follow, "Lead", "follow_target_lead", true)
@@ -33201,9 +33198,7 @@ end
         menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "zig zag"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["follow_target_stop_if"] = menu_references["follow_target_settings"]:create_element({["name"] = "stop if"}, {["dropdown"] = {["flag"] = "follow_target_stop_if", ["options"] = {"no gun equipped", "target knocked", "reloading"}, ["default"] = {"no gun equipped", "target knocked", "reloading"}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
-        menu_references["follow_target_into_void"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow into void"}, {["toggle"] = {["flag"] = "follow_target_into_void", ["default"] = true}})
         menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
-        menu_references["follow_target_void_spammers"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow void spammers"}, {["toggle"] = {["flag"] = "follow_target_void_spammers", ["default"] = true}})
         menu_references["follow_target_lead"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead"}, {["toggle"] = {["flag"] = "follow_target_lead", ["default"] = true}})
         menu_references["follow_target_lead_time"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead time"}, {["slider"] = {["flag"] = "follow_target_lead_time", ["min"] = 0, ["max"] = 300, ["default"] = 80, ["decimals"] = 0, ["suffix"] = "ms"}})
         menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.15, ["decimals"] = 2, ["suffix"] = "s"}})
@@ -35989,7 +35984,7 @@ end
                 end
             end
 
-            if (ragebot_untarget_when_dead and target[7] and not should_hold_target(target)) or (ragebot_untarget_when_knocked and target[18]) or flung then
+            if (ragebot_untarget_when_dead and target[7] and not should_hold_target(target)) or (ragebot_untarget_when_knocked and target[18] and flags["auto_stomp"] ~= true) or flung then
                 set_ragebot_target(nil, "ragebot target set to nobody due to condition met")
             elseif ragebot_untarget_when_better_target and hide_episode_target ~= target and not target[18] and not target[7]
                 and get_ragebot_target ~= get_random and tick - (hide_manager["better_pick_at"] or -1) >= 0.1 then
@@ -37607,15 +37602,7 @@ end
             -- Follow Into Void (Follow Target's gear, on by default): a target that is hiding in the void is followed there like any other, once its
             -- spawn protection is over (the phase check above). With it off a target in the void is left alone, as it used to be. Positions that are
             -- not numbers or absurdly far out are never followed.
-            local void_limit = flags["follow_target_into_void"] ~= false and 1e10 or 9e5
-
-            -- ...except a spot that keeps jumping (hide_manager.is_void_jittering): the body would land where the target was, never where it is.
-            -- (Follow Void Spammers, on by default, follows it anyway, the way Void Hide's Spam windows do: with Spam off the follow used to stop for
-            -- a target that void spams, measured on one whose spot was about a billion studs out and jumped every quarter second)
-            if not bypass and flags["follow_target_void_spammers"] == false and ragebot_aim_position and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position) then
-                local_following = false
-                return
-            end
+            local void_limit = 1e10
 
             -- ...and never to a spot under the game's kill height (FallenPartsDestroyHeight): a target that hides down there keeps its character
             -- with its own script, the body sent after it is destroyed (measured: followed into the void, then dead about 3 s later).
@@ -40140,10 +40127,27 @@ end
         end)
 
         -- Whether this target is one to stomp right now (not held back by Wait For All, not grabbed, knocked or dead, not flying about).
-        local stompable = LPH_NO_VIRTUALIZE(function(target, waiting)
-            local torso = target[4]["UpperTorso"]
+        -- The part the character is stomped on. A dead body can come without its UpperTorso (R6, or the rig changing as it falls apart), so the next
+        -- best part stands in for it instead of the target being skipped.
+        local stomp_part = LPH_NO_VIRTUALIZE(function(target)
+            local parts = target[4]
 
-            return torso ~= nil and not waiting and not target[4]["GRABBING_CONSTRAINT"] and (not auto_stomp_stop_when_dead or not target[7]) and (target[18] or target[7]) and torso["Velocity"]["Magnitude"] < 100
+            return parts["UpperTorso"] or parts["LowerTorso"] or parts["Torso"] or parts["HumanoidRootPart"] or parts["Head"]
+        end)
+
+        -- A dead body is thrown about by the death, so the speed limit only holds back a knocked player that is still alive.
+        local stompable = LPH_NO_VIRTUALIZE(function(target, waiting)
+            local torso = stomp_part(target)
+
+            if torso == nil or waiting or target[4]["GRABBING_CONSTRAINT"] then
+                return false
+            end
+
+            if target[7] then
+                return not auto_stomp_stop_when_dead
+            end
+
+            return target[18] == true and torso["Velocity"]["Magnitude"] < 100
         end)
 
         -- Prioritize Over Reloading: true while a target can be stomped and the setting is on. The reload step holds back its void hide for as long as
@@ -40229,7 +40233,7 @@ end
                 local found_target = false
                 local waiting = auto_stomp_wait_for_all and any_target_standing(targets)
                 for _, target in targets do
-                    local torso = target[4]["UpperTorso"]
+                    local torso = stomp_part(target)
 
                     if torso then
                         if stompable(target, waiting) then
@@ -40704,7 +40708,7 @@ end
                     -- The window stands where the Follow Target settings put the character (its style, distance, orbit shape and the rest, whether
                     -- or not the Follow Target toggle is on): it used to be a fixed place 3 studs behind the target. A place that moves quickly
                     -- is a place the server has late, so fewer of the shots sent from it are taken than from one that stays.
-                    if spam_on_target and not invulnerable_void_active and ragebot_aim_position and ragebot_aim_position["Magnitude"] < (flags["follow_target_into_void"] ~= false and 1e10 or 9e5) then
+                    if spam_on_target and not invulnerable_void_active and ragebot_aim_position and ragebot_aim_position["Magnitude"] < 1e10 then
                         local follow_cframe = hide_manager["follow_cframe"]
 
                         resting_cframe = follow_cframe and follow_cframe(ragebot_aim_position, true) or cframe_new(ragebot_aim_position + vector3_new(0, 0, 3), ragebot_aim_position)
