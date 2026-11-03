@@ -35680,6 +35680,12 @@ end
             end
         end
 
+        -- the target's spot is jumping about in the void (nothing can be shot at it, so the ragebot holds its shots): the reloads are done now,
+        -- while there is nothing to lose, instead of waiting for the batch time and taking the hide when the target is back on the map
+        if ragebot_target and ragebot_aim_position and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position) then
+            return true
+        end
+
         -- a gun in hand that can still fire is worth more than the reload of one that cannot
         for _, data in local_guns do
             if data[3] > 0 and not (reload_parked[data[1]["Parent"]] ~= nil) then
