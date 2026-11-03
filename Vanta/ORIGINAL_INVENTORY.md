@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 273, Partial 37, No 181, Declined 26.
+**Totals (517 controls):** Yes 306, Partial 40, No 145, Declined 26.
 
 ## panel_section
 
@@ -142,7 +142,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | set friendly if | dropdown | Partial | Status (friends, crew mates, friends of an enemy) |
 | set enemy if | dropdown | Partial | Status (friends, crew mates, friends of an enemy) |
-| notifications | toggle | No |  |
+| notifications | toggle | Yes | Status |
 
 ## lighting_section
 
@@ -210,12 +210,12 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | server position indicator | toggle | Declined | part of the fake position feature |
-| crosshair animations | toggle | No |  |
+| crosshair animations | toggle | Yes | Crosshair / Misc / Visuals |
 | drawing crosshair | toggle | Yes | Crosshair / World |
 | center panel | toggle | Partial | Crosshair (state and target text) |
-| aspect ratio | toggle | No |  |
+| aspect ratio | toggle | Yes | Crosshair / Misc / Visuals |
 | show chat | toggle | Yes | Crosshair / World |
-| statistics window | toggle | No |  |
+| statistics window | toggle | Yes | Crosshair / Misc / Visuals |
 
 ## server_position_indicator_settings
 
@@ -234,20 +234,20 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| fade in and out | toggle | No |  |
-| spin | toggle | No |  |
-| speed | slider | No |  |
+| fade in and out | toggle | Yes | Crosshair |
+| spin | toggle | Yes | Crosshair |
+| speed | slider | Yes | Crosshair |
 
 ## drawing_crosshair_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | follow target | toggle | Yes | Crosshair |
-| style | dropdown | No |  |
+| style | dropdown | Partial | Crosshair (cross, dot, ring; fade speed) |
 | target indicator | toggle | Partial | Crosshair (target colour) |
 | indicator color | colorpicker | Partial | Crosshair (target colour) |
-| animation style | dropdown | No |  |
-| speed | slider | No |  |
+| animation style | dropdown | Partial | Crosshair (cross, dot, ring; fade speed) |
+| speed | slider | Partial | Crosshair (cross, dot, ring; fade speed) |
 | target outline color | colorpicker | No |  |
 | target line color | colorpicker | No |  |
 | outline color | colorpicker | Yes | Crosshair |
@@ -271,13 +271,13 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | player bullet volume | slider | No |  |
-| mute gun sounds | toggle | No |  |
+| mute gun sounds | toggle | Yes | Misc / Feedback |
 | player bullet tracers | toggle | No |  |
 | local bullet impacts | toggle | Yes | Feedback |
 | override armor pop | toggle | No |  |
 | local bullet tracers | toggle | Yes | Feedback |
 | shot notifications | toggle | Partial | Feedback (hit / no hit) |
-| local bullet sound | toggle | No |  |
+| local bullet sound | toggle | Yes | Misc / Feedback |
 | damage number | toggle | Yes | Feedback |
 | 3d hit marker | toggle | Yes | Feedback |
 | 2d hit marker | toggle | Yes | Feedback |
@@ -341,19 +341,19 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| in world | toggle | No |  |
-| volume | slider | No |  |
-| sound | dropdown | No |  |
+| in world | toggle | Yes | Feedback |
+| volume | slider | Yes | Feedback |
+| sound | dropdown | Yes | Feedback |
 
 ## damage_number_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| font | dropdown | No |  |
+| font | dropdown | Yes | Feedback |
 | lifetime | slider | Yes | Feedback |
 | color | colorpicker | Yes | Feedback |
 | lethal color | colorpicker | Yes | Feedback |
-| outline color | colorpicker | No |  |
+| outline color | colorpicker | Yes | Feedback |
 | show ragebot data | toggle | No |  |
 
 ## d3_hit_marker_settings
@@ -480,7 +480,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| outline | colorpicker | No |  |
+| outline | colorpicker | Yes | Esp |
 | color | colorpicker | Partial | Esp (one colour, one target colour) |
 | enemy color | colorpicker | Yes | Esp |
 | friendly color | colorpicker | Yes | Esp |
@@ -525,7 +525,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| casing | dropdown | No |  |
+| casing | dropdown | Yes | Esp |
 | color | colorpicker | Yes | Esp |
 | enemy color | colorpicker | Yes | Esp |
 | friendly color | colorpicker | Yes | Esp |
@@ -561,11 +561,11 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | hide if no armor | toggle | Yes | Esp |
-| gradient | toggle | No |  |
+| gradient | toggle | Yes | Esp |
 | enemy gradient | colorpicker | No |  |
 | friendly gradient | colorpicker | No |  |
-| outline | colorpicker | No |  |
-| color | colorpicker | No |  |
+| outline | colorpicker | Yes | Esp |
+| color | colorpicker | Yes | Esp |
 | enemy color | colorpicker | No |  |
 | friendly color | colorpicker | No |  |
 
@@ -573,11 +573,11 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| gradient | toggle | No |  |
+| gradient | toggle | Yes | Esp |
 | enemy gradient | colorpicker | No |  |
 | friendly gradient | colorpicker | No |  |
-| outline | colorpicker | No |  |
-| color | colorpicker | No |  |
+| outline | colorpicker | Yes | Esp |
+| color | colorpicker | Yes | Esp |
 | enemy color | colorpicker | No |  |
 | friendly color | colorpicker | No |  |
 
@@ -586,7 +586,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | hide if full | toggle | Yes | Esp |
-| color | colorpicker | No |  |
+| color | colorpicker | Yes | Esp |
 | enemy color | colorpicker | No |  |
 | friendly color | colorpicker | No |  |
 
@@ -594,8 +594,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| main font | dropdown | No |  |
-| small font | dropdown | No |  |
+| main font | dropdown | Yes | Esp / Feedback |
+| small font | dropdown | Yes | Esp / Feedback |
 
 ## local_character_section
 
@@ -650,8 +650,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | speed | slider | Yes | LocalChar |
-| saturation | slider | No |  |
-| brightness | slider | No |  |
+| saturation | slider | Yes | LocalChar |
+| brightness | slider | Yes | LocalChar |
 | transparency | slider | Yes | LocalChar |
 | material | dropdown | No |  |
 
@@ -660,9 +660,9 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | color | colorpicker | Yes | LocalChar |
-| light color | colorpicker | No |  |
+| light color | colorpicker | Yes | LocalChar |
 | scale | slider | Yes | LocalChar |
-| light brightness | slider | No |  |
+| light brightness | slider | Yes | LocalChar |
 
 ## particle_aura_settings
 
@@ -1018,10 +1018,10 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| dead zone | slider | No |  |
+| dead zone | slider | Yes | AimAssist / Visuals |
 | show fov | toggle | Yes | Visuals |
-| dead zone | colorpicker | No |  |
-| outline | colorpicker | No |  |
+| dead zone | colorpicker | Yes | AimAssist / Visuals |
+| outline | colorpicker | Yes | AimAssist / Visuals |
 
 ## silent_aim_section
 
@@ -1049,7 +1049,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | show fov | toggle | Yes | Visuals |
-| outline | colorpicker | No |  |
+| outline | colorpicker | Yes | Visuals |
 
 ## silent_aim_max_curve_settings
 

@@ -270,6 +270,13 @@ local function crewOf(player)
 	return crew and crew.Value ~= "" and crew.Value or nil
 end
 
+---Tells you when a rule marked someone (Notifications).
+function Status.announce(player, value)
+	if flag("status_notify", false) and notifications then
+		notifications:create_notification({ name = player.Name .. " marked " .. value })
+	end
+end
+
 ---Marks players by the rules that are on; runs every few seconds.
 function Status.auto(now)
 	if now - Status.autoAt < 3 then
@@ -289,6 +296,7 @@ function Status.auto(now)
 
 				if ok and friends then
 					Status.set(player, "friendly")
+					Status.announce(player, "friendly")
 
 					continue
 				end
@@ -296,6 +304,7 @@ function Status.auto(now)
 
 			if flag("status_crew", false) and current == "neutral" and myCrew and crewOf(player) == myCrew then
 				Status.set(player, "friendly")
+				Status.announce(player, "friendly")
 
 				continue
 			end
@@ -307,6 +316,7 @@ function Status.auto(now)
 
 						if ok and friends then
 							Status.set(player, "enemy")
+							Status.announce(player, "enemy")
 
 							break
 						end
@@ -1811,7 +1821,7 @@ end
 ---@module Visuals
 ---Drawing-library visuals: the FOV circle, a tracer to the aim, a ring round the target, and the camera on the target. Objects are created when a
 ---feature is switched on and removed when it goes off, never every frame.
-local Visuals = { objects = {}, ringSegments = 24, cameraSwapped = false }
+local Visuals = { objects = {}, ringSegments = 24, cameraSwapped = false, frames = 0, fps = 0, fpsAt = os.clock(), started = os.clock() }
 
 local function drawing(kind, key, properties)
 	local object = Visuals.objects[key]
@@ -1920,6 +1930,21 @@ function Visuals.render()
 	if flag("aimassist_enabled", false) and flag("aimassist_show_fov", false) then
 		local colour, opacity = pickerColor("aimassist_fov_color", Color3.fromRGB(255, 255, 255))
 
+		if flag("aimassist_fov_outline", false) then
+			drawing("Circle", "aafovback", {
+				Visible = true,
+				Position = mouseLocation,
+				Radius = flag("aimassist_fov", 120),
+				Thickness = 3,
+				NumSides = 64,
+				Filled = false,
+				Color = pickerColor("aimassist_fov_outline_color", Color3.new(0, 0, 0)),
+				Transparency = 1,
+			})
+		else
+			removeDrawing("aafovback")
+		end
+
 		drawing("Circle", "aafov", {
 			Visible = true,
 			Position = mouseLocation,
@@ -1932,10 +1957,26 @@ function Visuals.render()
 		})
 	else
 		removeDrawing("aafov")
+		removeDrawing("aafovback")
 	end
 
 	if flag("silent_enabled", false) and flag("silent_show_fov", false) then
 		local colour, opacity = pickerColor("silent_fov_color", Color3.fromRGB(180, 180, 255))
+
+		if flag("silent_fov_outline", false) then
+			drawing("Circle", "safovback", {
+				Visible = true,
+				Position = mouseLocation,
+				Radius = flag("silent_fov", 120),
+				Thickness = 3,
+				NumSides = 64,
+				Filled = false,
+				Color = pickerColor("silent_fov_outline_color", Color3.new(0, 0, 0)),
+				Transparency = 1,
+			})
+		else
+			removeDrawing("safovback")
+		end
 
 		drawing("Circle", "safov", {
 			Visible = true,
@@ -1949,6 +1990,7 @@ function Visuals.render()
 		})
 	else
 		removeDrawing("safov")
+		removeDrawing("safovback")
 	end
 
 	-- Tracer
@@ -2045,6 +2087,27 @@ function Visuals.render()
 		})
 	else
 		removeDrawing("followspot")
+	end
+
+	-- statistics window: frames a second, ping, players and how long the script has run
+	Visuals.frames += 1
+
+	if os.clock() - Visuals.fpsAt >= 1 then
+		Visuals.fps, Visuals.frames, Visuals.fpsAt = Visuals.frames, 0, os.clock()
+	end
+
+	if flag("stats_window", false) then
+		drawing("Text", "stats", {
+			Visible = true,
+			Text = string.format("fps %d\nping %d ms\nplayers %d\nrunning %ds", Visuals.fps, Util.ping() * 1000, #playersService:GetPlayers(), os.clock() - Visuals.started),
+			Position = Vector2.new(viewport.X - 140, 40),
+			Size = 14,
+			Outline = true,
+			Font = Drawing.Fonts and Drawing.Fonts.UI or 0,
+			Color = pickerColor("stats_color", Color3.fromRGB(255, 255, 255)),
+		})
+	else
+		removeDrawing("stats")
 	end
 
 	-- information panel
@@ -2791,7 +2854,14 @@ end
 ---is on; they are removed when it goes off, when the player leaves, and on unload.
 local Esp = { players = {}, MAX_ARMOR = 130 }
 
-local ESP_PARTS = { "box", "name", "distance", "tool", "healthBack", "healthBar", "healthText", "armorBack", "armorBar" }
+local ESP_PARTS = { "boxBack", "box", "name", "distance", "tool", "healthBack", "healthBar", "healthText", "armorBack", "armorBar" }
+
+---A Drawing font by the name a font dropdown holds.
+local function fontOf(flagName, fallback)
+	local fonts = Drawing.Fonts
+
+	return fonts and fonts[flag(flagName, fallback)] or 0
+end
 
 local function espDrawing(entry, key, kind)
 	local object = entry[key]
@@ -2930,10 +3000,24 @@ function Esp.draw(player)
 	local left = top.X - width / 2
 	local isTarget = player == Target.player
 	local mainColour = espColour(player, isTarget)
-	local font = Drawing.Fonts and Drawing.Fonts.UI or 0
+	local font = fontOf("esp_font", "UI")
+	local smallFont = fontOf("esp_font_small", "UI")
 	local textY = top.Y - 15
 
 	if flag("esp_box", true) then
+		if flag("esp_box_outline", false) then
+			local back = espDrawing(entry, "boxBack", "Square")
+
+			back.Visible = true
+			back.Position = Vector2.new(left, top.Y)
+			back.Size = Vector2.new(width, height)
+			back.Color = pickerColor("esp_box_outline_color", Color3.new(0, 0, 0))
+			back.Thickness = 3
+			back.Filled = false
+		elseif entry.boxBack then
+			entry.boxBack.Visible = false
+		end
+
 		local box = espDrawing(entry, "box", "Square")
 
 		box.Visible = true
@@ -2944,6 +3028,10 @@ function Esp.draw(player)
 		box.Filled = false
 	elseif entry.box then
 		entry.box.Visible = false
+
+		if entry.boxBack then
+			entry.boxBack.Visible = false
+		end
 	end
 
 	if flag("esp_name", true) then
@@ -2975,7 +3063,7 @@ function Esp.draw(player)
 		label.Size = 12
 		label.Center = true
 		label.Outline = true
-		label.Font = font
+		label.Font = smallFont
 		label.Color = mainColour
 		belowY += 13
 	elseif entry.distance then
@@ -2988,12 +3076,14 @@ function Esp.draw(player)
 		local text = tool and tool.Name or ""
 
 		label.Visible = text ~= ""
-		label.Text = flag("esp_tool_upper", false) and text:upper() or text
+		local casing = flag("esp_tool_case", "normal")
+
+		label.Text = casing == "upper" and text:upper() or casing == "lower" and text:lower() or text
 		label.Position = Vector2.new(top.X, belowY)
 		label.Size = 12
 		label.Center = true
 		label.Outline = true
-		label.Font = font
+		label.Font = smallFont
 		label.Color = mainColour
 	elseif entry.tool then
 		entry.tool.Visible = false
@@ -3006,7 +3096,7 @@ function Esp.draw(player)
 		local back = espDrawing(entry, "healthBack", "Line")
 		local bar = espDrawing(entry, "healthBar", "Line")
 
-		back.Visible = true
+		back.Visible = flag("esp_health_outline", true)
 		back.From, back.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y)
 		back.Thickness = 3
 		back.Color = Color3.new(0, 0, 0)
@@ -3014,7 +3104,8 @@ function Esp.draw(player)
 		bar.Visible = fraction > 0
 		bar.From, bar.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y + height * (1 - fraction))
 		bar.Thickness = 1
-		bar.Color = Color3.fromRGB(255, 60, 60):Lerp(Color3.fromRGB(60, 255, 90), fraction)
+		bar.Color = flag("esp_health_gradient", true) and Color3.fromRGB(255, 60, 60):Lerp(Color3.fromRGB(60, 255, 90), fraction)
+			or pickerColor("esp_health_color", Color3.fromRGB(60, 255, 90))
 	else
 		if entry.healthBack then entry.healthBack.Visible = false end
 		if entry.healthBar then entry.healthBar.Visible = false end
@@ -3029,8 +3120,8 @@ function Esp.draw(player)
 		label.Size = 11
 		label.Center = true
 		label.Outline = true
-		label.Font = font
-		label.Color = Color3.new(1, 1, 1)
+		label.Font = smallFont
+		label.Color = pickerColor("esp_health_text_color", Color3.new(1, 1, 1))
 	elseif entry.healthText then
 		entry.healthText.Visible = false
 	end
@@ -3045,7 +3136,7 @@ function Esp.draw(player)
 		local back = espDrawing(entry, "armorBack", "Line")
 		local bar = espDrawing(entry, "armorBar", "Line")
 
-		back.Visible = true
+		back.Visible = flag("esp_armor_outline", true)
 		back.From, back.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y)
 		back.Thickness = 3
 		back.Color = Color3.new(0, 0, 0)
@@ -3053,7 +3144,8 @@ function Esp.draw(player)
 		bar.Visible = armorFraction > 0
 		bar.From, bar.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y + height * (1 - armorFraction))
 		bar.Thickness = 1
-		bar.Color = Color3.fromRGB(70, 140, 255)
+		bar.Color = flag("esp_armor_gradient", false) and Color3.fromRGB(70, 140, 255):Lerp(Color3.fromRGB(190, 220, 255), 1 - armorFraction)
+			or pickerColor("esp_armor_color", Color3.fromRGB(70, 140, 255))
 	else
 		if entry.armorBack then entry.armorBack.Visible = false end
 		if entry.armorBar then entry.armorBar.Visible = false end
@@ -3225,6 +3317,13 @@ function AimAssist.step()
 
 	local horizontal = math.max(flag("aimassist_h_smooth", 6), 1)
 	local vertical = math.max(flag("aimassist_v_smooth", 6), 1)
+
+	-- Dead Zone: no pull while the mouse is already this close to the target
+	local deadScreen = camera:WorldToViewportPoint(part.Position)
+
+	if (Vector2.new(deadScreen.X, deadScreen.Y) - userInputService:GetMouseLocation()).Magnitude < flag("aimassist_dead_zone", 0) then
+		return
+	end
 
 	if flag("aimassist_method", "camera") == "mouse" then
 		local screen = camera:WorldToViewportPoint(part.Position)
@@ -3776,8 +3875,11 @@ local function damageNumber(position, damage, lethal)
 	text.Size = flag("fb_damage_size", 18)
 	text.Center = true
 	text.Outline = true
-	text.Font = Drawing.Fonts and Drawing.Fonts.UI or 0
+	text.Font = fontOf("fb_damage_font", "UI")
 	text.Color = colourFor("fb_damage_color", "fb_damage_lethal", lethal)
+	pcall(function()
+		text.OutlineColor = pickerColor("fb_damage_outline", Color3.new(0, 0, 0))
+	end)
 
 	addEffect(flag("fb_damage_life", 1), function(age, life)
 		local point, onScreen = camera:WorldToViewportPoint(position + Vector3.new(0, 1.5 + age * 3, 0))
@@ -3989,20 +4091,41 @@ function Feedback.soundId(name)
 	return nil
 end
 
-local function hitSound()
-	local id = Feedback.soundId(flag("fb_sound_name", "neverlose"))
+---Plays one of the repository sounds; with `origin` the sound comes from that place in the world.
+local function playSound(name, volume, origin)
+	local id = Feedback.soundId(name)
 
 	if not id then
 		return
 	end
 
 	local sound = Instance.new("Sound")
+	local anchor
 
 	sound.SoundId = id
-	sound.Volume = flag("fb_sound_volume", 1)
-	sound.Parent = game:GetService("SoundService")
+	sound.Volume = volume
+
+	if origin then
+		anchor = Instance.new("Part")
+		anchor.Anchored = true
+		anchor.CanCollide = false
+		anchor.CanQuery = false
+		anchor.CanTouch = false
+		anchor.Transparency = 1
+		anchor.Size = Vector3.one
+		anchor.Position = origin
+		anchor.Parent = workspace
+		sound.Parent = anchor
+	else
+		sound.Parent = game:GetService("SoundService")
+	end
+
 	sound:Play()
-	game:GetService("Debris"):AddItem(sound, 5)
+	game:GetService("Debris"):AddItem(anchor or sound, 5)
+end
+
+local function hitSound()
+	playSound(flag("fb_sound_name", "neverlose"), flag("fb_sound_volume", 1))
 end
 
 -- Events -------------------------------------------------------------------------------------------------------------------------------------
@@ -4042,6 +4165,10 @@ function Feedback.shot(tool, origin, hit)
 
 	if #Feedback.shots > 8 then
 		table.remove(Feedback.shots, 1)
+	end
+
+	if flag("fb_shot_sound", false) then
+		playSound(flag("fb_shot_sound_name", "Beep1"), flag("fb_shot_sound_volume", 1), flag("fb_shot_sound_world", false) and origin or nil)
 	end
 
 	if flag("fb_tracer", false) then bulletTracer(origin, hit) end
@@ -4472,6 +4599,10 @@ function Crosshair.render(dt)
 		local colour = pickerColor(hasTarget and "crosshair_target_color" or "crosshair_color", hasTarget and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255))
 		local outline = pickerColor("crosshair_outline", Color3.new(0, 0, 0))
 
+		local style = flag("crosshair_style", "cross")
+		-- Fade In And Out: the crosshair pulses between half and fully visible
+		local alpha = flag("crosshair_fade", false) and (0.55 + 0.45 * math.sin(os.clock() * flag("crosshair_fade_speed", 2) * math.pi * 2)) or 1
+
 		Crosshair.angle += dt * math.rad(flag("crosshair_spin", 0))
 
 		for index = 0, 3 do
@@ -4480,8 +4611,29 @@ function Crosshair.render(dt)
 			local back = crosshairLine("back" .. index)
 			local front = crosshairLine("front" .. index)
 
-			back.Visible, back.From, back.To, back.Thickness, back.Color = true, from, to, thickness + 2, outline
-			front.Visible, front.From, front.To, front.Thickness, front.Color = true, from, to, thickness, colour
+			back.Visible, back.From, back.To, back.Thickness, back.Color, back.Transparency = style == "cross", from, to, thickness + 2, outline, alpha
+			front.Visible, front.From, front.To, front.Thickness, front.Color, front.Transparency = style == "cross", from, to, thickness, colour, alpha
+		end
+
+		-- the dot and the ring are one Circle each
+		local shape = Crosshair.objects.shape
+
+		if style ~= "cross" then
+			if not shape then
+				shape = Drawing.new("Circle")
+				Crosshair.objects.shape = shape
+			end
+
+			shape.Visible = true
+			shape.Position = centre
+			shape.NumSides = 32
+			shape.Filled = style == "dot"
+			shape.Radius = style == "dot" and math.max(thickness + 1, size / 4) or gap + size / 2
+			shape.Thickness = thickness
+			shape.Color = colour
+			shape.Transparency = alpha
+		elseif shape then
+			shape.Visible = false
 		end
 	else
 		for index = 0, 3 do
@@ -4489,6 +4641,10 @@ function Crosshair.render(dt)
 
 			if back then back.Visible = false end
 			if front then front.Visible = false end
+		end
+
+		if Crosshair.objects.shape then
+			Crosshair.objects.shape.Visible = false
 		end
 	end
 
@@ -4614,6 +4770,22 @@ function LocalChar.step(dt)
 		LocalChar.hat.Color = pickerColor("char_hat_color", Color3.fromRGB(255, 120, 200))
 		LocalChar.hat.Mesh.Scale = Vector3.new(scale * 1.2, scale * 0.45, scale * 1.2)
 		LocalChar.hat.CFrame = CFrame.new(head.Position + Vector3.new(0, 0.9 + scale * 0.1, 0))
+
+		-- the light under the hat
+		local light = LocalChar.hat:FindFirstChildOfClass("PointLight")
+
+		if flag("char_hat_light", false) then
+			if not light then
+				light = Instance.new("PointLight")
+				light.Range = 14
+				light.Parent = LocalChar.hat
+			end
+
+			light.Color = pickerColor("char_hat_light_color", Color3.fromRGB(255, 200, 230))
+			light.Brightness = flag("char_hat_light_brightness", 2)
+		elseif light then
+			light:Destroy()
+		end
 	else
 		dropObject("hat")
 	end
@@ -4650,8 +4822,10 @@ function LocalChar.step(dt)
 			LocalChar.tool.Adornee = tool
 		end
 
-		LocalChar.tool.FillColor = Color3.fromHSV(LocalChar.hue, 1, 1)
-		LocalChar.tool.OutlineColor = Color3.fromHSV((LocalChar.hue + 0.5) % 1, 1, 1)
+		local saturation, brightness = flag("char_rainbow_saturation", 1), flag("char_rainbow_brightness", 1)
+
+		LocalChar.tool.FillColor = Color3.fromHSV(LocalChar.hue, saturation, brightness)
+		LocalChar.tool.OutlineColor = Color3.fromHSV((LocalChar.hue + 0.5) % 1, saturation, brightness)
 		LocalChar.tool.FillTransparency = flag("char_rainbow_transparency", 0.3)
 	else
 		dropObject("tool")
@@ -4661,7 +4835,7 @@ end
 ---@module Misc
 ---Small things on your own client: hide other players' nametags, play an animation on your character, lift the camera zoom limit.
 ---Each one remembers what it changed and puts it back.
-local Misc = { nametags = {}, animation = nil, track = nil, animationId = nil, zoomSaved = nil }
+local Misc = { nametags = {}, animation = nil, track = nil, animationId = nil, zoomSaved = nil, muted = {} }
 
 local EMOTES = {
 	["sleep"] = "rbxassetid://10714360343",
@@ -4701,9 +4875,30 @@ local function stopAnimation()
 	Misc.animationId = nil
 end
 
+---Puts the gun sounds back to their volume.
+local function unmuteGuns()
+	for sound, volume in pairs(Misc.muted) do
+		if sound.Parent then
+			sound.Volume = volume
+		end
+	end
+
+	Misc.muted = {}
+end
+
+---Aspect ratio: the camera is stretched (below 1) or squeezed (above 1) vertically after the game has placed it.
+function Misc.aspect()
+	local ratio = flag("misc_aspect_value", 1)
+
+	if flag("misc_aspect", false) and ratio ~= 1 then
+		camera.CFrame = camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, ratio, 0, 0, 0, 1)
+	end
+end
+
 function Misc.restore()
 	restoreNametags()
 	stopAnimation()
+	unmuteGuns()
 
 	if Misc.zoomSaved then
 		localPlayer.CameraMaxZoomDistance = Misc.zoomSaved
@@ -4725,6 +4920,25 @@ function Misc.step()
 		end
 	elseif next(Misc.nametags) then
 		restoreNametags()
+	end
+
+	-- mute gun sounds: your own guns' shoot sounds go silent
+	if flag("misc_mute_guns", false) then
+		for _, holder in { localPlayer.Character, localPlayer:FindFirstChildOfClass("Backpack") } do
+			for _, tool in holder and holder:GetChildren() or {} do
+				local shoot = tool:IsA("Tool") and tool:FindFirstChild("Handle") and tool.Handle:FindFirstChild("ShootSound")
+
+				if shoot and shoot:IsA("Sound") and Misc.muted[shoot] == nil then
+					Misc.muted[shoot] = shoot.Volume
+				end
+
+				if shoot and shoot:IsA("Sound") then
+					shoot.Volume = 0
+				end
+			end
+		end
+	elseif next(Misc.muted) then
+		unmuteGuns()
 	end
 
 	-- camera zoom limit
@@ -5386,6 +5600,11 @@ function Ragebot.start()
 	Ragebot.maid:give(runService.RenderStepped:Connect(Esp.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(World.step))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Misc.step))
+
+	runService:BindToRenderStep("VantaAspect", Enum.RenderPriority.Camera.Value + 1, Misc.aspect)
+	Ragebot.maid:give(function()
+		pcall(runService.UnbindFromRenderStep, runService, "VantaAspect")
+	end)
 	Ragebot.maid:give(Misc.restore)
 	Ragebot.maid:give(runService.RenderStepped:Connect(Crosshair.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(LocalChar.step))
@@ -5682,7 +5901,18 @@ local function buildMenu()
 	espSection:toggle({ name = "distance", flag = "esp_distance" })
 	espSection:dropdown({ name = "unit", flag = "esp_unit", items = { "studs", "metres" }, default = "studs" })
 	espSection:toggle({ name = "tool text", flag = "esp_tool" })
-	espSection:toggle({ name = "uppercase tool", flag = "esp_tool_upper" })
+	espSection:dropdown({ name = "tool text case", flag = "esp_tool_case", items = { "normal", "upper", "lower" }, default = "normal" })
+	espSection:dropdown({ name = "main font", flag = "esp_font", items = { "UI", "System", "Plex", "Monospace" }, default = "UI" })
+	espSection:dropdown({ name = "small font", flag = "esp_font_small", items = { "UI", "System", "Plex", "Monospace" }, default = "UI" })
+	espSection:toggle({ name = "box outline", flag = "esp_box_outline" })
+	espSection:colorpicker({ name = "box outline colour", flag = "esp_box_outline_color", color = Color3.new(0, 0, 0) })
+	espSection:toggle({ name = "health bar gradient", flag = "esp_health_gradient", default = true })
+	espSection:colorpicker({ name = "health bar colour", flag = "esp_health_color", color = Color3.fromRGB(60, 255, 90) })
+	espSection:toggle({ name = "health bar outline", flag = "esp_health_outline", default = true })
+	espSection:colorpicker({ name = "health text colour", flag = "esp_health_text_color", color = Color3.new(1, 1, 1) })
+	espSection:toggle({ name = "armor bar gradient", flag = "esp_armor_gradient" })
+	espSection:colorpicker({ name = "armor bar colour", flag = "esp_armor_color", color = Color3.fromRGB(70, 140, 255) })
+	espSection:toggle({ name = "armor bar outline", flag = "esp_armor_outline", default = true })
 	espSection:toggle({ name = "health bar", flag = "esp_health_bar", default = true })
 	espSection:toggle({ name = "health text", flag = "esp_health_text" })
 	espSection:toggle({ name = "hide health text if full", flag = "esp_health_hide_full", default = true })
@@ -5710,6 +5940,9 @@ local function buildMenu()
 	aimSection:slider({ name = "horizontal smoothing", flag = "aimassist_h_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
 	aimSection:slider({ name = "vertical smoothing", flag = "aimassist_v_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
 	aimSection:toggle({ name = "visible only", flag = "aimassist_visible", default = true })
+	aimSection:slider({ name = "dead zone", flag = "aimassist_dead_zone", min = 0, max = 100, default = 0, interval = 1, suffix = "px" })
+	aimSection:toggle({ name = "fov outline", flag = "aimassist_fov_outline" })
+	aimSection:colorpicker({ name = "fov outline colour", flag = "aimassist_fov_outline_color", color = Color3.new(0, 0, 0) })
 	aimSection:slider({ name = "target swap cooldown", flag = "legit_swap_cooldown", min = 0, max = 2, default = 0, interval = 0.05, suffix = "s" })
 	aimSection:toggle({ name = "show fov", flag = "aimassist_show_fov" })
 	aimSection:colorpicker({ name = "fov colour", flag = "aimassist_fov_color", color = Color3.fromRGB(255, 255, 255) })
@@ -5731,6 +5964,8 @@ local function buildMenu()
 	local damageSection = hitsColumn:section({ name = "damage number" })
 	damageSection:toggle({ name = "enabled", flag = "fb_damage" })
 	damageSection:slider({ name = "lifetime", flag = "fb_damage_life", min = 0.2, max = 3, default = 1, interval = 0.05, suffix = "s" })
+	damageSection:dropdown({ name = "font", flag = "fb_damage_font", items = { "UI", "System", "Plex", "Monospace" }, default = "UI" })
+	damageSection:colorpicker({ name = "outline colour", flag = "fb_damage_outline", color = Color3.new(0, 0, 0) })
 	damageSection:slider({ name = "size", flag = "fb_damage_size", min = 10, max = 40, default = 18, interval = 1, suffix = "px" })
 	damageSection:colorpicker({ name = "colour", flag = "fb_damage_color", color = Color3.fromRGB(255, 255, 255) })
 	damageSection:colorpicker({ name = "lethal colour", flag = "fb_damage_lethal", color = Color3.fromRGB(255, 60, 60) })
@@ -5738,6 +5973,10 @@ local function buildMenu()
 	local soundSection = hitsColumn:section({ name = "hit sound" })
 	soundSection:toggle({ name = "enabled", flag = "fb_sound" })
 	soundSection:dropdown({ name = "sound", flag = "fb_sound_name", items = SOUND_NAMES, default = "neverlose", scrolling = true })
+	soundSection:toggle({ name = "own shot sound", flag = "fb_shot_sound" })
+	soundSection:dropdown({ name = "shot sound", flag = "fb_shot_sound_name", items = SOUND_NAMES, default = "Beep1", scrolling = true })
+	soundSection:slider({ name = "shot sound volume", flag = "fb_shot_sound_volume", min = 0, max = 5, default = 1, interval = 0.1, suffix = "" })
+	soundSection:toggle({ name = "shot sound in world", flag = "fb_shot_sound_world" })
 	soundSection:slider({ name = "volume", flag = "fb_sound_volume", min = 0, max = 5, default = 1, interval = 0.1, suffix = "" })
 
 	local hitsColumn2 = hits:column({})
@@ -5798,6 +6037,8 @@ local function buildMenu()
 	silentSection:slider({ name = "redirect chance", flag = "silent_chance", min = 0, max = 100, default = 100, interval = 1, suffix = "%" })
 	silentSection:toggle({ name = "visible only", flag = "silent_visible", default = true })
 	silentSection:toggle({ name = "show fov", flag = "silent_show_fov" })
+	silentSection:toggle({ name = "fov outline", flag = "silent_fov_outline" })
+	silentSection:colorpicker({ name = "fov outline colour", flag = "silent_fov_outline_color", color = Color3.new(0, 0, 0) })
 	silentSection:colorpicker({ name = "fov colour", flag = "silent_fov_color", color = Color3.fromRGB(180, 180, 255) })
 
 	local triggerSection = legitColumn2:section({ name = "triggerbot" })
@@ -5860,6 +6101,9 @@ local function buildMenu()
 	crosshairSection:slider({ name = "line size", flag = "crosshair_size", min = 2, max = 40, default = 8, interval = 1, suffix = "px" })
 	crosshairSection:slider({ name = "gap size", flag = "crosshair_gap", min = 0, max = 30, default = 4, interval = 1, suffix = "px" })
 	crosshairSection:slider({ name = "line thickness", flag = "crosshair_thickness", min = 1, max = 6, default = 1, interval = 1, suffix = "px" })
+	crosshairSection:dropdown({ name = "style", flag = "crosshair_style", items = { "cross", "dot", "ring" }, default = "cross" })
+	crosshairSection:toggle({ name = "fade in and out", flag = "crosshair_fade" })
+	crosshairSection:slider({ name = "fade speed", flag = "crosshair_fade_speed", min = 0.2, max = 8, default = 2, interval = 0.1, suffix = "hz" })
 	crosshairSection:slider({ name = "rotation", flag = "crosshair_spin", min = 0, max = 720, default = 0, interval = 10, suffix = "deg/s" })
 	crosshairSection:colorpicker({ name = "colour", flag = "crosshair_color", color = Color3.fromRGB(255, 255, 255) })
 	crosshairSection:colorpicker({ name = "target colour", flag = "crosshair_target_color", color = Color3.fromRGB(255, 80, 80) })
@@ -5867,6 +6111,8 @@ local function buildMenu()
 
 	local panelSection = hudColumn:section({ name = "state panel" })
 	panelSection:toggle({ name = "show panel", flag = "crosshair_panel" })
+	panelSection:toggle({ name = "statistics window", flag = "stats_window" })
+	panelSection:colorpicker({ name = "statistics colour", flag = "stats_color", color = Color3.fromRGB(255, 255, 255) })
 	panelSection:colorpicker({ name = "colour", flag = "crosshair_panel_color", color = Color3.fromRGB(255, 255, 255) })
 
 	local characterTab = window:tab({ name = "character" })
@@ -5883,6 +6129,9 @@ local function buildMenu()
 	local hatSection = charColumn2:section({ name = "china hat" })
 	hatSection:toggle({ name = "enabled", flag = "char_hat" })
 	hatSection:colorpicker({ name = "colour", flag = "char_hat_color", color = Color3.fromRGB(255, 120, 200) })
+	hatSection:toggle({ name = "light", flag = "char_hat_light" })
+	hatSection:colorpicker({ name = "light colour", flag = "char_hat_light_color", color = Color3.fromRGB(255, 200, 230) })
+	hatSection:slider({ name = "light brightness", flag = "char_hat_light_brightness", min = 0, max = 10, default = 2, interval = 0.1, suffix = "" })
 	hatSection:slider({ name = "scale", flag = "char_hat_scale", min = 0.5, max = 4, default = 1.6, interval = 0.1, suffix = "" })
 
 	local auraSection = charColumn2:section({ name = "particle aura" })
@@ -5892,6 +6141,8 @@ local function buildMenu()
 	local rainbowSection = charColumn2:section({ name = "rainbow tool" })
 	rainbowSection:toggle({ name = "enabled", flag = "char_rainbow" })
 	rainbowSection:slider({ name = "speed", flag = "char_rainbow_speed", min = 0.05, max = 3, default = 0.4, interval = 0.05, suffix = "" })
+	rainbowSection:slider({ name = "saturation", flag = "char_rainbow_saturation", min = 0, max = 1, default = 1, interval = 0.05, suffix = "" })
+	rainbowSection:slider({ name = "brightness", flag = "char_rainbow_brightness", min = 0, max = 1, default = 1, interval = 0.05, suffix = "" })
 	rainbowSection:slider({ name = "transparency", flag = "char_rainbow_transparency", min = 0, max = 1, default = 0.3, interval = 0.05, suffix = "" })
 
 	local playersTab = window:tab({ name = "players" })
@@ -5946,6 +6197,7 @@ local function buildMenu()
 	autoStatusSection:toggle({ name = "friends are friendly", flag = "status_friends" })
 	autoStatusSection:toggle({ name = "crew mates are friendly", flag = "status_crew" })
 	autoStatusSection:toggle({ name = "friends of an enemy are enemies", flag = "status_enemy_friends" })
+	autoStatusSection:toggle({ name = "notifications", flag = "status_notify" })
 
 	-- the skin list is read before the menu names it
 	Skins.load()
@@ -6018,6 +6270,9 @@ local function buildMenu()
 	utilitySection:toggle({ name = "anti afk", flag = "utility_antiafk" })
 	utilitySection:toggle({ name = "hide player nametags", flag = "misc_hide_nametags" })
 	utilitySection:toggle({ name = "unlock camera distance", flag = "misc_zoom" })
+	utilitySection:toggle({ name = "mute own gun sounds", flag = "misc_mute_guns" })
+	utilitySection:toggle({ name = "aspect ratio", flag = "misc_aspect" })
+	utilitySection:slider({ name = "aspect value", flag = "misc_aspect_value", min = 0.4, max = 1.5, default = 0.75, interval = 0.01, suffix = "" })
 	utilitySection:toggle({ name = "animation player", flag = "misc_anim" })
 	utilitySection:dropdown({ name = "animation", flag = "misc_anim_name", items = EMOTE_NAMES, default = "sleep", scrolling = true })
 	utilitySection:textbox({ name = "custom asset id", flag = "misc_anim_id", default = "15609995579" })

@@ -137,3 +137,17 @@ Not reproduced: knife skins (they need the hand weld and the knife's animation a
 Tested live with a fake client-side gun (nothing real was fired): cooldown 0 gave 20 activations in 1.5 s, 300 ms gave 5; a 250 ms shot delay gave gaps of 0.251 s; a delayed shot was dropped when the target was cleared (0 activations after); the five velocity sources each gave their own value; resolver rate 0.1 gave 10 samples a second against 160. Not tested: target when shot at and wait for all targets knocked, because the second account left the server before they were run (the code paths are the ones the first tests used).
 
 Not reproduced: always fire, bullet manipulation and double tap (they send shots the server turns away, change the shot data, or exceed its fire rate), and at target vehicle, dont render, show fake bullets, pre fire and fast retry (visual attempts and options I did not find a clear behaviour for), prioritize over reloading, follow adjust.
+
+## Leftover options (added)
+
+- **ESP:** box outline, health and armor bar gradient, colour and outline, health text colour, tool text casing, main and small font.
+- **Crosshair:** style (cross, dot, ring), fade in and out with a speed.
+- **Hit feedback:** damage number font and outline colour; your own shot sound (one of the repository sounds, optionally coming from where the shot was fired) and a switch that mutes your own gun sounds.
+- **Screen:** aspect ratio (the camera is stretched after the game has placed it), a statistics window (fps, ping, players, run time).
+- **Character:** rainbow saturation and brightness, a light under the china hat.
+- **Legit:** aim assist dead zone, aim assist and silent aim FOV outlines.
+- **Players:** notifications when an automatic status rule marks someone.
+
+Tested live: ESP box outline, solid health bar colour, font and (on yourself) every bar; the three crosshair styles and the fade (transparency swings between 0.10 and 0.99); the statistics window text (fps 192, ping 44 ms) and its removal; aspect ratio (camera up vector 0.60 on, 1.00 off); mute (volume 0, then back to 1); rainbow saturation 0.50 and value 0.80; hat light brightness 5 and its removal; the shot sound coming from the world (one anchored sound part); both FOV outlines. Not tested: the aim assist dead zone, the status notifications, tool text casing (no tool was held) and the damage number font and outline (they need a real hit).
+
+Still not reproduced (and why): the server position indicator, fake position, network and velocity desync, sender rate (they fake or alter what the server sees), anti report, trash talk, animation breaker (moderation, spam or what other players see), always fire, bullet manipulation, double tap, force hit, range enhancer, reduce shotgun spread, rapid fire, remove anti gun macro (shot data or fire limits), custom character, skinny and material tools (character models and scales), background noise and texture packs, ESP image, material and tool icon, player bullet tracers and volume, RPG warning, armor pop image, bullet tracer styles, custom skins from files, knife skins, remove recoil, at target vehicle, dont render, show fake bullets, pre fire, fast retry, follow adjust, prioritize over reloading, and the remaining colour variants for enemy and friendly bars.
