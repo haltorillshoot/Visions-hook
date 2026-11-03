@@ -20962,185 +20962,6 @@ do
         do_remove(value)
 	end))
 
-    -- >> ( raknet recorder )
-    -- Passive packet recorder (Raknet/RaknetResearch.lua). It only reads outgoing packets and hands them on unchanged; it is separate from the
-    -- fake position hook above. The module comes from the executor's workspace first, the repo otherwise; recordings are saved through the
-    -- luau-toolkit serializer (luaukit/Ser.lua) when that is in the workspace.
-
-    do
-        local research = nil
-
-        local function load_research()
-            if research then
-                return research
-            end
-
-            local ok, source = pcall(readfile, "RaknetResearch.lua")
-
-            if not ok or type(source) ~= "string" or source == "" then
-                ok, source = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/Raknet/RaknetResearch.lua")
-            end
-
-            local chunk = ok and type(source) == "string" and loadstring(source, "=RaknetResearch")
-
-            if not chunk then
-                new_notification("raknet recorder: module could not be loaded", 3)
-                return nil
-            end
-
-            local ser = nil
-            local ser_ok, ser_source = pcall(readfile, "luaukit/Ser.lua")
-            local ser_chunk = ser_ok and type(ser_source) == "string" and loadstring(ser_source, "=Ser")
-
-            if ser_chunk then
-                local built_ok, built = pcall(ser_chunk)
-                ser = built_ok and built or nil
-            end
-
-            research = chunk().new({
-                ser = ser,
-                sessionName = "visions",
-                notify = function(text, seconds)
-                    if flags["raknet_recorder_errors"] then
-                        new_notification(text, seconds)
-                    end
-                end,
-            })
-
-            if not ser then
-                warn("[Visions hook] raknet recorder: luaukit/Ser.lua not found, recordings stay in memory")
-            end
-
-            return research
-        end
-
-        local function print_review(count)
-            if not research then
-                return print("[RaknetResearch] nothing recorded yet")
-            end
-
-            print("[RaknetResearch] " .. research:summary())
-
-            local records = research.records
-
-            for index = math.max(1, #records - count + 1), #records do
-                local record = records[index]
-                print(string.format("  #%d id=0x%02X size=%d t=%.3fs gap=%.1fms %s", record.index, record.id, record.size, record.t, record.gap * 1000, record.hex))
-            end
-        end
-
-        menu_references["raknet_recorder"] = menu_references["utility_section"]:create_element({["name"] = "raknet recorder"}, {["toggle"] = {["flag"] = "raknet_recorder"}})
-        menu_references["raknet_recorder_settings"] = menu_references["raknet_recorder"]:create_settings()
-        menu_references["raknet_recorder_logging"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "packet logging"}, {["toggle"] = {["flag"] = "raknet_recorder_logging"}})
-        menu_references["raknet_recorder_errors"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "error notifications"}, {["toggle"] = {["flag"] = "raknet_recorder_errors"}})
-        menu_references["raknet_recorder_ids"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "packet ids (hex, empty = all)"}, {["textbox"] = {["default"] = "", ["flag"] = "raknet_recorder_ids"}})
-        menu_references["raknet_recorder_status"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "status"}, {["button"] = {}})
-        menu_references["raknet_recorder_review"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "review (console)"}, {["button"] = {}})
-        menu_references["raknet_recorder_debug"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "debug info (console)"}, {["button"] = {}})
-        menu_references["raknet_recorder_save"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "save recording"}, {["button"] = {}})
-        menu_references["raknet_recorder_clear"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "clear recording"}, {["button"] = {}})
-
-        create_connection(menu_references["raknet_recorder"]["on_toggle_change"], function(value)
-            if not value then
-                if research then
-                    research:stop()
-                    new_notification("raknet recorder stopped (" .. research:status().stored .. " packets kept)", 2)
-                end
-
-                return
-            end
-
-            local loaded = load_research()
-
-            if not loaded then
-                pcall(menu_references["raknet_recorder"]["set_toggle"], menu_references["raknet_recorder"], false)
-                return
-            end
-
-            loaded:setFilter(loaded.parseIds(flags["raknet_recorder_ids"] or ""))
-            loaded:setLogging(flags["raknet_recorder_logging"] == true)
-
-            local started, reason = loaded:start()
-
-            if started then
-                new_notification("raknet recorder started", 2)
-            else
-                new_notification("raknet recorder: " .. tostring(reason), 3)
-                pcall(menu_references["raknet_recorder"]["set_toggle"], menu_references["raknet_recorder"], false)
-            end
-        end)
-
-        create_connection(menu_references["raknet_recorder_logging"]["on_toggle_change"], function(value)
-            if research then
-                research:setLogging(value)
-            end
-        end)
-
-        create_connection(menu_references["raknet_recorder_ids"]["on_textbox_change"], function(value)
-            if research then
-                research:setFilter(research.parseIds(value or ""))
-            end
-        end)
-
-        create_connection(menu_references["raknet_recorder_status"]["on_clicked"], function()
-            if not research then
-                return new_notification("raknet recorder: not started", 2)
-            end
-
-            local status = research:status()
-
-            new_notification(string.format("%s | seen %d | stored %d | errors %d", status.recording and "recording" or "stopped", status.seen, status.stored, status.errors), 3)
-        end)
-
-        create_connection(menu_references["raknet_recorder_review"]["on_clicked"], function()
-            print_review(20)
-        end)
-
-        create_connection(menu_references["raknet_recorder_debug"]["on_clicked"], function()
-            if not research then
-                return print("[RaknetResearch] not loaded")
-            end
-
-            print("[RaknetResearch] " .. research:summary())
-
-            local events = research.events
-
-            for index = math.max(1, #events - 20 + 1), #events do
-                local event = events[index]
-                print(string.format("  [%s] %s", event.kind, tostring(type(event.detail) == "table" and "simulation" or event.detail)))
-            end
-        end)
-
-        create_connection(menu_references["raknet_recorder_save"]["on_clicked"], function()
-            if not research then
-                return new_notification("raknet recorder: nothing to save", 2)
-            end
-
-            local path, reason = research:save()
-
-            new_notification(path and ("saved " .. path) or ("not saved: " .. tostring(reason)), 3)
-        end)
-
-        create_connection(menu_references["raknet_recorder_clear"]["on_clicked"], function()
-            if research then
-                research:clear()
-                new_notification("raknet recorder cleared", 2)
-            end
-        end)
-
-        -- the menu's Unload takes the hook out as well
-        local teardown_list = getgenv()["neverlose_teardowns"]
-
-        if type(teardown_list) == "table" then
-            teardown_list[#teardown_list + 1] = function()
-                if research then
-                    research:unload()
-                    research = nil
-                end
-            end
-        end
-    end
-
     -- >> ( auto vehicle )
 
     do
@@ -34362,6 +34183,185 @@ end
         menu_references["control_settings"] = menu_references["control"]:create_settings()
         menu_references["control_chat_replies"] = menu_references["control_settings"]:create_element({["name"] = "chat replies"}, {["toggle"] = {["flag"] = "control_chat_replies", ["default"] = true}})
         --]]
+    -- >> ( raknet recorder )
+    -- Passive packet recorder (Raknet/RaknetResearch.lua). It only reads outgoing packets and hands them on unchanged; it is separate from the
+    -- fake position hook above. The module comes from the executor's workspace first, the repo otherwise; recordings are saved through the
+    -- luau-toolkit serializer (luaukit/Ser.lua) when that is in the workspace.
+
+    do
+        local research = nil
+
+        local function load_research()
+            if research then
+                return research
+            end
+
+            local ok, source = pcall(readfile, "RaknetResearch.lua")
+
+            if not ok or type(source) ~= "string" or source == "" then
+                ok, source = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/Raknet/RaknetResearch.lua")
+            end
+
+            local chunk = ok and type(source) == "string" and loadstring(source, "=RaknetResearch")
+
+            if not chunk then
+                new_notification("raknet recorder: module could not be loaded", 3)
+                return nil
+            end
+
+            local ser = nil
+            local ser_ok, ser_source = pcall(readfile, "luaukit/Ser.lua")
+            local ser_chunk = ser_ok and type(ser_source) == "string" and loadstring(ser_source, "=Ser")
+
+            if ser_chunk then
+                local built_ok, built = pcall(ser_chunk)
+                ser = built_ok and built or nil
+            end
+
+            research = chunk().new({
+                ser = ser,
+                sessionName = "visions",
+                notify = function(text, seconds)
+                    if flags["raknet_recorder_errors"] then
+                        new_notification(text, seconds)
+                    end
+                end,
+            })
+
+            if not ser then
+                warn("[Visions hook] raknet recorder: luaukit/Ser.lua not found, recordings stay in memory")
+            end
+
+            return research
+        end
+
+        local function print_review(count)
+            if not research then
+                return print("[RaknetResearch] nothing recorded yet")
+            end
+
+            print("[RaknetResearch] " .. research:summary())
+
+            local records = research.records
+
+            for index = math.max(1, #records - count + 1), #records do
+                local record = records[index]
+                print(string.format("  #%d id=0x%02X size=%d t=%.3fs gap=%.1fms %s", record.index, record.id, record.size, record.t, record.gap * 1000, record.hex))
+            end
+        end
+
+        menu_references["raknet_recorder"] = menu_references["utility_section"]:create_element({["name"] = "raknet recorder"}, {["toggle"] = {["flag"] = "raknet_recorder"}})
+        menu_references["raknet_recorder_settings"] = menu_references["raknet_recorder"]:create_settings()
+        menu_references["raknet_recorder_logging"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "packet logging"}, {["toggle"] = {["flag"] = "raknet_recorder_logging"}})
+        menu_references["raknet_recorder_errors"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "error notifications"}, {["toggle"] = {["flag"] = "raknet_recorder_errors"}})
+        menu_references["raknet_recorder_ids"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "packet ids (hex, empty = all)"}, {["textbox"] = {["default"] = "", ["flag"] = "raknet_recorder_ids"}})
+        menu_references["raknet_recorder_status"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "status"}, {["button"] = {}})
+        menu_references["raknet_recorder_review"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "review (console)"}, {["button"] = {}})
+        menu_references["raknet_recorder_debug"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "debug info (console)"}, {["button"] = {}})
+        menu_references["raknet_recorder_save"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "save recording"}, {["button"] = {}})
+        menu_references["raknet_recorder_clear"] = menu_references["raknet_recorder_settings"]:create_element({["name"] = "clear recording"}, {["button"] = {}})
+
+        create_connection(menu_references["raknet_recorder"]["on_toggle_change"], function(value)
+            if not value then
+                if research then
+                    research:stop()
+                    new_notification("raknet recorder stopped (" .. research:status().stored .. " packets kept)", 2)
+                end
+
+                return
+            end
+
+            local loaded = load_research()
+
+            if not loaded then
+                pcall(menu_references["raknet_recorder"]["set_toggle"], menu_references["raknet_recorder"], false)
+                return
+            end
+
+            loaded:setFilter(loaded.parseIds(flags["raknet_recorder_ids"] or ""))
+            loaded:setLogging(flags["raknet_recorder_logging"] == true)
+
+            local started, reason = loaded:start()
+
+            if started then
+                new_notification("raknet recorder started", 2)
+            else
+                new_notification("raknet recorder: " .. tostring(reason), 3)
+                pcall(menu_references["raknet_recorder"]["set_toggle"], menu_references["raknet_recorder"], false)
+            end
+        end)
+
+        create_connection(menu_references["raknet_recorder_logging"]["on_toggle_change"], function(value)
+            if research then
+                research:setLogging(value)
+            end
+        end)
+
+        create_connection(menu_references["raknet_recorder_ids"]["on_textbox_change"], function(value)
+            if research then
+                research:setFilter(research.parseIds(value or ""))
+            end
+        end)
+
+        create_connection(menu_references["raknet_recorder_status"]["on_clicked"], function()
+            if not research then
+                return new_notification("raknet recorder: not started", 2)
+            end
+
+            local status = research:status()
+
+            new_notification(string.format("%s | seen %d | stored %d | errors %d", status.recording and "recording" or "stopped", status.seen, status.stored, status.errors), 3)
+        end)
+
+        create_connection(menu_references["raknet_recorder_review"]["on_clicked"], function()
+            print_review(20)
+        end)
+
+        create_connection(menu_references["raknet_recorder_debug"]["on_clicked"], function()
+            if not research then
+                return print("[RaknetResearch] not loaded")
+            end
+
+            print("[RaknetResearch] " .. research:summary())
+
+            local events = research.events
+
+            for index = math.max(1, #events - 20 + 1), #events do
+                local event = events[index]
+                print(string.format("  [%s] %s", event.kind, tostring(type(event.detail) == "table" and "simulation" or event.detail)))
+            end
+        end)
+
+        create_connection(menu_references["raknet_recorder_save"]["on_clicked"], function()
+            if not research then
+                return new_notification("raknet recorder: nothing to save", 2)
+            end
+
+            local path, reason = research:save()
+
+            new_notification(path and ("saved " .. path) or ("not saved: " .. tostring(reason)), 3)
+        end)
+
+        create_connection(menu_references["raknet_recorder_clear"]["on_clicked"], function()
+            if research then
+                research:clear()
+                new_notification("raknet recorder cleared", 2)
+            end
+        end)
+
+        -- the menu's Unload takes the hook out as well
+        local teardown_list = getgenv()["neverlose_teardowns"]
+
+        if type(teardown_list) == "table" then
+            teardown_list[#teardown_list + 1] = function()
+                if research then
+                    research:unload()
+                    research = nil
+                end
+            end
+        end
+    end
+
     -- >> ( ragebot )
 
     local automatic = false
