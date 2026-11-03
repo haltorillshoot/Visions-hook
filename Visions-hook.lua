@@ -41628,10 +41628,39 @@ end
         -- bait. A visit during which the body was hit ends as well.
         local bait_health = nil
 
+        -- Below this share of its health the body does not bait at all, and a visit is never made to a spot another player's gun reaches
+        -- (the target is judged below, by whether the guns here can shoot back from the spot).
+        local BAIT_MIN_HEALTH = 0.4
+
+        local bait_exposed = function(spot)
+            for player, data in player_data do
+                if player ~= local_player and data[1] ~= 2 and not data[7] and not data[18] and data ~= ragebot_target then
+                    local character = data[3]
+                    local root = character and find_first_child(character, "HumanoidRootPart")
+                    local tool = character and find_first_child_of_class(character, "Tool")
+                    local range = tool and find_first_child(tool, "Range")
+
+                    if root and range and (root["Position"] - spot)["Magnitude"] <= range["Value"] + 15 then
+                        return true
+                    end
+                end
+            end
+
+            return false
+        end
+
         local bait_unsafe = function(spot, hrp)
             local humanoid = local_parts["Humanoid"]
 
             if bait_health and humanoid and humanoid["Health"] < bait_health - 0.5 then
+                return true
+            end
+
+            if humanoid and humanoid["Health"] < humanoid["MaxHealth"] * BAIT_MIN_HEALTH then
+                return true
+            end
+
+            if bait_exposed(spot) then
                 return true
             end
 
@@ -41674,16 +41703,27 @@ end
 
                 local spot_type = flags["void_hide_bait_spot"]
                 local stood = type(spot_type) == "table" and spot_type[1] == "where you stood" and hide_manager["last_map_cframe"]
+                local humanoid = local_parts["Humanoid"]
+
+                bait_health = humanoid and humanoid["Health"] or nil
 
                 if stood and stood["Position"]["Magnitude"] < 9e5 then
                     bait_position = cframe_new(stood["Position"])
                 else
+                    -- A few random spots are tried and the first that no gun in the server reaches is used: when every one is covered there is no
+                    -- bait this time, instead of a visit that is cut short on its first frame
                     local bait_range = flags["void_hide_bait_distance"]
-                    bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
-                end
+                    bait_position = nil
 
-                local humanoid = local_parts["Humanoid"]
-                bait_health = humanoid and humanoid["Health"] or nil
+                    for _ = 1, 6 do
+                        local candidate = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
+
+                        if not bait_unsafe(candidate["Position"], hrp) then
+                            bait_position = candidate
+                            break
+                        end
+                    end
+                end
 
                 return false
             elseif difference < flags["void_hide_bait_time"] and bait_position then
