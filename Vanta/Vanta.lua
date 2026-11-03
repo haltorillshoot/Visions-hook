@@ -279,6 +279,8 @@ function Target.clear()
 	setTarget(nil)
 end
 
+Target.set = setTarget
+
 local lastAutoPick = 0
 
 ---Keeps the target honest every frame: left the game, respawned, died or got knocked.
@@ -1170,7 +1172,8 @@ function AutoFire.step(now)
 		return
 	end
 
-	local root = Target.character and Target.character:FindFirstChild(flag("autofire_hitbox", "head") == "head" and "Head" or "HumanoidRootPart")
+	-- Hitboxes: the head when it is ticked (it wins over the others), otherwise the torso for body, arms and legs
+	local root = Target.character and Target.character:FindFirstChild(picked("autofire_hitbox", "head", { "head" }) and "Head" or "HumanoidRootPart")
 
 	Aim.set(aim, root, now, 0.2)
 	AutoFire.lastShot[chosen.tool] = now
@@ -1560,9 +1563,6 @@ local function finish(success)
 	local held = Shop.heldTool
 	Shop.heldTool = nil
 
-	local character = localPlayer.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
 	if held and held.Parent == localPlayer:FindFirstChild("Backpack") and humanoid then
 		humanoid:EquipTool(held)
 	end
@@ -1815,6 +1815,261 @@ function Shop.auto(now)
 	end
 end
 
+---@module AntiStomp
+---While the character is knocked it is kept out of reach, so there is nothing for anyone to stomp. (Visions-hook also kills the character on purpose;
+---this does not: the character just stands in the void until it gets up or dies.)
+local AntiStomp = { spot = nil }
+
+function AntiStomp.want()
+	if not flag("antistomp_enabled", false) or not Players.knocked(localPlayer) then
+		AntiStomp.spot = nil
+
+		return nil
+	end
+
+	AntiStomp.spot = AntiStomp.spot or CFrame.new(math.random(-1e8, 1e8), 5e7, math.random(-1e8, 1e8))
+
+	return AntiStomp.spot
+end
+
+---@module QuickDraw
+---Holding a knife or nothing: takes out the gun that reaches the target when it comes in range, and puts the knife back after.
+local QuickDraw = { back = nil, drawn = nil, lastSeen = 0, lastEquip = 0 }
+
+function QuickDraw.step(now)
+	if not flag("quickdraw_enabled", false) then
+		QuickDraw.back, QuickDraw.drawn = nil, nil
+
+		return
+	end
+
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local aim = Follow.aim
+
+	if not humanoid or humanoid.Health <= 0 or not character then
+		return
+	end
+
+	local held = character:FindFirstChildOfClass("Tool")
+	local heldIsGun = held and held:FindFirstChild("Ammo") ~= nil
+	local myPosition = Body.spot or (Players.root(localPlayer) and Players.root(localPlayer).Position)
+
+	if aim and myPosition and not Util.inVoid(aim) and not heldIsGun and now - QuickDraw.lastEquip > 0.2 then
+		local best, bestRange = nil, math.huge
+
+		for _, info in allGuns() do
+			if info.ammo > 0 and picked("quickdraw_guns", info.tool.Name:sub(2, -2):lower(), { "rifle", "double-barrel sg", "flintlock", "revolver" })
+				and (aim - myPosition).Magnitude <= info.range and info.range < bestRange then
+				best, bestRange = info.tool, info.range
+			end
+		end
+
+		if best then
+			QuickDraw.back = held
+			QuickDraw.drawn = best
+			QuickDraw.lastSeen = now
+			QuickDraw.lastEquip = now
+			humanoid:EquipTool(best)
+		end
+
+		return
+	end
+
+	-- the target is out of every drawn gun's reach for a second: the knife (or empty hands) comes back
+	if QuickDraw.drawn and heldIsGun then
+		local info = gunInfo(held)
+
+		if aim and myPosition and info and (aim - myPosition).Magnitude <= info.range then
+			QuickDraw.lastSeen = now
+		elseif now - QuickDraw.lastSeen > 1 then
+			local back = QuickDraw.back
+
+			QuickDraw.drawn, QuickDraw.back = nil, nil
+			QuickDraw.lastEquip = now
+
+			if back and back.Parent == localPlayer:FindFirstChild("Backpack") then
+				humanoid:EquipTool(back)
+			else
+				humanoid:UnequipTools()
+			end
+		end
+	end
+end
+
+---@module AdStrafe
+---Taps A and D in turn while there is a target, so the character sidesteps like a player would.
+local AdStrafe = { held = nil, switchedAt = 0 }
+
+local virtualInput = nil
+
+local function sendKey(down, key)
+	if not virtualInput then
+		local ok, service = pcall(game.GetService, game, "VirtualInputManager")
+
+		virtualInput = ok and service or false
+	end
+
+	if virtualInput then
+		pcall(virtualInput.SendKeyEvent, virtualInput, down, key, false, game)
+	end
+end
+
+function AdStrafe.release()
+	if AdStrafe.held then
+		sendKey(false, AdStrafe.held)
+		AdStrafe.held = nil
+	end
+end
+
+function AdStrafe.step(now)
+	local active = flag("adstrafe_enabled", false) and Target.player ~= nil and not Players.knocked(localPlayer)
+		and userInputService:GetFocusedTextBox() == nil
+
+	if not active then
+		AdStrafe.release()
+
+		return
+	end
+
+	if AdStrafe.held == nil or now - AdStrafe.switchedAt >= flag("adstrafe_interval", 0.22) then
+		local nextKey = AdStrafe.held == Enum.KeyCode.A and Enum.KeyCode.D or Enum.KeyCode.A
+
+		AdStrafe.release()
+		AdStrafe.held = nextKey
+		AdStrafe.switchedAt = now
+		sendKey(true, nextKey)
+	end
+end
+
+---@module FullAuto
+---Hold the left mouse button to keep shooting the gun in your hands. Speed is a share of the gun's own fire rate; it never goes past the gun's cooldown,
+---which the server enforces.
+local FullAuto = { lastShot = 0 }
+
+function FullAuto.step(now)
+	if not flag("fullauto_enabled", false) or not userInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or userInputService:GetFocusedTextBox() then
+		return
+	end
+
+	local character = localPlayer.Character
+	local tool = character and character:FindFirstChildOfClass("Tool")
+	local info = tool and gunInfo(tool)
+
+	if not info or info.ammo <= 0 then
+		return
+	end
+
+	local share = math.clamp(flag("fullauto_speed", 100), 1, 100) / 100
+	local interval = (info.cooldown + 0.015) / share
+
+	if now - FullAuto.lastShot >= interval then
+		FullAuto.lastShot = now
+		tool:Activate()
+	end
+end
+
+---@module Bounty
+---Da Hood shows the one bounty there is on every poster in Workspace.MAP.BountyPosters (Texts.PlayerName, a SurfaceGui TextLabel; blank while nobody has one).
+---Anti Bounty: your name on the posters, and you leave the server. Auto Bounty: whoever is on the posters becomes the target, and the features needed to
+---hunt them are switched on; once nobody here has the bounty, what it switched on goes back off.
+local Bounty = { turnedOn = {}, hunted = nil, left = false, checkedAt = 0 }
+
+local BOUNTY_FLAGS = { "ragebot_enabled", "follow_enabled", "autofire_enabled", "autostomp_enabled", "autofire_reload" }
+
+local function setFlag(name, value)
+	local setter = library and library.config_flags[name]
+
+	if setter then
+		setter(value)
+	end
+end
+
+---The player named on the first poster that has a name.
+local function bountyPlayer()
+	local map = workspace:FindFirstChild("MAP")
+	local posters = map and map:FindFirstChild("BountyPosters")
+
+	for _, poster in posters and posters:GetChildren() or {} do
+		local texts = poster:FindFirstChild("Texts")
+		local holder = texts and texts:FindFirstChild("PlayerName")
+		local gui = holder and holder:FindFirstChildOfClass("SurfaceGui")
+		local label = gui and gui:FindFirstChildOfClass("TextLabel")
+		local name = label and label.Text
+
+		if name and name ~= "" then
+			return playersService:FindFirstChild(name), name
+		end
+	end
+
+	return nil, nil
+end
+
+Bounty.read = bountyPlayer
+
+function Bounty.release()
+	for name in Bounty.turnedOn do
+		setFlag(name, false)
+	end
+
+	Bounty.turnedOn = {}
+
+	if Bounty.hunted and Target.player == Bounty.hunted then
+		Target.clear()
+	end
+
+	Bounty.hunted = nil
+end
+
+function Bounty.step(now)
+	if now - Bounty.checkedAt < 0.5 then
+		return
+	end
+
+	Bounty.checkedAt = now
+
+	local player, name = bountyPlayer()
+
+	if flag("antibounty_enabled", false) and player == localPlayer and not Bounty.left then
+		Bounty.left = true
+
+		if notifications then
+			notifications:create_notification({ name = "anti bounty: a bounty is on you, leaving" })
+		end
+
+		pcall(localPlayer.Kick, localPlayer, "Anti Bounty: a bounty was put on you, so you left the server.")
+
+		return
+	end
+
+	if not flag("autobounty_enabled", false) or not player or player == localPlayer then
+		if next(Bounty.turnedOn) or Bounty.hunted then
+			Bounty.release()
+		end
+
+		return
+	end
+
+	for _, flagName in BOUNTY_FLAGS do
+		if flag(flagName, false) ~= true then
+			setFlag(flagName, true)
+			Bounty.turnedOn[flagName] = true
+		end
+	end
+
+	if Bounty.hunted ~= player then
+		Bounty.hunted = player
+
+		if notifications then
+			notifications:create_notification({ name = "auto bounty: going after " .. name })
+		end
+	end
+
+	if Target.player ~= player then
+		Target.set(player)
+	end
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -1833,21 +2088,27 @@ function Ragebot.start()
 		end
 	end
 
+	Body.addProvider("antistomp", AntiStomp.want)
 	Body.addProvider("autostomp", AutoStomp.want)
 	Body.addProvider("voidspam", VoidSpam.want)
 	Body.addProvider("follow", Follow.want)
 	VoidSpam.gunReady = AutoFire.anyReady
 
 	Shop.watchCash(Ragebot.maid)
+	Ragebot.maid:give(AdStrafe.release)
+	Ragebot.maid:give(Bounty.release)
 
 	Ragebot.maid:give(runService.Heartbeat:Connect(function()
 		local now = os.clock()
 
-		-- the shop works with the ragebot off; nothing else moves the body then
+		-- the features that need no target: the shop, the bounty watch and the held-trigger full auto
 		Shop.auto(now)
+		Bounty.step(now)
+		FullAuto.step(now)
 
 		if not flag("ragebot_enabled", false) then
 			Follow.aim = nil
+			AdStrafe.release()
 
 			if not Shop.busy() then
 				Body.apply(now)
@@ -1882,7 +2143,10 @@ function Ragebot.start()
 
 		if not Shop.busy() then
 			AutoFire.step(now)
+			QuickDraw.step(now)
 		end
+
+		AdStrafe.step(now)
 	end))
 
 	Ragebot.maid:give(runService.PreRender:Connect(Body.restore))
@@ -1946,7 +2210,13 @@ stompSection:toggle({ name = "stop when target dead", flag = "autostomp_stop_dea
 local fireColumn = rage:column({})
 local fireSection = fireColumn:section({ name = "auto fire" })
 fireSection:toggle({ name = "enabled", flag = "autofire_enabled" })
-fireSection:dropdown({ name = "hitbox", flag = "autofire_hitbox", items = { "head", "torso" }, default = "head" })
+fireSection:dropdown({ name = "hitboxes", flag = "autofire_hitbox", items = { "head", "body", "arms", "legs" }, default = { "head" }, multi = true })
+fireSection:toggle({ name = "full auto (hold mouse)", flag = "fullauto_enabled" })
+fireSection:slider({ name = "full auto speed", flag = "fullauto_speed", min = 1, max = 100, default = 100, interval = 1, suffix = "%" })
+fireSection:toggle({ name = "quick draw", flag = "quickdraw_enabled" })
+fireSection:dropdown({ name = "quick draw guns", flag = "quickdraw_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock" }, default = { "rifle", "double-barrel sg", "flintlock", "revolver" }, multi = true })
+fireSection:toggle({ name = "a/d strafe", flag = "adstrafe_enabled" })
+fireSection:slider({ name = "a/d interval", flag = "adstrafe_interval", min = 0.05, max = 1, default = 0.22, interval = 0.01, suffix = "s" })
 fireSection:toggle({ name = "auto reload", flag = "autofire_reload", default = true })
 fireSection:slider({ name = "gun gap", flag = "autofire_gap", min = 0, max = 300, default = 40, interval = 5, suffix = "ms" })
 
@@ -2069,6 +2339,11 @@ loadoutSection:slider({ name = "ammo packs", flag = "shop_loadout_packs", min = 
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})
 local miscSection = miscColumn:section({ name = "script" })
+local utilitySection = miscColumn:section({ name = "utility" })
+utilitySection:toggle({ name = "anti bounty", flag = "antibounty_enabled" })
+utilitySection:toggle({ name = "auto bounty", flag = "autobounty_enabled" })
+utilitySection:toggle({ name = "anti stomp", flag = "antistomp_enabled" })
+
 miscSection:button({ name = "test notification", callback = function()
 	notifications:create_notification({ name = "vanta is running" })
 end })
@@ -2089,6 +2364,6 @@ miscSection:button({ name = "unload", callback = unload })
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })
