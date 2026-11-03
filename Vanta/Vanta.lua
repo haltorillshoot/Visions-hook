@@ -1328,6 +1328,23 @@ function Visuals.render()
 		removeDrawing("aafov")
 	end
 
+	if flag("silent_enabled", false) and flag("silent_show_fov", false) then
+		local colour, opacity = pickerColor("silent_fov_color", Color3.fromRGB(180, 180, 255))
+
+		drawing("Circle", "safov", {
+			Visible = true,
+			Position = mouseLocation,
+			Radius = flag("silent_fov", 120),
+			Thickness = 1,
+			NumSides = 64,
+			Filled = false,
+			Color = colour,
+			Transparency = opacity,
+		})
+	else
+		removeDrawing("safov")
+	end
+
 	-- Tracer
 	if enabled and flag("tracer_show", false) and aim and not Util.inVoid(aim) then
 		local screen, onScreen = camera:WorldToViewportPoint(aim)
@@ -2330,13 +2347,15 @@ function Esp.render()
 	end
 end
 
----@module AimAssist
----Legit aimbot: while the key is held, eases the camera (or the mouse) toward the best player inside the FOV circle. Smoothing is separate for the
----horizontal and vertical axis; nothing is sent to the server, it only moves your own view.
-local AimAssist = { target = nil }
+---@module Legit
+---The legit bot: aim assist (moves your view toward a target while a key is held), silent aim (answers the game's own gun script with a position near the
+---target while you shoot) and the triggerbot (clicks when the crosshair is on a player). The three share one way to find a player, `Legit.best`,
+---which reads its FOV, distance, hitbox and visibility settings from the prefix of the feature that asks ("aimassist" or "silent"); the ignore options
+---are shared. None of them sends anything to the server except the shot your own gun script makes.
+local Legit = { target = nil, targetSince = 0, silentRoll = true, silentWasDown = false }
 
-local function aimPart(character)
-	local hitbox = flag("aimassist_hitbox", "head")
+local function legitPart(character, prefix)
+	local hitbox = flag(prefix .. "_hitbox", "head")
 
 	if hitbox == "head" then
 		return character:FindFirstChild("Head")
@@ -2347,8 +2366,8 @@ local function aimPart(character)
 	return character:FindFirstChild("HumanoidRootPart")
 end
 
-local function visibleFrom(origin, part, character)
-	if not flag("aimassist_visible", true) then
+local function visibleFrom(origin, part, character, prefix)
+	if not flag(prefix .. "_visible", true) then
 		return true
 	end
 
@@ -2360,31 +2379,59 @@ local function visibleFrom(origin, part, character)
 	return workspace:Raycast(origin, part.Position - origin, params) == nil
 end
 
-local function bestAimTarget()
+---Whether a player is one the legit features may use right now.
+local function legitUsable(player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if player == localPlayer or not humanoid or humanoid.Health <= 0 or Players.phase(player) == "respawning" then
+		return false
+	end
+
+	if flag("legit_ignore_knocked", true) and Players.knocked(player) then
+		return false
+	end
+
+	if flag("legit_ignore_protected", true) and Players.phase(player) == "protected" then
+		return false
+	end
+
+	return true
+end
+
+---Is this player inside the feature's FOV circle, range and line of sight? Returns the part to aim at.
+local function inReach(player, prefix, mouseLocation)
+	local part = legitPart(player.Character, prefix)
+
+	if not part or Util.inVoid(part.Position) or (part.Position - camera.CFrame.Position).Magnitude > flag(prefix .. "_distance", 500) then
+		return nil
+	end
+
+	local screen, onScreen = camera:WorldToViewportPoint(part.Position)
+
+	if not onScreen or (Vector2.new(screen.X, screen.Y) - mouseLocation).Magnitude > flag(prefix .. "_fov", 120) then
+		return nil
+	end
+
+	if not visibleFrom(camera.CFrame.Position, part, player.Character, prefix) then
+		return nil
+	end
+
+	return part, (Vector2.new(screen.X, screen.Y) - mouseLocation).Magnitude
+end
+
+---The usable player closest to the mouse inside the feature's FOV.
+---@param prefix string "aimassist" or "silent"
+function Legit.best(prefix)
 	local mouseLocation = userInputService:GetMouseLocation()
-	local fov = flag("aimassist_fov", 120)
-	local maxDistance = flag("aimassist_distance", 500)
 	local best, bestPart, bestScore = nil, nil, math.huge
 
 	for _, player in playersService:GetPlayers() do
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if legitUsable(player) then
+			local part, distance = inReach(player, prefix, mouseLocation)
 
-		if player ~= localPlayer and humanoid and humanoid.Health > 0 and Players.phase(player) ~= "respawning" then
-			local part = aimPart(character)
-
-			if part and not Util.inVoid(part.Position) and (part.Position - camera.CFrame.Position).Magnitude <= maxDistance then
-				local skip = (flag("aimassist_ignore_knocked", true) and Players.knocked(player))
-					or (flag("aimassist_ignore_protected", true) and Players.phase(player) == "protected")
-				local screen, onScreen = camera:WorldToViewportPoint(part.Position)
-
-				if not skip and onScreen then
-					local distance = (Vector2.new(screen.X, screen.Y) - mouseLocation).Magnitude
-
-					if distance <= fov and distance < bestScore and visibleFrom(camera.CFrame.Position, part, character) then
-						best, bestPart, bestScore = player, part, distance
-					end
-				end
+			if part and distance < bestScore then
+				best, bestPart, bestScore = player, part, distance
 			end
 		end
 	end
@@ -2392,18 +2439,38 @@ local function bestAimTarget()
 	return best, bestPart
 end
 
+---Keeps the current player for `Target swap cooldown` seconds before a better one is taken (the aim does not jump between players).
+local function stickyBest(prefix, now)
+	local current = Legit.target
+
+	if current and current.Parent == playersService and legitUsable(current) and now - Legit.targetSince < flag("legit_swap_cooldown", 0) then
+		local part = inReach(current, prefix, userInputService:GetMouseLocation())
+
+		if part then
+			return current, part
+		end
+	end
+
+	local player, part = Legit.best(prefix)
+
+	if player ~= Legit.target then
+		Legit.target, Legit.targetSince = player, now
+	end
+
+	return player, part
+end
+
+---@module AimAssist
+local AimAssist = {}
+
 function AimAssist.step()
 	local bind = flag("aimassist_key")
 
 	if not flag("aimassist_enabled", false) or type(bind) ~= "table" or not bind.active or userInputService:GetFocusedTextBox() then
-		AimAssist.target = nil
-
 		return
 	end
 
-	local player, part = bestAimTarget()
-
-	AimAssist.target = player
+	local _, part = stickyBest("aimassist", os.clock())
 
 	if not part then
 		return
@@ -2431,6 +2498,153 @@ function AimAssist.step()
 	local pitch = math.clamp(currentPitch + (wantedPitch - currentPitch) / vertical, -1.45, 1.45)
 
 	camera.CFrame = CFrame.new(cframe.Position) * CFrame.fromOrientation(pitch, currentYaw + yawDelta / horizontal, 0)
+end
+
+---@module SilentAim
+---While the left mouse button is held, the game's gun script is answered with a position on the best player inside the silent FOV, as long as that
+---position is within Max Curve degrees of where the mouse is pointing. Redirect Chance is rolled once per press. The ragebot's own shots are left alone.
+local SilentAim = {}
+
+function SilentAim.step(now)
+	if not flag("silent_enabled", false) then
+		return
+	end
+
+	local down = userInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) and userInputService:GetFocusedTextBox() == nil
+
+	if down and not Legit.silentWasDown then
+		Legit.silentRoll = math.random() * 100 < flag("silent_chance", 100)
+	end
+
+	Legit.silentWasDown = down
+
+	if not down or not Legit.silentRoll or (Aim.position and now < Aim.expires) then
+		return
+	end
+
+	local _, part = Legit.best("silent")
+
+	if not part then
+		return
+	end
+
+	local mouseLocation = userInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+	local toward = (part.Position - ray.Origin)
+	local angle = math.deg(math.acos(math.clamp(ray.Direction:Dot(toward.Unit), -1, 1)))
+
+	if angle > flag("silent_curve", 30) then
+		return
+	end
+
+	local position = part.Position
+
+	if flag("silent_flat", false) then
+		-- Dont Curve Vertically: the height stays where the mouse is pointing, only the sideways part is moved
+		local along = toward.Magnitude
+		local ahead = ray.Origin + ray.Direction * along
+
+		position = Vector3.new(position.X, ahead.Y, position.Z)
+	end
+
+	Aim.set(position, part, now, 0.1)
+end
+
+---@module Triggerbot
+---Clicks (activates the gun in hand) when the mouse is over a usable player's chosen hitbox: it must stay over the same part for Hover Time, clicks are
+---Cooldown apart and wait Delay (and are dropped if the mouse left by then), and the check itself runs every Refresh Rate seconds.
+local Triggerbot = { checkedAt = 0, lastPart = nil, hoverSince = 0, lastClick = 0, pending = false }
+
+local TORSO_PARTS = { UpperTorso = true, LowerTorso = true, HumanoidRootPart = true, Torso = true }
+local ARM_PARTS = { LeftUpperArm = true, RightUpperArm = true, LeftLowerArm = true, RightLowerArm = true, LeftHand = true, RightHand = true, ["Left Arm"] = true, ["Right Arm"] = true }
+local LEG_PARTS = { LeftUpperLeg = true, RightUpperLeg = true, LeftLowerLeg = true, RightLowerLeg = true, LeftFoot = true, RightFoot = true, ["Left Leg"] = true, ["Right Leg"] = true }
+
+local function hitboxWanted(partName)
+	if partName == "Head" then
+		return picked("trigger_hitboxes", "head", { "head", "body" })
+	elseif TORSO_PARTS[partName] then
+		return picked("trigger_hitboxes", "body", { "head", "body" })
+	elseif ARM_PARTS[partName] then
+		return picked("trigger_hitboxes", "arms", { "head", "body" })
+	elseif LEG_PARTS[partName] then
+		return picked("trigger_hitboxes", "legs", { "head", "body" })
+	end
+
+	return false
+end
+
+function Triggerbot.step(now)
+	if not flag("trigger_enabled", false) then
+		Triggerbot.lastPart = nil
+
+		return
+	end
+
+	if now - Triggerbot.checkedAt < flag("trigger_refresh", 0) then
+		return
+	end
+
+	Triggerbot.checkedAt = now
+
+	local character = localPlayer.Character
+	local tool = character and character:FindFirstChildOfClass("Tool")
+	local info = tool and gunInfo(tool)
+
+	if not info or info.ammo <= 0 or userInputService:GetFocusedTextBox() then
+		Triggerbot.lastPart = nil
+
+		return
+	end
+
+	local mouseLocation = userInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+	local maxDistance = flag("trigger_distance", 0)
+
+	maxDistance = maxDistance == 0 and info.range or maxDistance
+
+	local params = RaycastParams.new()
+
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+
+	local result = workspace:Raycast(ray.Origin, ray.Direction * maxDistance, params)
+	local part = result and result.Instance
+	local model = part and part:FindFirstAncestorOfClass("Model")
+	local player = model and playersService:GetPlayerFromCharacter(model)
+
+	if not (part and player and legitUsable(player) and hitboxWanted(part.Name)) then
+		Triggerbot.lastPart = nil
+
+		return
+	end
+
+	if Triggerbot.lastPart ~= part then
+		Triggerbot.hoverSince = now
+	end
+
+	Triggerbot.lastPart = part
+
+	if Triggerbot.pending or now - Triggerbot.lastClick < flag("trigger_cooldown", 0) or now - Triggerbot.hoverSince < flag("trigger_hover", 0) then
+		return
+	end
+
+	Triggerbot.pending = true
+
+	task.delay(flag("trigger_delay", 0), function()
+		Triggerbot.pending = false
+
+		-- the mouse left the target while the click waited
+		if Triggerbot.lastPart ~= part or not flag("trigger_enabled", false) then
+			return
+		end
+
+		local current = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+
+		if current then
+			Triggerbot.lastClick = os.clock()
+			current:Activate()
+		end
+	end)
 end
 
 ---@module Movement
@@ -3183,6 +3397,12 @@ function Ragebot.start()
 	Ragebot.maid:give(runService.RenderStepped:Connect(Feedback.render))
 	Feedback.start(Ragebot.maid)
 	Ragebot.maid:give(runService.RenderStepped:Connect(AimAssist.step))
+	Ragebot.maid:give(runService.RenderStepped:Connect(function()
+		local now = os.clock()
+
+		SilentAim.step(now)
+		Triggerbot.step(now)
+	end))
 	Ragebot.maid:give(runService.Stepped:Connect(Movement.stepped))
 	Ragebot.maid:give(Esp.clear)
 	Ragebot.maid:give(Movement.restore)
@@ -3419,8 +3639,7 @@ aimSection:slider({ name = "max distance", flag = "aimassist_distance", min = 50
 aimSection:slider({ name = "horizontal smoothing", flag = "aimassist_h_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
 aimSection:slider({ name = "vertical smoothing", flag = "aimassist_v_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
 aimSection:toggle({ name = "visible only", flag = "aimassist_visible", default = true })
-aimSection:toggle({ name = "ignore knocked", flag = "aimassist_ignore_knocked", default = true })
-aimSection:toggle({ name = "ignore spawn protected", flag = "aimassist_ignore_protected", default = true })
+aimSection:slider({ name = "target swap cooldown", flag = "legit_swap_cooldown", min = 0, max = 2, default = 0, interval = 0.05, suffix = "s" })
 aimSection:toggle({ name = "show fov", flag = "aimassist_show_fov" })
 aimSection:colorpicker({ name = "fov colour", flag = "aimassist_fov_color", color = Color3.fromRGB(255, 255, 255) })
 
@@ -3492,6 +3711,32 @@ local notifySection = hitsColumn3:section({ name = "shot notifications" })
 notifySection:toggle({ name = "notify hits", flag = "fb_notify_hits" })
 notifySection:toggle({ name = "notify shots with no hit", flag = "fb_notify_miss" })
 
+local legitColumn2 = legit:column({})
+local sharedSection = legitColumn2:section({ name = "shared" })
+sharedSection:toggle({ name = "ignore knocked", flag = "legit_ignore_knocked", default = true })
+sharedSection:toggle({ name = "ignore spawn protected", flag = "legit_ignore_protected", default = true })
+
+local silentSection = legitColumn2:section({ name = "silent aim" })
+silentSection:toggle({ name = "enabled", flag = "silent_enabled" })
+silentSection:dropdown({ name = "hitbox", flag = "silent_hitbox", items = { "head", "chest", "root" }, default = "head" })
+silentSection:slider({ name = "field of view", flag = "silent_fov", min = 10, max = 800, default = 120, interval = 1, suffix = "px" })
+silentSection:slider({ name = "max distance", flag = "silent_distance", min = 50, max = 3000, default = 500, interval = 10, suffix = " st" })
+silentSection:slider({ name = "max curve", flag = "silent_curve", min = 1, max = 90, default = 30, interval = 1, suffix = "deg" })
+silentSection:toggle({ name = "dont curve vertically", flag = "silent_flat" })
+silentSection:slider({ name = "redirect chance", flag = "silent_chance", min = 0, max = 100, default = 100, interval = 1, suffix = "%" })
+silentSection:toggle({ name = "visible only", flag = "silent_visible", default = true })
+silentSection:toggle({ name = "show fov", flag = "silent_show_fov" })
+silentSection:colorpicker({ name = "fov colour", flag = "silent_fov_color", color = Color3.fromRGB(180, 180, 255) })
+
+local triggerSection = legitColumn2:section({ name = "triggerbot" })
+triggerSection:toggle({ name = "enabled", flag = "trigger_enabled" })
+triggerSection:dropdown({ name = "hitboxes", flag = "trigger_hitboxes", items = { "head", "body", "arms", "legs" }, default = { "head", "body" }, multi = true })
+triggerSection:slider({ name = "max distance (0 = gun range)", flag = "trigger_distance", min = 0, max = 2500, default = 0, interval = 10, suffix = " st" })
+triggerSection:slider({ name = "refresh rate", flag = "trigger_refresh", min = 0, max = 0.5, default = 0, interval = 0.01, suffix = "s" })
+triggerSection:slider({ name = "hover time", flag = "trigger_hover", min = 0, max = 0.3, default = 0, interval = 0.01, suffix = "s" })
+triggerSection:slider({ name = "cooldown", flag = "trigger_cooldown", min = 0, max = 1, default = 0, interval = 0.01, suffix = "s" })
+triggerSection:slider({ name = "delay", flag = "trigger_delay", min = 0, max = 0.5, default = 0, interval = 0.01, suffix = "s" })
+
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})
 local miscSection = miscColumn:section({ name = "script" })
@@ -3530,6 +3775,6 @@ miscSection:button({ name = "unload", callback = unload })
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, aimassist = AimAssist, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })

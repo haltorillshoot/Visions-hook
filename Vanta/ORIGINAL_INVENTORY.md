@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 136, Partial 21, No 353, Declined 7.
+**Totals (517 controls):** Yes 152, Partial 24, No 326, Declined 15.
 
 ## panel_section
 
@@ -973,8 +973,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| target swap cooldown | slider | No |  |
-| target distance | slider | No |  |
+| target swap cooldown | slider | Yes | Legit (sticky target) |
+| target distance | slider | Partial | per-feature max distance |
 
 ## legitbot_settings_section
 
@@ -985,8 +985,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | target bind | keybind | No |  |
 | untarget when | dropdown | No |  |
 | target statuses | dropdown | No |  |
-| ignore if | dropdown | No |  |
-| field of view | slider | No |  |
+| ignore if | dropdown | Partial | Legit (shared ignore knocked / protected; per-feature FOV) |
+| field of view | slider | Partial | Legit (shared ignore knocked / protected; per-feature FOV) |
 
 ## aim_assist_section
 
@@ -1027,67 +1027,67 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| silent aim | toggle | No |  |
-| field of view | slider | No |  |
-| max curve | slider | No |  |
-| bullet manipulation | toggle | No |  |
-| range enhancer | toggle | No |  |
-| double tap | toggle | No |  |
+| silent aim | toggle | Yes | SilentAim |
+| field of view | slider | Yes | SilentAim |
+| max curve | slider | Yes | SilentAim |
+| bullet manipulation | toggle | Declined | changes the shot data claimed to the server / exceeds the server fire rate |
+| range enhancer | toggle | Declined | changes the shot data claimed to the server / exceeds the server fire rate |
+| double tap | toggle | Declined | changes the shot data claimed to the server / exceeds the server fire rate |
 
 ## silent_aim_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| hitbox | dropdown | No |  |
-| max distance | slider | No |  |
+| hitbox | dropdown | Yes | SilentAim |
+| max distance | slider | Yes | SilentAim |
 | multipoint | slider | No |  |
-| force hit | toggle | No |  |
-| redirect chance | slider | No |  |
+| force hit | toggle | Declined | claims a hit the shot did not make |
+| redirect chance | slider | Yes | SilentAim |
 
 ## silent_aim_field_of_view_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| show fov | toggle | No |  |
+| show fov | toggle | Yes | Visuals |
 | outline | colorpicker | No |  |
 
 ## silent_aim_max_curve_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| dont curve vertically | toggle | No |  |
+| dont curve vertically | toggle | Yes | SilentAim |
 
 ## silent_aim_bullet_manipulation_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| hit checker | toggle | No |  |
-| manipulated indicator | toggle | No |  |
+| hit checker | toggle | Declined | part of bullet manipulation |
+| manipulated indicator | toggle | Declined | part of bullet manipulation |
 
 ## triggerbot_section
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| triggerbot | toggle | No |  |
+| triggerbot | toggle | Yes | Triggerbot |
 
 ## triggerbot_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| max distance | slider | No |  |
-| hitboxes | dropdown | No |  |
-| refresh rate | slider | No |  |
-| hover time | slider | No |  |
-| cooldown | slider | No |  |
-| delay | slider | No |  |
+| max distance | slider | Yes | Triggerbot |
+| hitboxes | dropdown | Yes | Triggerbot |
+| refresh rate | slider | Yes | Triggerbot |
+| hover time | slider | Yes | Triggerbot |
+| cooldown | slider | Yes | Triggerbot |
+| delay | slider | Yes | Triggerbot |
 
 ## legitbot_other_section
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| reduce shotgun spread | toggle | No |  |
+| reduce shotgun spread | toggle | Declined | changes the shot data claimed to the server |
 | remove recoil | toggle | No |  |
-| range enhancer | toggle | No |  |
+| range enhancer | toggle | Declined | changes the shot data claimed to the server |
 | quick draw | toggle | Partial | QuickDraw |
 | lead fast targets | toggle | Partial | Resolver lead |
 
