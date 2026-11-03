@@ -17515,6 +17515,423 @@ local function buildInterface()
 		end)
 	end
 
+	-- Raknet desync test: a gated desync research module (Raknet/DesyncResearch.lua), not a recorder. The packet write only switches on in a private server
+	-- or on a place this account created, and only while every other player in the server is a trusted test account; it switches itself off when that stops
+	-- being true, after the time limit, or after repeated errors. Test mode is read only (it samples this character and compares it with the other test
+	-- client through the executor workspace) and works in any server. The module comes from the executor workspace first, the repo otherwise.
+	do
+		local desync = nil
+		local notify = menu["new_notification"]
+		local notifyEvents = true
+		local guard = false
+		local toggles = {}
+		local pending = { role = "primary", trusted = "", maxSeconds = 20, sampleRate = 10, jumpStuds = 8, phaseSeconds = 8, walk = false, verifyWrites = true }
+
+		-- Errors always show, the rest follows the Notifications switch
+		local function say(text, kind)
+			if kind == 3 or notifyEvents then
+				notify(text, kind or 2)
+			end
+		end
+
+		local function number(value, digits)
+			return value and string.format("%." .. digits .. "f", value) or "-"
+		end
+
+		local function applyConfig(module)
+			module:setConfig({
+				maxSeconds = pending.maxSeconds,
+				sampleRate = pending.sampleRate,
+				jumpStuds = pending.jumpStuds,
+				walk = pending.walk,
+				verifyWrites = pending.verifyWrites,
+				trustedUserIds = module.parseUserIds(pending.trusted),
+			})
+			module:setRole(pending.role)
+		end
+
+		local function loadDesync()
+			if desync then
+				return desync
+			end
+
+			local ok, source = pcall(readfile, "DesyncResearch.lua")
+
+			if not ok or type(source) ~= "string" or source == "" then
+				ok, source = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/Raknet/DesyncResearch.lua")
+			end
+
+			local chunk = ok and type(source) == "string" and loadstring(source, "=DesyncResearch")
+
+			if not chunk then
+				notify("Raknet Desync: module could not be loaded", 3)
+				return nil
+			end
+
+			desync = chunk().new({
+				notify = say,
+				playerAdded = Players.PlayerAdded,
+				heartbeat = game:GetService("RunService").Heartbeat,
+			})
+
+			applyConfig(desync)
+
+			return desync
+		end
+
+		-- Put a toggle back without running its own switch-on/off logic again
+		local function setToggle(name, value)
+			local toggle = toggles[name]
+
+			if toggle and toggle:GetValue() ~= value then
+				guard = true
+				pcall(toggle.SetValue, toggle, value)
+				guard = false
+			end
+		end
+
+		local function printReport()
+			if not desync then
+				return print("[DesyncResearch] not loaded")
+			end
+
+			print("[DesyncResearch] " .. desync:summary())
+
+			local probe = desync:probe()
+
+			if probe then
+				print(string.format("  field probe: packets=%.0f u32 min=%.0f max=%.0f last=%.0f distinct=%d%s byte0IsId=%s size=%d..%d", probe.packets, probe.min, probe.max, probe.last, probe.distinct, probe.distinctCapped and "+" or "", tostring(probe.byte0IsId), probe.minSize, probe.maxSize))
+			end
+
+			for _, row in ipairs(desync:report()) do
+				print(string.format("  [%s] samples=%d stale=%d peer=%s written=%d | gap now mean=%s max=%s | delay mean=%s max=%s | gap at delay mean=%s max=%s | updates=%d interval mean=%s max=%s | jumps=%d",
+					row.phase, row.samples, row.stale, row.peerState, row.peerWritten, number(row.errNowMean, 2), number(row.errNowMax, 2), number(row.lagMean, 3), number(row.lagMax, 3),
+					number(row.errAtLagMean, 2), number(row.errAtLagMax, 2), row.updates, number(row.gapMean, 3), number(row.gapMax, 3), row.jumps))
+			end
+
+			local events = desync.events
+
+			for index = math.max(1, #events - 9), #events do
+				print(string.format("  event %s %s", events[index].kind, tostring(events[index].detail)))
+			end
+		end
+
+		local function printSuite(result)
+			for _, entry in ipairs(result.phases) do
+				print(string.format("[DesyncResearch] suite %s: packets=%d written=%d%s", entry.label, entry.packets, entry.written, entry.skipped and (" SKIPPED: " .. tostring(entry.skipped)) or ""))
+			end
+
+			print("[DesyncResearch] suite " .. (result.complete and "complete" or "INCOMPLETE") .. ", phase length " .. result.seconds .. "s")
+		end
+
+		local function statusText()
+			if not desync then
+				return "Desync: off"
+			end
+
+			local status = desync:status()
+			local text = "Desync: " .. status.state
+
+			if status.remaining then
+				text = text .. " (" .. math.ceil(status.remaining) .. "s left)"
+			elseif status.state == "blocked" or status.state == "failed" then
+				text = text .. ": " .. tostring(status.reason)
+			end
+
+			if status.testMode then
+				text = text .. " | " .. status.role .. " " .. status.phase
+			end
+
+			return text
+		end
+
+		local function syncText()
+			if not desync or not desync.testMode then
+				return "Clients: test mode off"
+			end
+
+			if not desync:peerId() then
+				return "Clients: set the trusted account IDs"
+			end
+
+			local states = desync:compareStates()
+
+			if not states.peer then
+				return "Clients: waiting for the other client"
+			end
+
+			return string.format("Clients: peer %s / %s%s", tostring(states.peer.state), tostring(states.peer.phase), states.inSync and "" or " (phase differs)")
+		end
+
+		rows.raknetDesync = Other:AddLabel("Raknet Desync Test")
+		rows.raknetDesync:ToolTip("Controlled desync test: overwrites one field of the outgoing physics packet while on. It only turns on in a private server or your own place where every other player is a trusted test account, and turns itself off after the time limit. Open the gear for test mode, the roles and the diagnostics")
+		toggles.desync = addBindableToggle(rows.raknetDesync, "Raknet Desync Test", {
+			Default = false,
+			Flag = "raknet_desync",
+			Callback = function(value)
+				if guard then
+					return
+				end
+
+				if not value then
+					if desync then
+						desync:disable()
+					end
+
+					return
+				end
+
+				local loaded = loadDesync()
+
+				if not loaded then
+					return setToggle("desync", false)
+				end
+
+				applyConfig(loaded)
+
+				local ok, reason = loaded:enable()
+
+				if not ok then
+					notify("Raknet Desync: " .. tostring(reason), 3)
+					setToggle("desync", false)
+				end
+			end,
+		})
+
+		rows.raknetDesyncStatus = Other:AddLabel("Desync: off")
+		rows.raknetDesyncSync = Other:AddLabel("Clients: test mode off")
+
+		local desyncOptions = rows.raknetDesync:AddOption()
+
+		toggles.test = desyncOptions:AddLabel("Test Mode"):AddToggle({
+			Default = false,
+			Flag = "raknet_desync_test",
+			Callback = function(value)
+				if guard then
+					return
+				end
+
+				if not value then
+					if desync then
+						desync:stopTest()
+					end
+
+					return
+				end
+
+				local loaded = loadDesync()
+
+				if not loaded then
+					return setToggle("test", false)
+				end
+
+				applyConfig(loaded)
+
+				local ok, reason = loaded:startTest(pending.role)
+
+				if not ok then
+					notify("Raknet Desync: " .. tostring(reason), 3)
+					setToggle("test", false)
+				end
+			end,
+		})
+
+		desyncOptions:AddLabel("Role"):AddDropdown({
+			Default = "Primary",
+			Values = { "Primary", "Observer" },
+			Flag = "raknet_desync_role",
+			Callback = function(value)
+				pending.role = tostring(value) == "Observer" and "observer" or "primary"
+
+				if desync then
+					desync:setRole(pending.role)
+				end
+			end,
+		})
+
+		desyncOptions:AddLabel("Trusted Account IDs"):AddTextInput({
+			Default = "",
+			Placeholder = "both test account user ids, e.g. 123, 456",
+			Flag = "raknet_desync_trusted",
+			Callback = function(value)
+				pending.trusted = tostring(value or "")
+
+				if desync then
+					applyConfig(desync)
+				end
+			end,
+		})
+
+		local function addSlider(name, key, flag, min, max, default)
+			desyncOptions:AddLabel(name):AddSlider({
+				Min = min,
+				Max = max,
+				Rounding = 0,
+				Default = default,
+				Flag = flag,
+				Callback = function(value)
+					pending[key] = value
+
+					if desync then
+						applyConfig(desync)
+					end
+				end,
+			})
+		end
+
+		addSlider("Time Limit (s)", "maxSeconds", "raknet_desync_limit", 1, 120, 20)
+		addSlider("Sample Rate (Hz)", "sampleRate", "raknet_desync_rate", 1, 30, 10)
+		addSlider("Jump Threshold (studs)", "jumpStuds", "raknet_desync_jump", 1, 100, 8)
+		addSlider("Suite Phase (s)", "phaseSeconds", "raknet_desync_phase", 2, 20, 8)
+
+		local function addSwitch(name, key, flag, default)
+			desyncOptions:AddLabel(name):AddToggle({
+				Default = default,
+				Flag = flag,
+				Callback = function(value)
+					pending[key] = value == true
+
+					if desync then
+						applyConfig(desync)
+					end
+				end,
+			})
+		end
+
+		addSwitch("Auto Walk (Primary)", "walk", "raknet_desync_walk", false)
+		addSwitch("Verify Writes", "verifyWrites", "raknet_desync_verify", true)
+
+		desyncOptions:AddLabel("Notifications"):AddToggle({
+			Default = true,
+			Flag = "raknet_desync_notify",
+			Callback = function(value)
+				notifyEvents = value == true
+			end,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Run Test Suite (Primary)",
+			Callback = function()
+				if not desync or not desync.testMode then
+					return notify("Raknet Desync: turn Test Mode on first", 3)
+				end
+
+				applyConfig(desync)
+
+				local ok, reason = desync:runSuite(pending.phaseSeconds, printSuite)
+
+				if not ok then
+					notify("Raknet Desync: " .. tostring(reason), 3)
+				end
+			end,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Cancel Test",
+			Callback = function()
+				if desync then
+					desync:cancelSuite()
+				end
+			end,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Status",
+			Callback = function()
+				notify(statusText() .. " | " .. syncText(), 3)
+			end,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Compare Clients (Console)",
+			Callback = function()
+				if not desync then
+					return print("[DesyncResearch] not loaded")
+				end
+
+				local states = desync:compareStates()
+
+				print(string.format("[DesyncResearch] this client: state=%s phase=%s role=%s packets=%d written=%d", states.mine.state, states.mine.phase, states.mine.role, states.mine.packets, states.mine.written))
+
+				if states.peer then
+					print(string.format("[DesyncResearch] other client: state=%s phase=%s role=%s packets=%s written=%s inSync=%s", tostring(states.peer.state), tostring(states.peer.phase), tostring(states.peer.role), tostring(states.peer.packets), tostring(states.peer.written), tostring(states.inSync)))
+				else
+					print("[DesyncResearch] other client: no data (test mode on both clients, trusted IDs set, same executor workspace)")
+				end
+			end,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Diagnostics (Console)",
+			Callback = printReport,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Save Results",
+			Callback = function()
+				if not desync then
+					return notify("Raknet Desync: nothing to save", 2)
+				end
+
+				local path, reason = desync:saveResults()
+
+				notify(path and ("saved " .. path) or ("not saved: " .. tostring(reason)), 3)
+			end,
+		})
+
+		desyncOptions:AddButton({
+			Name = "Clear Results",
+			Callback = function()
+				if desync then
+					desync:clearResults()
+					notify("Raknet Desync results cleared", 2)
+				end
+			end,
+		})
+
+		-- Status rows; the toggles follow the module when it switches itself off (time limit, gate closed, errors)
+		task.spawn(function()
+			local lastStatus, lastSync = nil, nil
+
+			while Session.Alive do
+				pcall(function()
+					local status = statusText()
+					local sync = syncText()
+
+					if status ~= lastStatus then
+						lastStatus = status
+						rows.raknetDesyncStatus:SetText(status)
+					end
+
+					if sync ~= lastSync then
+						lastSync = sync
+						rows.raknetDesyncSync:SetText(sync)
+					end
+
+					if desync then
+						if toggles.desync and toggles.desync:GetValue() and desync.state ~= "active" then
+							setToggle("desync", false)
+						end
+
+						if toggles.test and toggles.test:GetValue() and not desync.testMode then
+							setToggle("test", false)
+						end
+					end
+				end)
+
+				task.wait(0.5)
+			end
+		end)
+
+		-- Unload takes the hook and the test files out as well
+		table.insert(Session.Cleanups, function()
+			if desync then
+				desync:unload()
+				desync = nil
+			end
+		end)
+	end
+
 	rows.antiReport = Other:AddLabel("Anti Report")
 	rows.antiReport:ToolTip("When any player submits an in-game report in this server (the server marks that player for 5 s) everything is switched off. The game never says who a report is about, so the kick is limited by a guess: Kick Only If In A Fight kicks only when the reporter hurt you or you hurt them within the Fight Window. Turn it off to be kicked on every report")
 	addBindableToggle(rows.antiReport, "Anti Report", {
