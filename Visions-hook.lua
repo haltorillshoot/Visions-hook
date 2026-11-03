@@ -41540,6 +41540,8 @@ end
         menu_references["void_hide_void_time"]:set_visible(false)
 
         local SPAM_OUT_HOLD = 1.5
+        -- The longest the Spam cycle stays in the void with no gun ready to shoot before it opens a window anyway (so it can never stop shooting).
+        local SPAM_IDLE_WINDOW = 2.5
         local void_hide_teleport_time = flags["void_hide_teleport_time"]
         local void_hide_void_time = flags["void_hide_void_time"]
         local void_hide_offset = flags["void_hide_offset"]
@@ -41693,6 +41695,22 @@ end
             end
 
             return away <= their_range["Value"] + 15 and away > mine
+        end
+
+        -- Whether a gun in hand could fire right now (a round in it and its own pacing allows it). Measured in a 1v1 against a Flintlock (one hit
+        -- kills): all 5 deaths in 3 minutes came while the body stood out of the void for a Spam window, and in two thirds of those minutes the body
+        -- shot once or not at all, so most windows were exposure for nothing. A Spam window now only opens when something can shoot in it (see
+        -- SPAM_IDLE_WINDOW for the longest the body waits).
+        hide_manager["any_gun_due"] = function()
+            for handle, data in local_guns do
+                local tool = handle["Parent"]
+
+                if tool and (data[3] or 0) > 0 and hide_manager["gun_ready"](tool, data[3]) then
+                    return true
+                end
+            end
+
+            return false
         end
 
         local bait_step = function(tick, hrp)
@@ -41882,7 +41900,7 @@ end
                         end
 
                         in_void = false
-                    elseif not target_hidden and tick - last > spam_period then
+                    elseif not target_hidden and tick - last > spam_period and (tick - last > SPAM_IDLE_WINDOW or not spam_on_target or hide_manager["any_gun_due"]()) then
                         last = tick
                         hide_manager["spam_cycle_start"] = tick
                         in_void = false
