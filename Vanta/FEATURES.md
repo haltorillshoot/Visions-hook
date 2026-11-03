@@ -104,3 +104,15 @@ Tested live: the walk speed held at 60 while locked and went back to 16 when unl
 Not reproduced: animation breaker (changes what other players see of your animations) and trash talk (automated chat messages).
 
 **A reload bug fixed.** Each load installed three more metamethod hooks (they cannot be removed) and the layers stacked, so a client that had been reloaded many times slowed on every instance index, call and write; one test client dropped out of the connection while I was reloading it. There is now one hook per kind for the whole session (`Hooks.set`); a load or an unload only changes the handler behind it. Six reloads in a row left three hooks and the same timing.
+
+## Remaining combat (added)
+
+- **Statuses:** every player can be marked friendly, neutral or enemy (a "players" tab with a list, a set-status button and a set-as-target button), kept in `Vanta/statuses.json` by user id. Optional rules mark friends and crew mates friendly and the friends of an enemy enemy. The statuses are used by target selection, Auto Stomp (which now also stomps other knocked players of the allowed statuses within a range), Safe Purchasing, the legit features and ESP (friendly and enemy colours, and which statuses are drawn).
+- **Resolver:** weighted and hybrid modes with the original's controls (out of void bonus, normal position trust, void trust, forget rate, accuracy, distance penalty, lerp when close). A target that moves like a player is now aimed at where it shows in every mode: a resolved spot only lags behind it.
+- **Visuals:** FOV circle on the target, FOV and tracer outlines, tracer end point, view target stops when knocked, an information panel (name and status, health, armor, distance, tool, resolver source and confidence), face target.
+- **Void spam:** force when (reloading, tabbed out, not full health), stop if forced, out with target, hide while target hides.
+- **Auto equip:** equip order, prioritize the Double-Barrel, unequip when; Shop: armor try cooldown, pause when, stop following while healing; Anti stomp: teleport back.
+
+Tested live with a second account in the server: statuses (default, set, persisted file, skipped by the default target statuses, allowed when listed, cleared); the three resolver modes on a synthetic faker (all within half a stud of the true spot) and on a walker (aimed directly); void spam conditions (target hiding gets no window, target coming out gets the body onto it, force when tabbed out hides even with the spam off); FOV and tracer outlines, end point, information panel; face target (0.0 degrees off, auto rotate restored); shop pause logic. Not tested: auto equip (no gun in the inventory), anti stomp teleport back, auto set statuses by friends or crew (no friend or crew in the server).
+
+Not reproduced: target when shot at, force, wait for spawn protection, wait for all targets knocked, prioritize over reloading, fire cooldown, shot delay, pre fire and the other auto fire extras (at target vehicle, always fire, dont render, show fake bullets, fast retry), resolver rate and velocity source, follow adjust.

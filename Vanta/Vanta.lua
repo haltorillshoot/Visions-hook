@@ -206,6 +206,117 @@ function Players.health(player)
 	return humanoid and humanoid.Health or math.huge
 end
 
+---@module Status
+---A friendly / neutral / enemy mark for every other player, kept between sessions in the workspace file `Vanta/statuses.json` (by user id). Target
+---selection, ESP colours, Auto Stomp, Safe Purchasing and the legit features read it through `Status.get`. Auto rules can mark friends and crew mates
+---friendly and the friends of an enemy enemy.
+local Status = { values = {}, loaded = false, autoAt = 0 }
+
+local STATUS_FILE = "Vanta/statuses.json"
+
+function Status.load()
+	Status.loaded = true
+
+	local ok, decoded = pcall(function()
+		return game:GetService("HttpService"):JSONDecode(readfile(STATUS_FILE))
+	end)
+
+	if ok and type(decoded) == "table" then
+		for id, value in decoded do
+			Status.values[tonumber(id) or id] = value
+		end
+	end
+end
+
+local function saveStatuses()
+	pcall(function()
+		if not isfolder("Vanta") then
+			makefolder("Vanta")
+		end
+
+		local plain = {}
+
+		for id, value in Status.values do
+			plain[tostring(id)] = value
+		end
+
+		writefile(STATUS_FILE, game:GetService("HttpService"):JSONEncode(plain))
+	end)
+end
+
+---@param player Player
+---@return string "neutral", "friendly" or "enemy"
+function Status.get(player)
+	return Status.values[player.UserId] or "neutral"
+end
+
+---@param player Player
+---@param value string
+function Status.set(player, value)
+	if value == "neutral" then
+		Status.values[player.UserId] = nil
+	else
+		Status.values[player.UserId] = value
+	end
+
+	saveStatuses()
+end
+
+local function crewOf(player)
+	local folder = player:FindFirstChild("DataFolder")
+	local info = folder and folder:FindFirstChild("Information")
+	local crew = info and info:FindFirstChild("Crew")
+
+	return crew and crew.Value ~= "" and crew.Value or nil
+end
+
+---Marks players by the rules that are on; runs every few seconds.
+function Status.auto(now)
+	if now - Status.autoAt < 3 then
+		return
+	end
+
+	Status.autoAt = now
+
+	local myCrew = crewOf(localPlayer)
+
+	for _, player in playersService:GetPlayers() do
+		if player ~= localPlayer then
+			local current = Status.get(player)
+
+			if flag("status_friends", false) and current == "neutral" then
+				local ok, friends = pcall(player.IsFriendsWith, player, localPlayer.UserId)
+
+				if ok and friends then
+					Status.set(player, "friendly")
+
+					continue
+				end
+			end
+
+			if flag("status_crew", false) and current == "neutral" and myCrew and crewOf(player) == myCrew then
+				Status.set(player, "friendly")
+
+				continue
+			end
+
+			if flag("status_enemy_friends", false) and current == "neutral" then
+				for _, other in playersService:GetPlayers() do
+					if other ~= player and other ~= localPlayer and Status.get(other) == "enemy" then
+						local ok, friends = pcall(player.IsFriendsWith, player, other.UserId)
+
+						if ok and friends then
+							Status.set(player, "enemy")
+
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
 ---@module Target
 ---One selected target for every module. Nothing else keeps its own copy of "who we are shooting at".
 local Target = {
@@ -237,6 +348,10 @@ function Target.eligible(player)
 	local phase = Players.phase(player)
 
 	if phase == "respawning" or phase == "loading" then
+		return false
+	end
+
+	if not picked("target_statuses", Status.get(player), { "neutral", "enemy" }) then
 		return false
 	end
 
@@ -374,6 +489,8 @@ local Resolver = {
 	cluster = nil :: Vector3?,
 	clusterShare = 0,
 	velocity = Vector3.zero,
+	spots = {},
+	weightedAt = nil :: number?,
 }
 
 function Resolver.reset()
@@ -386,6 +503,8 @@ function Resolver.reset()
 	Resolver.clusteredAt = -1
 	Resolver.cluster = nil
 	Resolver.clusterShare = 0
+	Resolver.spots = {}
+	Resolver.weightedAt = nil
 end
 
 ---Record where the target shows this frame.
@@ -520,6 +639,124 @@ local function measuredVelocity()
 	return Vector3.zero
 end
 
+---The busiest cluster of recent map sightings (or, for a short while, the last map spot). Cached for a twentieth of a second: the clustering is the
+---one expensive step.
+local function clusterAnswer(now, radius, window)
+	if now - Resolver.clusteredAt >= 0.05 then
+		Resolver.clusteredAt = now
+
+		local points = recentMap(now, window)
+
+		Resolver.cluster, Resolver.clusterShare = nil, 0
+
+		if #points >= 3 then
+			Resolver.cluster, Resolver.clusterShare = busiestCluster(points, radius)
+		end
+	end
+
+	if Resolver.cluster then
+		return Resolver.cluster, Resolver.clusterShare, "cluster"
+	end
+
+	-- nothing to cluster on yet: the last place it stood on the map, for a short while only
+	if Resolver.lastMap and now - Resolver.lastMapAt < flag("resolver_hold", 1.5) then
+		return Resolver.lastMap, 0.3, "held"
+	end
+
+	return nil, 0, "none"
+end
+
+---Every spot the target is seen at gets a weight. Spots within the merge radius fold into one that moves toward the newest sighting (Lerp), weights fade
+---at the Forget Rate (two and a half times as fast for spots away from where the target is now), and a spot seen on the map is held while the target
+---sits in the far void. A map sighting adds Normal Position Trust, a void sighting Void Trust, both scaled down for a far target (Distance Penalty).
+---The spot with the best score (weight times how often it was seen) wins once it passes Accuracy.
+local function weightedAnswer(position, now)
+	local spots = Resolver.spots
+	local elapsed = Resolver.weightedAt and math.min(now - Resolver.weightedAt, 0.25) or 0
+	local inVoid = Util.inVoid(position)
+	local mine = Players.root(localPlayer)
+	local distance = mine and not inVoid and (mine.Position - position).Magnitude or 0
+	local distanceFactor = inVoid and 1 or math.clamp(1 - distance / 100 * flag("resolver_penalty", 2) * 0.01, 0.25, 1)
+	local radius = flag("resolver_radius", 12) * 3
+	local mergeRadius = radius
+
+	Resolver.weightedAt = now
+
+	if inVoid then
+		-- out there a position is only kept to a few studs (32-bit floats), so spots merge within four of those steps
+		local far = math.max(math.abs(position.X), math.abs(position.Y), math.abs(position.Z))
+
+		mergeRadius = math.max(radius, 2 ^ (math.floor(math.log(far, 2)) - 23) * 4)
+	end
+
+	local forget = flag("resolver_forget", 80) / 20
+	local accuracy = 1 + 0.6525 * ((flag("resolver_accuracy", 76.82) - 50) / 50)
+	local lerp = math.clamp(flag("resolver_lerp", 10), 10, 100) / 100
+
+	for index = #spots, 1, -1 do
+		local spot = spots[index]
+		local held = inVoid and spot.seenMap and now - spot.seenMap < 1.25
+
+		if not held then
+			spot.weight -= elapsed * forget * ((spot.position - position).Magnitude > mergeRadius and 2.5 or 1)
+		end
+
+		if spot.weight < 0.1 then
+			table.remove(spots, index)
+		end
+	end
+
+	local add = (inVoid and flag("resolver_void_trust", 0.2) or flag("resolver_trust", 1.5)) * distanceFactor
+	local merged = false
+
+	for _, spot in spots do
+		if (spot.position - position).Magnitude <= mergeRadius then
+			spot.position = spot.position:Lerp(position, lerp)
+			spot.weight = math.clamp(spot.weight + add, -1, 18)
+			spot.count += 1
+			spot.seenMap = (not inVoid) and now or spot.seenMap
+			merged = true
+
+			break
+		end
+	end
+
+	if not merged then
+		spots[#spots + 1] = { position = position, weight = add, count = 1, seenMap = (not inVoid) and now or nil }
+
+		-- a forget rate of 0 never lets a spot go: the list is kept to the 48 best
+		if #spots > 48 then
+			local worst, worstWeight = nil, math.huge
+
+			for index, spot in spots do
+				if spot.weight < worstWeight then
+					worst, worstWeight = index, spot.weight
+				end
+			end
+
+			table.remove(spots, worst)
+		end
+	end
+
+	local best, bestScore = nil, 0
+
+	for _, spot in spots do
+		local score = spot.weight * math.clamp(spot.count * 0.25, 1, 3)
+
+		if score > bestScore then
+			best, bestScore = spot, score
+		end
+	end
+
+	local confidence = best and math.clamp(bestScore / (accuracy * 2), 0, 1) or 0
+
+	if best and bestScore > accuracy then
+		return best.position, confidence
+	end
+
+	return nil, confidence
+end
+
 ---@param now number
 ---@return Vector3? aim, number confidence
 function Resolver.aim(now)
@@ -531,15 +768,11 @@ function Resolver.aim(now)
 	end
 
 	local mode = flag("resolver_mode", "adaptive")
-	local radius = flag("resolver_radius", 12)
-	local window = flag("resolver_window", 1.5)
 	local shows = newest.position
 	local onMap = not Util.inVoid(shows)
 	local velocity = measuredVelocity()
 
 	Resolver.velocity = velocity
-	local fast = velocity.Magnitude > MAX_REAL_SPEED
-	local useCluster = mode == "cluster" or (mode == "adaptive" and (not onMap or fast or Resolver.jumpedAt and now - Resolver.jumpedAt < 0.75))
 
 	-- a step between two sightings that no player could walk marks the target as a faker for a moment
 	local previous = samples[#samples - 1]
@@ -552,32 +785,98 @@ function Resolver.aim(now)
 		end
 	end
 
-	if useCluster and mode ~= "off" then
-		-- the clustering is the one expensive step, so it is redone at most 20 times a second and the answer is reused in between
-		if now - Resolver.clusteredAt >= 0.05 then
-			Resolver.clusteredAt = now
+	local faking = velocity.Magnitude > MAX_REAL_SPEED or (Resolver.jumpedAt ~= nil and now - Resolver.jumpedAt < 0.75)
 
-			local points = recentMap(now, window)
+	-- On the map the cluster radius gets Out Of Void Bonus on top, so a target that stands on the map is forgiven more than one that hops
+	local radius = flag("resolver_radius", 12) + (onMap and flag("resolver_map_bonus", 5) or 0)
+	local window = flag("resolver_window", 1.5)
 
-			Resolver.cluster, Resolver.clusterShare = nil, 0
+	-- a normal mover: where it shows plus the distance it covers while the shot is on its way
+	local function direct()
+		if not onMap then
+			Resolver.source, Resolver.confidence = "none", 0
 
-			if #points >= 3 then
-				Resolver.cluster, Resolver.clusterShare = busiestCluster(points, radius)
+			return nil, 0
+		end
+
+		local lead = velocity * (Util.ping() + 0.04) * (flag("resolver_lead", 100) / 100)
+
+		if lead.Magnitude > 30 then
+			lead = lead.Unit * 30
+		end
+
+		Resolver.source, Resolver.confidence = "direct", 1
+
+		return shows + Vector3.new(lead.X, 0, lead.Z), 1
+	end
+
+	if mode == "off" then
+		return direct()
+	end
+
+	-- A target that moves like a player (on the map, not faster than anyone runs, no jump in the last moments) is where it shows: a resolved spot
+	-- would only lag behind it. Only the weighted history still takes the sighting in.
+	if onMap and not faking then
+		if mode == "weighted" or mode == "hybrid" then
+			weightedAnswer(shows, now)
+		end
+
+		return direct()
+	end
+
+	if mode == "cluster" or (mode == "adaptive" and (not onMap or faking)) then
+		local position, share, source = clusterAnswer(now, radius, window)
+
+		Resolver.source, Resolver.confidence = source, share
+
+		return position, share
+	end
+
+	if mode == "weighted" or mode == "hybrid" then
+		-- the weighted history is kept up to date every frame, whichever answer is used
+		local weighted, weightedSure = weightedAnswer(shows, now)
+
+		if mode == "hybrid" then
+			local cluster, clusterSure = clusterAnswer(now, radius, window)
+
+			if cluster and weighted then
+				if (cluster - weighted).Magnitude <= radius then
+					local total = clusterSure + weightedSure
+
+					Resolver.source = "hybrid"
+					Resolver.confidence = math.min(1, math.max(clusterSure, weightedSure) + 0.2 * math.min(clusterSure, weightedSure))
+
+					return total > 0 and cluster:Lerp(weighted, weightedSure / total) or cluster, Resolver.confidence
+				end
+
+				-- they disagree: the surer one wins, the cluster on a tie
+				if weightedSure > clusterSure then
+					Resolver.source, Resolver.confidence = "weighted", weightedSure
+
+					return weighted, weightedSure
+				end
+
+				Resolver.source, Resolver.confidence = "cluster", clusterSure
+
+				return cluster, clusterSure
+			end
+
+			if cluster then
+				Resolver.source, Resolver.confidence = "cluster", clusterSure
+
+				return cluster, clusterSure
 			end
 		end
 
-		if Resolver.cluster then
-			Resolver.source, Resolver.confidence = "cluster", Resolver.clusterShare
+		if weighted then
+			Resolver.source, Resolver.confidence = "weighted", weightedSure
 
-			return Resolver.cluster, Resolver.clusterShare
+			return weighted, weightedSure
 		end
 
-		-- nothing to cluster on yet: the last place it stood on the map, for a short while only
-		if Resolver.lastMap and now - Resolver.lastMapAt < flag("resolver_hold", 1.5) then
-			Resolver.source = "held"
-			Resolver.confidence = 0.3
-
-			return Resolver.lastMap, 0.3
+		-- nothing resolved: a target that moves like a player is where it shows
+		if not faking then
+			return direct()
 		end
 
 		Resolver.source, Resolver.confidence = "none", 0
@@ -585,23 +884,8 @@ function Resolver.aim(now)
 		return nil, 0
 	end
 
-	if not onMap then
-		Resolver.source, Resolver.confidence = "none", 0
-
-		return nil, 0
-	end
-
-	-- a normal mover: where it shows plus the distance it covers while the shot is on its way
-	local strength = flag("resolver_lead", 100) / 100
-	local lead = velocity * (Util.ping() + 0.04) * strength
-
-	if lead.Magnitude > 30 then
-		lead = lead.Unit * 30
-	end
-
-	Resolver.source, Resolver.confidence = "direct", 1
-
-	return shows + Vector3.new(lead.X, 0, lead.Z), 1
+	-- adaptive, normal mover
+	return direct()
 end
 
 ---@module Aim
@@ -715,7 +999,7 @@ function Body.settled(now)
 end
 
 ---@module Follow
-local Follow = { held = nil :: Vector3?, heldAt = 0, heldStyle = "", aim = nil :: Vector3? }
+local Follow = { healing = false, held = nil :: Vector3?, heldAt = 0, heldStyle = "", aim = nil :: Vector3? }
 
 local function ringOffset(angle, distance)
 	return Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
@@ -861,13 +1145,18 @@ function Follow.want(now)
 		return nil
 	end
 
+	-- Stop Following While Healing
+	if Follow.healing and flag("shop_heal_stop_follow", false) then
+		return nil
+	end
+
 	return Follow.cframeFor(aim, now)
 end
 
 ---@module VoidSpam
 ---Cycles the body between the void and short windows at the target. A window only opens when a gun can shoot in it, because every moment out of the void
 ---is a moment the target can shoot back; if no gun is ready for IDLE_WINDOW seconds a window opens anyway so the cycle can never stop shooting.
-local VoidSpam = { phase = "void", phaseAt = 0, spot = nil, idleSince = 0, baitUntil = 0, baitAt = 0, baitCFrame = nil :: CFrame?, deepSpot = nil :: CFrame?, deepFor = nil :: Instance? }
+local VoidSpam = { phase = "void", phaseAt = 0, spot = nil, idleSince = 0, baitUntil = 0, baitAt = 0, baitCFrame = nil :: CFrame?, targetVoidAt = nil :: number?, deepSpot = nil :: CFrame?, deepFor = nil :: Instance? }
 
 local IDLE_WINDOW = 2.5
 
@@ -964,6 +1253,7 @@ end
 function VoidSpam.reset()
 	VoidSpam.phase, VoidSpam.phaseAt, VoidSpam.spot, VoidSpam.idleSince = "void", 0, nil, 0
 	VoidSpam.baitUntil, VoidSpam.baitAt, VoidSpam.baitCFrame = 0, 0, nil
+	VoidSpam.targetVoidAt = nil
 end
 
 ---Set by AutoFire: whether any gun in hand could fire right now.
@@ -971,8 +1261,44 @@ VoidSpam.gunReady = function()
 	return true
 end
 
+---Force When: reasons to be out of reach whatever else is going on.
+local function voidForced()
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if picked("voidspam_force_when", "reloading", {}) and character then
+		local effects = character:FindFirstChild("BodyEffects")
+		local reload = effects and effects:FindFirstChild("Reload")
+
+		if reload and reload.Value == true then
+			return true
+		end
+	end
+
+	if picked("voidspam_force_when", "tabbed out", {}) and not isrbxactive() then
+		return true
+	end
+
+	return picked("voidspam_force_when", "not full health", {}) and humanoid ~= nil and humanoid.Health < humanoid.MaxHealth
+end
+
 function VoidSpam.want(now)
-	if not flag("ragebot_enabled", false) or not flag("voidspam_enabled", false) then
+	if not flag("ragebot_enabled", false) then
+		VoidSpam.reset()
+
+		return nil
+	end
+
+	local forced = voidForced()
+
+	-- with the spam off, a forced hide is just a hide; with it on, Stop If Forced decides whether the windows go on
+	if forced and (not flag("voidspam_enabled", false) or flag("voidspam_stop_forced", false)) then
+		VoidSpam.spot = VoidSpam.spot or voidSpot()
+
+		return VoidSpam.spot
+	end
+
+	if not flag("voidspam_enabled", false) then
 		VoidSpam.reset()
 
 		return nil
@@ -994,13 +1320,27 @@ function VoidSpam.want(now)
 		return nil
 	end
 
+	local targetHiding = Util.inVoid(aim)
+
+	if targetHiding then
+		VoidSpam.targetVoidAt = now
+	end
+
+	-- Out With Target: the target has just come out of the void onto the map, so the body goes onto it and stays for a moment
+	if flag("voidspam_out_with_target", true) and not targetHiding and VoidSpam.targetVoidAt and now - VoidSpam.targetVoidAt < 1.5 then
+		VoidSpam.phase, VoidSpam.phaseAt, VoidSpam.spot = "window", now, nil
+
+		return Follow.cframeFor(aim, now)
+	end
+
 	local settle = Util.ping() + 0.04
 	local windowTime = math.max(flag("voidspam_window", 0.12), settle + 0.08)
 	local voidTime = flag("voidspam_void", 0.35)
 	local elapsed = now - VoidSpam.phaseAt
 
 	if VoidSpam.phase == "void" then
-		if elapsed >= voidTime then
+		-- Hide While Target Hides: nothing can be shot at a target in the void, so no window is opened for it
+		if elapsed >= voidTime and not (targetHiding and flag("voidspam_hide_with_target", true)) then
 			if VoidSpam.gunReady() or elapsed >= IDLE_WINDOW then
 				VoidSpam.phase, VoidSpam.phaseAt, VoidSpam.spot = "window", now, nil
 			end
@@ -1033,7 +1373,7 @@ end
 ---@module AutoFire
 ---Fires the guns through the game's own tools: the gun is equipped, the aim is set for its script, and the tool is activated. Each gun keeps its own
 ---cooldown and ammo; a shotgun is never fired from or at the void (the server turns those calls away and counts them against its SecurityTolerance).
-local AutoFire = { lastShot = {}, lastEquip = 0, lastReload = {}, current = nil, lastTool = nil :: Instance?, lastSent = 0 }
+local AutoFire = { lastShot = {}, lastEquip = 0, lastReload = {}, current = nil, lastTool = nil :: Instance?, lastSent = 0, lastUnequip = 0 }
 
 local function mainEvent()
 	return replicatedStorage:FindFirstChild("MainEvent")
@@ -1139,6 +1479,57 @@ local function reloadEmpty(now, guns)
 	end
 end
 
+---Auto Equip: the gun to use, from the Guns list in its order (the Double-Barrel first when Prioritize DB is on), among the guns that are loaded and reach.
+function AutoFire.preferred(guns, now, aim, position)
+	if not flag("autoequip_enabled", false) then
+		return nil
+	end
+
+	local order = flag("autoequip_guns", { "rifle", "double-barrel sg", "flintlock", "revolver" })
+	local best, bestRank = nil, math.huge
+
+	for _, info in guns do
+		if gunReadyAt(info, now, aim, position) then
+			local name = info.tool.Name:sub(2, -2):lower()
+			local rank = table.find(order, name)
+
+			if flag("autoequip_db", false) and name == "double-barrel sg" then
+				rank = 0
+			end
+
+			if rank and rank < bestRank then
+				best, bestRank = info, rank
+			end
+		end
+	end
+
+	return best
+end
+
+---Unequip When: the tool goes back in the bag when there is no target, or it is knocked or dead.
+function AutoFire.equipStep(now)
+	if not flag("autoequip_enabled", false) or now - AutoFire.lastUnequip < 0.5 then
+		return
+	end
+
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid or not character:FindFirstChildOfClass("Tool") then
+		return
+	end
+
+	local player = Target.player
+	local drop = (picked("autoequip_unequip", "no target", {}) and player == nil)
+		or (player ~= nil and picked("autoequip_unequip", "target knocked", {}) and Players.knocked(player))
+		or (player ~= nil and picked("autoequip_unequip", "target dead", {}) and Players.phase(player) == "respawning")
+
+	if drop then
+		AutoFire.lastUnequip = now
+		humanoid:UnequipTools()
+	end
+end
+
 function AutoFire.step(now)
 	if not flag("autofire_enabled", false) then
 		return
@@ -1188,6 +1579,8 @@ function AutoFire.step(now)
 		end
 	end
 
+	chosen = AutoFire.preferred(guns, now, aim, position) or chosen
+
 	if not chosen then
 		return
 	end
@@ -1222,15 +1615,49 @@ local AutoStomp = { lastStomp = 0 }
 
 local STOMP_OFFSET = Vector3.new(0, 3, 0)
 
+---The knocked player to finish: the target when it is knocked, otherwise the nearest knocked player whose status is one Auto Stomp was told to take.
+function AutoStomp.pick()
+	local target = Target.player
+
+	if target and Players.knocked(target) then
+		return target
+	end
+
+	local mine = Players.root(localPlayer)
+
+	if not mine then
+		return nil
+	end
+
+	local best, bestDistance = nil, flag("autostomp_range", 300)
+
+	for _, player in playersService:GetPlayers() do
+		if player ~= localPlayer and Players.knocked(player) and Players.phase(player) ~= "respawning"
+			and picked("autostomp_statuses", Status.get(player), { "neutral", "enemy" }) then
+			local root = Players.root(player)
+
+			if root and not Util.inVoid(root.Position) then
+				local distance = (root.Position - mine.Position).Magnitude
+
+				if distance < bestDistance then
+					best, bestDistance = player, distance
+				end
+			end
+		end
+	end
+
+	return best
+end
+
 function AutoStomp.want(now)
 	if not flag("ragebot_enabled", false) or not flag("autostomp_enabled", false) then
 		return nil
 	end
 
-	local player = Target.player
+	local player = AutoStomp.pick()
 	local character = player and player.Character
 
-	if not character or not Players.knocked(player) then
+	if not character then
 		return nil
 	end
 
@@ -1329,10 +1756,35 @@ function Visuals.render()
 		local colour, opacity = pickerColor("fov_color", Color3.fromRGB(255, 255, 255))
 		local activeColour, activeOpacity = pickerColor("fov_active_color", Color3.fromRGB(255, 80, 80))
 		local active = player ~= nil
+		local fovPosition = mouseLocation
+
+		-- Follow Target: the circle is drawn on the target instead of the mouse
+		if flag("fov_follow", false) and aim and not Util.inVoid(aim) then
+			local point, onScreen = camera:WorldToViewportPoint(aim)
+
+			if onScreen and point.Z > 0 then
+				fovPosition = Vector2.new(point.X, point.Y)
+			end
+		end
+
+		if flag("fov_outline", false) then
+			drawing("Circle", "fovback", {
+				Visible = true,
+				Position = fovPosition,
+				Radius = flag("target_fov", 180),
+				Thickness = 3,
+				NumSides = 64,
+				Filled = false,
+				Color = pickerColor(active and "fov_active_outline" or "fov_outline_color", Color3.new(0, 0, 0)),
+				Transparency = 1,
+			})
+		else
+			removeDrawing("fovback")
+		end
 
 		drawing("Circle", "fov", {
 			Visible = true,
-			Position = mouseLocation,
+			Position = fovPosition,
 			Radius = flag("target_fov", 180),
 			Thickness = 1,
 			NumSides = 64,
@@ -1342,6 +1794,7 @@ function Visuals.render()
 		})
 	else
 		removeDrawing("fov")
+		removeDrawing("fovback")
 	end
 
 	-- Aim assist FOV circle (drawn whether or not the ragebot is on)
@@ -1381,10 +1834,36 @@ function Visuals.render()
 
 	-- Tracer
 	if enabled and flag("tracer_show", false) and aim and not Util.inVoid(aim) then
-		local screen, onScreen = camera:WorldToViewportPoint(aim)
+		-- End Point: the aim position, or the head, torso or feet of the target
+		local endPoint = aim
+		local targetCharacter = player and player.Character
+		local endName = flag("tracer_end", "aim")
+
+		if targetCharacter and endName ~= "aim" then
+			local part = targetCharacter:FindFirstChild(endName == "head" and "Head" or "HumanoidRootPart")
+
+			if part and not Util.inVoid(part.Position) then
+				endPoint = part.Position + (endName == "feet" and Vector3.new(0, -3, 0) or Vector3.zero)
+			end
+		end
+
+		local screen, onScreen = camera:WorldToViewportPoint(endPoint)
 		local colour, opacity = pickerColor("tracer_color", Color3.fromRGB(255, 255, 255))
 		local origin = flag("tracer_origin", "bottom")
 		local from = origin == "mouse" and mouseLocation or origin == "center" and viewport / 2 or Vector2.new(viewport.X / 2, viewport.Y)
+
+		if flag("tracer_outline", false) then
+			drawing("Line", "tracerback", {
+				Visible = onScreen,
+				From = from,
+				To = Vector2.new(screen.X, screen.Y),
+				Thickness = flag("tracer_thickness", 1) + 2,
+				Color = pickerColor("tracer_outline_color", Color3.new(0, 0, 0)),
+				Transparency = 1,
+			})
+		else
+			removeDrawing("tracerback")
+		end
 
 		drawing("Line", "tracer", {
 			Visible = onScreen,
@@ -1396,6 +1875,7 @@ function Visuals.render()
 		})
 	else
 		removeDrawing("tracer")
+		removeDrawing("tracerback")
 	end
 
 	-- 3D ring round the target's feet
@@ -1448,10 +1928,41 @@ function Visuals.render()
 		removeDrawing("followspot")
 	end
 
+	-- information panel
+	if enabled and flag("info_panel", false) and player then
+		local targetCharacter = player.Character
+		local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+		local effects = targetCharacter and targetCharacter:FindFirstChild("BodyEffects")
+		local armor = effects and effects:FindFirstChild("Armor")
+		local tool = targetCharacter and targetCharacter:FindFirstChildOfClass("Tool")
+		local mine = Players.root(localPlayer)
+		local root = Players.root(player)
+		local lines = {
+			string.format("%s (%s)", player.Name, Status.get(player)),
+			targetHumanoid and string.format("health %d/%d", targetHumanoid.Health, targetHumanoid.MaxHealth) or "health ?",
+			string.format("armor %d", armor and armor.Value or 0),
+			(mine and root and not Util.inVoid(root.Position)) and string.format("distance %d", (mine.Position - root.Position).Magnitude) or "distance ?",
+			string.format("tool %s", tool and tool.Name or "none"),
+			string.format("aim %s %.2f", Resolver.source, Resolver.confidence),
+		}
+
+		drawing("Text", "info", {
+			Visible = true,
+			Text = table.concat(lines, "\n"),
+			Position = Vector2.new(20, viewport.Y * 0.4),
+			Size = 14,
+			Outline = true,
+			Font = Drawing.Fonts and Drawing.Fonts.UI or 0,
+			Color = pickerColor("info_color", Color3.fromRGB(255, 255, 255)),
+		})
+	else
+		removeDrawing("info")
+	end
+
 	-- the camera on the target
 	local humanoid = player and player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 
-	if enabled and flag("view_target", false) and humanoid then
+	if enabled and flag("view_target", false) and humanoid and not (flag("view_stop_knocked", false) and Players.knocked(player)) then
 		camera.CameraSubject = humanoid
 		Visuals.cameraSwapped = true
 	elseif Visuals.cameraSwapped then
@@ -1471,6 +1982,7 @@ end
 ---Purchases go one at a time. A refused one is not asked again at once (the wait doubles from 0.5 s up to 8 s), and a purchase can be held back while
 ---other players stand near the shop. The auto buys (armor, ammo, heal, mask, loadout) only ask this module for items; none of them moves the body.
 local Shop = {
+	armorAt = 0,
 	items = {},
 	names = {},
 	queue = {},
@@ -1580,10 +2092,10 @@ end
 ---Whether another player stands near the shop part, for Safe Purchasing.
 local function shopWatched(position)
 	local radius = flag("shop_safe_distance", 50)
-	local mode = flag("shop_safe_avoid", "target")
-
 	for _, player in playersService:GetPlayers() do
-		if player ~= localPlayer and (mode == "anyone" or player == Target.player) and not Players.knocked(player) then
+		local avoided = (player == Target.player and picked("shop_safe_avoid", "target", { "target" })) or picked("shop_safe_avoid", Status.get(player), { "target" })
+
+		if player ~= localPlayer and avoided and not Players.knocked(player) then
 			local root = Players.root(player)
 
 			if root and (root.Position - position).Magnitude < radius then
@@ -1772,6 +2284,7 @@ local function heal(now, humanoid, spare)
 		end
 
 		Shop.popcorn = nil
+		Follow.healing = false
 
 		return
 	end
@@ -1787,6 +2300,7 @@ local function heal(now, humanoid, spare)
 	end
 
 	Shop.popcorn = food
+	Follow.healing = true
 
 	if food.Parent ~= localPlayer.Character then
 		humanoid:EquipTool(food)
@@ -1798,6 +2312,14 @@ local function heal(now, humanoid, spare)
 		Shop.healAt = now
 		food:Activate()
 	end
+end
+
+---Disable When: the ammo, mask and loadout buys wait while one of the chosen conditions holds (armor and heal never wait).
+function Shop.paused()
+	local player = Target.player
+
+	return (picked("shop_pause_when", "target selected", {}) and player ~= nil)
+		or (picked("shop_pause_when", "target alive", {}) and player ~= nil and Players.phase(player) ~= "respawning" and not Players.knocked(player))
 end
 
 ---The auto buys, checked four times a second.
@@ -1820,12 +2342,13 @@ function Shop.auto(now)
 	if flag("shop_armor", false) then
 		local armor = armorValue()
 
-		if armor and armor < flag("shop_armor_below", 52) and spare then
+		if armor and armor < flag("shop_armor_below", 52) and spare and now - Shop.armorAt >= flag("shop_armor_cooldown", 0.05) then
+			Shop.armorAt = now
 			Shop.request("high-medium armor")
 		end
 	end
 
-	if flag("shop_ammo", false) and #Shop.queue == 0 then
+	if flag("shop_ammo", false) and #Shop.queue == 0 and not Shop.paused() then
 		local folder = dataFolder()
 		local inventory = folder and folder:FindFirstChild("Inventory")
 
@@ -1845,9 +2368,11 @@ function Shop.auto(now)
 
 	if flag("shop_heal", false) then
 		heal(now, humanoid, spare)
+	else
+		Follow.healing = false
 	end
 
-	if flag("shop_mask", false) and not character:FindFirstChild("In-gameMask") then
+	if flag("shop_mask", false) and not character:FindFirstChild("In-gameMask") and not Shop.paused() then
 		local mask = ownsTool("mask")
 
 		if mask then
@@ -1861,7 +2386,7 @@ function Shop.auto(now)
 		end
 	end
 
-	if flag("shop_loadout", false) then
+	if flag("shop_loadout", false) and not Shop.paused() then
 		local wanted = flag("shop_loadout_guns", { "rifle" })
 
 		for _, gun in type(wanted) == "table" and wanted or { wanted } do
@@ -1887,7 +2412,7 @@ end
 ---@module AntiStomp
 ---While the character is knocked it is kept out of reach, so there is nothing for anyone to stomp. (Visions-hook also kills the character on purpose;
 ---this does not: the character just stands in the void until it gets up or dies.)
-local AntiStomp = { spot = nil }
+local AntiStomp = { spot = nil, back = nil :: CFrame? }
 
 function AntiStomp.want()
 	if not flag("antistomp_enabled", false) or not Players.knocked(localPlayer) then
@@ -1895,6 +2420,9 @@ function AntiStomp.want()
 
 		return nil
 	end
+
+	-- where the character stood when it was knocked, for Teleport Back after the respawn (never a void spot)
+	AntiStomp.back = AntiStomp.back or Body.lastMap
 
 	AntiStomp.spot = AntiStomp.spot or CFrame.new(math.random(-1e8, 1e8), 5e7, math.random(-1e8, 1e8))
 
@@ -2165,6 +2693,23 @@ local function hideEntry(entry)
 	end
 end
 
+---The colour flag for a player: the target colour, else the friendly or enemy colour, else the normal one.
+local function espColour(player, isTarget)
+	if isTarget then
+		return pickerColor("esp_target_color", Color3.fromRGB(255, 80, 80))
+	end
+
+	local status = Status.get(player)
+
+	if status == "friendly" then
+		return pickerColor("esp_friendly_color", Color3.fromRGB(80, 255, 120))
+	elseif status == "enemy" then
+		return pickerColor("esp_enemy_color", Color3.fromRGB(255, 160, 60))
+	end
+
+	return pickerColor("esp_color", Color3.fromRGB(255, 255, 255))
+end
+
 local function hideCham(entry)
 	if entry.cham then
 		entry.cham.Enabled = false
@@ -2172,7 +2717,7 @@ local function hideCham(entry)
 end
 
 ---Chams (a fill) and Highlight (an outline) are one Highlight object; it is drawn through walls unless Behind Walls is off.
-local function updateCham(entry, character, isTarget)
+local function updateCham(entry, player, character, isTarget)
 	local fill, outline = flag("esp_chams", false), flag("esp_highlight", false)
 
 	if not (fill or outline) then
@@ -2196,7 +2741,7 @@ local function updateCham(entry, character, isTarget)
 	cham.Adornee = character
 	cham.Enabled = true
 	cham.DepthMode = flag("esp_chams_walls", true) and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
-	cham.FillColor = pickerColor(isTarget and "esp_target_color" or "esp_color", isTarget and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255))
+	cham.FillColor = espColour(player, isTarget)
 	cham.FillTransparency = fill and flag("esp_chams_transparency", 0.5) or 1
 	cham.OutlineColor = pickerColor("esp_highlight_color", Color3.new(1, 1, 1))
 	cham.OutlineTransparency = outline and 0 or 1
@@ -2250,7 +2795,7 @@ function Esp.draw(player)
 		return false
 	end
 
-	updateCham(entry, character, player == Target.player)
+	updateCham(entry, player, character, player == Target.player)
 
 	local top = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.7, 0))
 	local bottom = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
@@ -2265,7 +2810,7 @@ function Esp.draw(player)
 	local width = height * 0.55
 	local left = top.X - width / 2
 	local isTarget = player == Target.player
-	local mainColour = pickerColor(isTarget and "esp_target_color" or "esp_color", isTarget and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255))
+	local mainColour = espColour(player, isTarget)
 	local font = Drawing.Fonts and Drawing.Fonts.UI or 0
 	local textY = top.Y - 15
 
@@ -2409,7 +2954,8 @@ function Esp.render()
 
 	for _, player in playersService:GetPlayers() do
 		if player ~= localPlayer then
-			if flag("esp_only_target", false) and player ~= Target.player then
+			if (flag("esp_only_target", false) and player ~= Target.player)
+				or not picked("esp_statuses", Status.get(player), { "neutral", "friendly", "enemy" }) then
 				destroyEntry(player)
 			else
 				Esp.draw(player)
@@ -2463,6 +3009,10 @@ local function legitUsable(player)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if player == localPlayer or not humanoid or humanoid.Health <= 0 or Players.phase(player) == "respawning" then
+		return false
+	end
+
+	if not picked("legit_statuses", Status.get(player), { "neutral", "enemy" }) then
 		return false
 	end
 
@@ -2860,6 +3410,21 @@ function Movement.step(dt)
 		Movement.tripHumanoid = nil
 	end
 
+	-- face target: the character looks at the target (the spinbot, when on, turns it instead)
+	if flag("face_target", false) and not flag("move_spin", false) and Target.player and Follow.aim and not Util.inVoid(Follow.aim) then
+		local flat = Vector3.new(Follow.aim.X, root.Position.Y, Follow.aim.Z)
+
+		humanoid.AutoRotate = false
+		Movement.facing = true
+
+		if (flat - root.Position).Magnitude > 0.5 then
+			root.CFrame = CFrame.lookAt(root.Position, flat)
+		end
+	elseif Movement.facing then
+		Movement.facing = false
+		humanoid.AutoRotate = true
+	end
+
 	-- spinbot: the character turns on the spot
 	if flag("move_spin", false) then
 		humanoid.AutoRotate = false
@@ -2902,12 +3467,12 @@ function Movement.restore()
 			current:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
 		end
 
-		if Movement.spinning then
+		if Movement.spinning or Movement.facing then
 			current.AutoRotate = true
 		end
 	end
 
-	Movement.tripHumanoid, Movement.spinning = nil, false
+	Movement.tripHumanoid, Movement.spinning, Movement.facing = nil, false, false
 	Movement.active = false
 
 	for part in Movement.noclipParts do
@@ -4108,6 +4673,27 @@ function Ragebot.start()
 	VoidSpam.gunReady = AutoFire.anyReady
 
 	Shop.watchCash(Ragebot.maid)
+
+	Ragebot.maid:give(localPlayer.CharacterAdded:Connect(function(character)
+		local back = AntiStomp.back
+
+		AntiStomp.back = nil
+
+		if back and flag("antistomp_back", false) and flag("antistomp_enabled", false) then
+			task.spawn(function()
+				local root = character:WaitForChild("HumanoidRootPart", 5)
+
+				for _ = 1, 3 do
+					task.wait()
+
+					if root and root.Parent then
+						root.CFrame = back
+					end
+				end
+			end)
+		end
+	end))
+	Status.load()
 	Ragebot.maid:give(AdStrafe.release)
 	Ragebot.maid:give(Bounty.release)
 
@@ -4117,7 +4703,8 @@ function Ragebot.start()
 		-- before the body step, so the position it saves as "real" already includes the movement
 		Movement.step(dt)
 
-		-- the features that need no target: the shop, the bounty watch and the held-trigger full auto
+		-- the features that need no target: the statuses, the shop, the bounty watch and the held-trigger full auto
+		Status.auto(now)
 		Shop.auto(now)
 		Bounty.step(now)
 		FullAuto.step(now)
@@ -4159,6 +4746,7 @@ function Ragebot.start()
 
 		if not Shop.busy() then
 			AutoFire.step(now)
+			AutoFire.equipStep(now)
 			QuickDraw.step(now)
 		end
 
@@ -4261,11 +4849,14 @@ local function buildMenu()
 	targetSection:slider({ name = "max distance", flag = "target_distance", min = 50, max = 3000, default = 1000, interval = 10, suffix = " st" })
 	targetSection:slider({ name = "automatic cooldown", flag = "target_cooldown", min = 0.05, max = 2, default = 0.25, interval = 0.05, suffix = "s" })
 	targetSection:dropdown({ name = "ignore if", flag = "target_ignore_if", items = { "in void", "protected", "knocked" }, default = { "in void", "protected", "knocked" }, multi = true })
+	targetSection:dropdown({ name = "target statuses", flag = "target_statuses", items = { "neutral", "friendly", "enemy" }, default = { "neutral", "enemy" }, multi = true })
 	targetSection:dropdown({ name = "untarget when", flag = "target_untarget_when", items = { "dead", "knocked", "flung" }, default = { "dead" }, multi = true })
 
 	local stompSection = ragebotColumn:section({ name = "auto stomp" })
 	stompSection:toggle({ name = "enabled", flag = "autostomp_enabled" })
 	stompSection:toggle({ name = "stop when target dead", flag = "autostomp_stop_dead", default = true })
+	stompSection:dropdown({ name = "target statuses", flag = "autostomp_statuses", items = { "neutral", "friendly", "enemy" }, default = { "neutral", "enemy" }, multi = true })
+	stompSection:slider({ name = "range", flag = "autostomp_range", min = 20, max = 1000, default = 300, interval = 10, suffix = " st" })
 
 	local fireColumn = rage:column({})
 	local fireSection = fireColumn:section({ name = "auto fire" })
@@ -4278,10 +4869,21 @@ local function buildMenu()
 	fireSection:toggle({ name = "a/d strafe", flag = "adstrafe_enabled" })
 	fireSection:slider({ name = "a/d interval", flag = "adstrafe_interval", min = 0.05, max = 1, default = 0.22, interval = 0.01, suffix = "s" })
 	fireSection:toggle({ name = "auto reload", flag = "autofire_reload", default = true })
+	fireSection:toggle({ name = "auto equip", flag = "autoequip_enabled" })
+	fireSection:dropdown({ name = "equip order", flag = "autoequip_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock" }, default = { "rifle", "double-barrel sg", "flintlock", "revolver" }, multi = true })
+	fireSection:toggle({ name = "prioritize double-barrel", flag = "autoequip_db" })
+	fireSection:dropdown({ name = "unequip when", flag = "autoequip_unequip", items = { "no target", "target knocked", "target dead" }, default = {}, multi = true })
 	fireSection:slider({ name = "gun gap", flag = "autofire_gap", min = 0, max = 300, default = 40, interval = 5, suffix = "ms" })
 
 	local resolverSection = fireColumn:section({ name = "resolver" })
-	resolverSection:dropdown({ name = "mode", flag = "resolver_mode", items = { "off", "cluster", "adaptive" }, default = "adaptive" })
+	resolverSection:dropdown({ name = "mode", flag = "resolver_mode", items = { "off", "cluster", "adaptive", "weighted", "hybrid" }, default = "adaptive" })
+	resolverSection:slider({ name = "out of void bonus", flag = "resolver_map_bonus", min = 0, max = 12, default = 5, interval = 0.5, suffix = " st" })
+	resolverSection:slider({ name = "normal position trust", flag = "resolver_trust", min = 0.1, max = 5, default = 1.5, interval = 0.05, suffix = "" })
+	resolverSection:slider({ name = "void trust", flag = "resolver_void_trust", min = 0.1, max = 5, default = 0.2, interval = 0.05, suffix = "" })
+	resolverSection:slider({ name = "forget rate", flag = "resolver_forget", min = 0, max = 1000, default = 80, interval = 5, suffix = "%" })
+	resolverSection:slider({ name = "accuracy", flag = "resolver_accuracy", min = 5, max = 110, default = 76.82, interval = 0.5, suffix = "%" })
+	resolverSection:slider({ name = "distance penalty", flag = "resolver_penalty", min = 0, max = 5, default = 2, interval = 0.1, suffix = "x" })
+	resolverSection:slider({ name = "lerp when close", flag = "resolver_lerp", min = 10, max = 100, default = 10, interval = 1, suffix = "%" })
 	resolverSection:slider({ name = "cluster radius", flag = "resolver_radius", min = 2, max = 60, default = 12, interval = 1, suffix = " st" })
 	resolverSection:slider({ name = "history window", flag = "resolver_window", min = 0.25, max = 3, default = 1.5, interval = 0.05, suffix = "s" })
 	resolverSection:slider({ name = "hold last spot", flag = "resolver_hold", min = 0, max = 4, default = 1.5, interval = 0.1, suffix = "s" })
@@ -4325,6 +4927,7 @@ local function buildMenu()
 	characterSection:toggle({ name = "remove slowdowns", flag = "move_no_slow" })
 	characterSection:toggle({ name = "remove jump cooldown", flag = "move_no_jump_cooldown" })
 	characterSection:toggle({ name = "pushback guard", flag = "move_pushback", default = true })
+	characterSection:toggle({ name = "face target", flag = "face_target" })
 	characterSection:toggle({ name = "spinbot", flag = "move_spin" })
 	characterSection:slider({ name = "spin speed", flag = "move_spin_speed", min = 1, max = 100, default = 50, interval = 1, suffix = "%" })
 
@@ -4334,6 +4937,10 @@ local function buildMenu()
 	voidSection:slider({ name = "void time", flag = "voidspam_void", min = 0.05, max = 1.5, default = 0.35, interval = 0.01, suffix = "s" })
 	voidSection:slider({ name = "window time", flag = "voidspam_window", min = 0.05, max = 0.6, default = 0.12, interval = 0.01, suffix = "s" })
 	voidSection:toggle({ name = "hide while waiting", flag = "voidspam_hide_waiting", default = true })
+	voidSection:dropdown({ name = "force when", flag = "voidspam_force_when", items = { "reloading", "tabbed out", "not full health" }, default = {}, multi = true })
+	voidSection:toggle({ name = "stop if forced", flag = "voidspam_stop_forced" })
+	voidSection:toggle({ name = "out with target", flag = "voidspam_out_with_target", default = true })
+	voidSection:toggle({ name = "hide while target hides", flag = "voidspam_hide_with_target", default = true })
 	voidSection:dropdown({ name = "type", flag = "voidspam_type", items = { "random", "deep", "bait" }, default = "random" })
 	voidSection:slider({ name = "deep distance", flag = "voidspam_deep", min = 1, max = 1000, default = 100, interval = 1, suffix = "m st" })
 	voidSection:slider({ name = "offset", flag = "voidspam_offset", min = 0, max = 30, default = 3, interval = 1, suffix = " st" })
@@ -4351,12 +4958,19 @@ local function buildMenu()
 	fovSection:toggle({ name = "show", flag = "fov_show" })
 	fovSection:colorpicker({ name = "colour", flag = "fov_color", color = Color3.fromRGB(255, 255, 255) })
 	fovSection:colorpicker({ name = "active colour", flag = "fov_active_color", color = Color3.fromRGB(255, 80, 80) })
+	fovSection:toggle({ name = "follow target", flag = "fov_follow" })
+	fovSection:toggle({ name = "outline", flag = "fov_outline" })
+	fovSection:colorpicker({ name = "outline colour", flag = "fov_outline_color", color = Color3.new(0, 0, 0) })
+	fovSection:colorpicker({ name = "active outline", flag = "fov_active_outline", color = Color3.new(0, 0, 0) })
 
 	local tracerSection = visualsColumn:section({ name = "tracer" })
 	tracerSection:toggle({ name = "show", flag = "tracer_show" })
 	tracerSection:colorpicker({ name = "colour", flag = "tracer_color", color = Color3.fromRGB(255, 255, 255) })
 	tracerSection:slider({ name = "thickness", flag = "tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
 	tracerSection:dropdown({ name = "origin", flag = "tracer_origin", items = { "bottom", "center", "mouse" }, default = "bottom" })
+	tracerSection:dropdown({ name = "end point", flag = "tracer_end", items = { "aim", "head", "torso", "feet" }, default = "aim" })
+	tracerSection:toggle({ name = "outline", flag = "tracer_outline" })
+	tracerSection:colorpicker({ name = "outline colour", flag = "tracer_outline_color", color = Color3.new(0, 0, 0) })
 
 	local targetVisualColumn = visuals:column({})
 	local circleSection = targetVisualColumn:section({ name = "target circle" })
@@ -4366,6 +4980,9 @@ local function buildMenu()
 
 	local cameraSection = targetVisualColumn:section({ name = "camera" })
 	cameraSection:toggle({ name = "view target", flag = "view_target" })
+	cameraSection:toggle({ name = "stop when knocked", flag = "view_stop_knocked" })
+	cameraSection:toggle({ name = "information panel", flag = "info_panel" })
+	cameraSection:colorpicker({ name = "panel colour", flag = "info_color", color = Color3.fromRGB(255, 255, 255) })
 
 	local followVisualSection = targetVisualColumn:section({ name = "follow spot" })
 	followVisualSection:toggle({ name = "visualize", flag = "follow_visualize" })
@@ -4378,10 +4995,11 @@ local function buildMenu()
 	local shopColumn = shopTab:column({})
 	local purchaseSection = shopColumn:section({ name = "purchasing" })
 	purchaseSection:toggle({ name = "safe purchasing", flag = "shop_safe" })
-	purchaseSection:dropdown({ name = "avoid", flag = "shop_safe_avoid", items = { "target", "anyone" }, default = "target" })
+	purchaseSection:dropdown({ name = "avoid", flag = "shop_safe_avoid", items = { "target", "neutral", "friendly", "enemy" }, default = { "target" }, multi = true })
 	purchaseSection:slider({ name = "avoid within", flag = "shop_safe_distance", min = 10, max = 200, default = 50, interval = 1, suffix = " st" })
 	purchaseSection:slider({ name = "keep cash", flag = "shop_keep_cash", min = 0, max = 50000, default = 5000, interval = 100, suffix = "$" })
 	purchaseSection:toggle({ name = "notifications", flag = "shop_notify", default = true })
+	purchaseSection:dropdown({ name = "pause ammo, mask and loadout when", flag = "shop_pause_when", items = { "target selected", "target alive" }, default = {}, multi = true })
 	purchaseSection:dropdown({ name = "item", flag = "shop_manual_item", items = #Shop.names > 0 and Shop.names or { "none" }, default = Shop.items["popcorn"] and "popcorn" or nil, scrolling = true })
 	purchaseSection:button({ name = "buy item", callback = function()
 		local chosen = flag("shop_manual_item")
@@ -4394,6 +5012,7 @@ local function buildMenu()
 	local autoSection = shopColumn:section({ name = "auto armor" })
 	autoSection:toggle({ name = "enabled", flag = "shop_armor" })
 	autoSection:slider({ name = "buy if below", flag = "shop_armor_below", min = 1, max = 200, default = 52, interval = 1, suffix = "" })
+	autoSection:slider({ name = "try cooldown", flag = "shop_armor_cooldown", min = 0.05, max = 5, default = 0.05, interval = 0.05, suffix = "s" })
 
 	local ammoSection = shopColumn:section({ name = "auto ammo" })
 	ammoSection:toggle({ name = "enabled", flag = "shop_ammo" })
@@ -4405,6 +5024,7 @@ local function buildMenu()
 	healSection:toggle({ name = "enabled", flag = "shop_heal" })
 	healSection:slider({ name = "heal below", flag = "shop_heal_below", min = 1, max = 100, default = 50, interval = 1, suffix = "%" })
 	healSection:slider({ name = "eat every", flag = "shop_heal_cooldown", min = 0.05, max = 1, default = 0.3, interval = 0.05, suffix = "s" })
+	healSection:toggle({ name = "stop following while healing", flag = "shop_heal_stop_follow" })
 
 	local maskSection = shopColumn2:section({ name = "auto mask" })
 	maskSection:toggle({ name = "enabled", flag = "shop_mask" })
@@ -4419,6 +5039,7 @@ local function buildMenu()
 	local espSection = espColumn:section({ name = "player esp" })
 	espSection:toggle({ name = "enabled", flag = "esp_enabled" })
 	espSection:toggle({ name = "only target", flag = "esp_only_target" })
+	espSection:dropdown({ name = "render statuses", flag = "esp_statuses", items = { "neutral", "friendly", "enemy" }, default = { "neutral", "friendly", "enemy" }, multi = true })
 	espSection:toggle({ name = "box", flag = "esp_box", default = true })
 	espSection:toggle({ name = "name", flag = "esp_name", default = true })
 	espSection:toggle({ name = "use display name", flag = "esp_display_name", default = true })
@@ -4433,6 +5054,8 @@ local function buildMenu()
 	espSection:toggle({ name = "hide armor bar if none", flag = "esp_armor_hide_none", default = true })
 	espSection:colorpicker({ name = "colour", flag = "esp_color", color = Color3.fromRGB(255, 255, 255) })
 	espSection:colorpicker({ name = "target colour", flag = "esp_target_color", color = Color3.fromRGB(255, 80, 80) })
+	espSection:colorpicker({ name = "friendly colour", flag = "esp_friendly_color", color = Color3.fromRGB(80, 255, 120) })
+	espSection:colorpicker({ name = "enemy colour", flag = "esp_enemy_color", color = Color3.fromRGB(255, 160, 60) })
 	espSection:toggle({ name = "chams", flag = "esp_chams" })
 	espSection:slider({ name = "chams transparency", flag = "esp_chams_transparency", min = 0, max = 1, default = 0.5, interval = 0.05, suffix = "" })
 	espSection:toggle({ name = "chams behind walls", flag = "esp_chams_walls", default = true })
@@ -4525,6 +5148,7 @@ local function buildMenu()
 
 	local legitColumn2 = legit:column({})
 	local sharedSection = legitColumn2:section({ name = "shared" })
+	sharedSection:dropdown({ name = "target statuses", flag = "legit_statuses", items = { "neutral", "friendly", "enemy" }, default = { "neutral", "enemy" }, multi = true })
 	sharedSection:toggle({ name = "ignore knocked", flag = "legit_ignore_knocked", default = true })
 	sharedSection:toggle({ name = "ignore spawn protected", flag = "legit_ignore_protected", default = true })
 
@@ -4634,6 +5258,59 @@ local function buildMenu()
 	rainbowSection:slider({ name = "speed", flag = "char_rainbow_speed", min = 0.05, max = 3, default = 0.4, interval = 0.05, suffix = "" })
 	rainbowSection:slider({ name = "transparency", flag = "char_rainbow_transparency", min = 0, max = 1, default = 0.3, interval = 0.05, suffix = "" })
 
+	local playersTab = window:tab({ name = "players" })
+	local playersColumn = playersTab:column({})
+	local playersSection = playersColumn:section({ name = "player list" })
+
+	local function otherNames()
+		local names = {}
+
+		for _, player in playersService:GetPlayers() do
+			if player ~= localPlayer then
+				names[#names + 1] = player.Name
+			end
+		end
+
+		table.sort(names)
+
+		return #names > 0 and names or { "none" }
+	end
+
+	local playerDropdown = playersSection:dropdown({ name = "player", flag = "status_player", items = otherNames(), default = otherNames()[1], scrolling = true })
+
+	playersSection:dropdown({ name = "status", flag = "status_value", items = { "neutral", "friendly", "enemy" }, default = "neutral" })
+	playersSection:button({ name = "apply status", callback = function()
+		local chosen = playersService:FindFirstChild(tostring(flag("status_player")))
+
+		if chosen and chosen ~= localPlayer then
+			Status.set(chosen, flag("status_value", "neutral"))
+			notifications:create_notification({ name = chosen.Name .. " is " .. flag("status_value", "neutral") })
+		end
+	end })
+	playersSection:button({ name = "show status", callback = function()
+		local chosen = playersService:FindFirstChild(tostring(flag("status_player")))
+
+		if chosen then
+			notifications:create_notification({ name = chosen.Name .. " is " .. Status.get(chosen) })
+		end
+	end })
+	playersSection:button({ name = "set as target", callback = function()
+		local chosen = playersService:FindFirstChild(tostring(flag("status_player")))
+
+		if chosen and chosen ~= localPlayer then
+			Target.set(chosen)
+		end
+	end })
+	playersSection:button({ name = "refresh list", callback = function()
+		playerDropdown.refresh_options(otherNames())
+	end })
+
+	local autoStatusSection = playersTab:column({}):section({ name = "automatic statuses" })
+
+	autoStatusSection:toggle({ name = "friends are friendly", flag = "status_friends" })
+	autoStatusSection:toggle({ name = "crew mates are friendly", flag = "status_crew" })
+	autoStatusSection:toggle({ name = "friends of an enemy are enemies", flag = "status_enemy_friends" })
+
 	local misc = window:tab({ name = "misc" })
 	local miscColumn = misc:column({})
 	local miscSection = miscColumn:section({ name = "script" })
@@ -4641,6 +5318,7 @@ local function buildMenu()
 	utilitySection:toggle({ name = "anti bounty", flag = "antibounty_enabled" })
 	utilitySection:toggle({ name = "auto bounty", flag = "autobounty_enabled" })
 	utilitySection:toggle({ name = "anti stomp", flag = "antistomp_enabled" })
+	utilitySection:toggle({ name = "anti stomp teleport back", flag = "antistomp_back" })
 	utilitySection:toggle({ name = "anti afk", flag = "utility_antiafk" })
 	utilitySection:toggle({ name = "hide player nametags", flag = "misc_hide_nametags" })
 	utilitySection:toggle({ name = "unlock camera distance", flag = "misc_zoom" })
@@ -4669,6 +5347,6 @@ buildMenu()
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, misc = Misc, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, status = Status, misc = Misc, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })

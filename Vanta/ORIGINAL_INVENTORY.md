@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 216, Partial 33, No 245, Declined 23.
+**Totals (517 controls):** Yes 263, Partial 36, No 195, Declined 23.
 
 ## panel_section
 
@@ -127,8 +127,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| auto save friendlies | toggle | No |  |
-| auto set statuses | toggle | No |  |
+| auto save friendlies | toggle | Yes | Status |
+| auto set statuses | toggle | Yes | Status |
 
 ## auto_save_friendlies_settings
 
@@ -140,8 +140,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| set friendly if | dropdown | No |  |
-| set enemy if | dropdown | No |  |
+| set friendly if | dropdown | Partial | Status (friends, crew mates, friends of an enemy) |
+| set enemy if | dropdown | Partial | Status (friends, crew mates, friends of an enemy) |
 | notifications | toggle | No |  |
 
 ## lighting_section
@@ -474,7 +474,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| render statuses | dropdown | No |  |
+| render statuses | dropdown | Yes | Esp |
 
 ## box_settings
 
@@ -482,8 +482,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | outline | colorpicker | No |  |
 | color | colorpicker | Partial | Esp (one colour, one target colour) |
-| enemy color | colorpicker | No |  |
-| friendly color | colorpicker | No |  |
+| enemy color | colorpicker | Yes | Esp |
+| friendly color | colorpicker | Yes | Esp |
 
 ## name_settings
 
@@ -491,8 +491,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | use display name | toggle | Yes | Esp |
 | color | colorpicker | Yes | Esp |
-| enemy color | colorpicker | No |  |
-| friendly color | colorpicker | No |  |
+| enemy color | colorpicker | Yes | Esp |
+| friendly color | colorpicker | Yes | Esp |
 
 ## image_settings
 
@@ -509,8 +509,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | behind walls | toggle | Yes | Esp |
 | color | colorpicker | Partial | Esp (one colour, one target colour) |
-| enemy color | colorpicker | No |  |
-| friendly color | colorpicker | No |  |
+| enemy color | colorpicker | Yes | Esp |
+| friendly color | colorpicker | Yes | Esp |
 
 ## material_settings
 
@@ -526,9 +526,9 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | casing | dropdown | No |  |
-| color | colorpicker | No |  |
-| enemy color | colorpicker | No |  |
-| friendly color | colorpicker | No |  |
+| color | colorpicker | Yes | Esp |
+| enemy color | colorpicker | Yes | Esp |
+| friendly color | colorpicker | Yes | Esp |
 
 ## tool_icon_settings
 
@@ -550,8 +550,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | behind walls | toggle | Yes | Esp |
 | color | colorpicker | Partial | Esp |
-| enemy color | colorpicker | No |  |
-| friendly color | colorpicker | No |  |
+| enemy color | colorpicker | Yes | Esp |
+| friendly color | colorpicker | Yes | Esp |
 | outline color | colorpicker | Yes | Esp |
 | enemy outline color | colorpicker | No |  |
 | friendly outline color | colorpicker | No |  |
@@ -678,7 +678,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | ragebot | toggle | Yes | Ragebot / AutoFire / AdStrafe / Target |
 | auto fire | toggle | Yes | Ragebot / AutoFire / AdStrafe / Target |
 | a/d | toggle | Yes | Ragebot / AutoFire / AdStrafe / Target |
-| auto equip | toggle | Partial | AutoFire / Resolver |
+| auto equip | toggle | Yes | AutoFire |
 | spam resolver | toggle | Partial | AutoFire / Resolver |
 | target hitbox | dropdown | Yes | Ragebot / AutoFire / AdStrafe / Target |
 | prediction | slider | Partial | AutoFire / Resolver |
@@ -711,25 +711,25 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| unequip when | dropdown | No |  |
-| gun | dropdown | No |  |
-| prioritize db | toggle | No |  |
-| distance check | toggle | No |  |
+| unequip when | dropdown | Yes | AutoFire |
+| gun | dropdown | Yes | AutoFire |
+| prioritize db | toggle | Yes | AutoFire |
+| distance check | toggle | Partial | AutoFire (reach is always checked) |
 
 ## auto_fire_defensive_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| type | dropdown | Partial | Resolver (cluster, adaptive) |
-| refresh time | slider | No |  |
-| forgiveness | slider | No |  |
-| out of void bonus | slider | No |  |
-| normal position trust | slider | No |  |
-| forget rate | slider | No |  |
-| void trust | slider | No |  |
-| accuracy | slider | No |  |
-| distance based penalty | slider | Partial | Resolver (cluster, adaptive) |
-| lerp % when close | slider | No |  |
+| type | dropdown | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| refresh time | slider | Partial | Resolver (history window) |
+| forgiveness | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| out of void bonus | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| normal position trust | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| forget rate | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| void trust | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| accuracy | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| distance based penalty | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
+| lerp % when close | slider | Yes | Resolver (cluster, adaptive, weighted, hybrid) |
 
 ## prediction_settings
 
@@ -752,7 +752,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | wait for spawn protection | toggle | No |  |
 | void while waiting | toggle | No |  |
 | untarget when | dropdown | Yes | Target |
-| target statuses | dropdown | No |  |
+| target statuses | dropdown | Yes | Target |
 | target players | dropdown | No |  |
 | prioritize by | dropdown | Yes | Target |
 | ignore if | dropdown | Yes | Target |
@@ -762,11 +762,11 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| information panel | toggle | No |  |
-| crosshair follow | toggle | No |  |
+| information panel | toggle | Yes | Visuals / Movement / Crosshair |
+| crosshair follow | toggle | Yes | Visuals / Movement / Crosshair |
 | 3d target circle | toggle | Yes | Visuals |
 | view target | toggle | Yes | Visuals |
-| face target | toggle | No |  |
+| face target | toggle | Yes | Visuals / Movement / Crosshair |
 | show fov | toggle | Yes | Visuals |
 | tracer | toggle | Yes | Visuals |
 
@@ -781,17 +781,17 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| stop when knocked | toggle | No |  |
+| stop when knocked | toggle | Yes | Visuals |
 
 ## ragebot_field_of_view_show_fov_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| follow target | toggle | No |  |
+| follow target | toggle | Yes | Visuals |
 | color | colorpicker | Yes | Visuals |
-| outline | colorpicker | No |  |
+| outline | colorpicker | Yes | Visuals |
 | active color | colorpicker | Yes | Visuals |
-| active outline | colorpicker | No |  |
+| active outline | colorpicker | Yes | Visuals |
 
 ## ragebot_tracer_settings
 
@@ -799,9 +799,9 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | thickness | slider | Yes | Visuals |
 | color | colorpicker | Yes | Visuals |
-| outline | colorpicker | No |  |
+| outline | colorpicker | Yes | Visuals |
 | origin | dropdown | Yes | Visuals |
-| end point | dropdown | No |  |
+| end point | dropdown | Yes | Visuals |
 
 ## anti_section
 
@@ -856,11 +856,11 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | bait spot | dropdown | Yes | VoidSpam |
 | deep distance | slider | Yes | VoidSpam |
 | disable when | dropdown | No |  |
-| force when | dropdown | No |  |
+| force when | dropdown | Yes | VoidSpam |
 | spam | toggle | Yes | VoidSpam |
-| stop if forced | toggle | No |  |
-| out with target | toggle | No |  |
-| hide while target hides | toggle | No |  |
+| stop if forced | toggle | Yes | VoidSpam |
+| out with target | toggle | Yes | VoidSpam |
+| hide while target hides | toggle | Yes | VoidSpam |
 | offset | slider | Yes | VoidSpam |
 | void time | slider | Yes | VoidSpam |
 | teleport time | slider | Yes | VoidSpam |
@@ -869,13 +869,13 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| avoid statuses | dropdown | Partial | Shop (target / anyone) |
+| avoid statuses | dropdown | Yes | Shop |
 
 ## auto_loadout_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| disable when | dropdown | No |  |
+| disable when | dropdown | Partial | Shop (pause when target selected / alive) |
 | guns | dropdown | Yes | Shop |
 | ammo | slider | Yes | Shop |
 
@@ -907,7 +907,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | stop when target dead | toggle | Yes | AutoStomp |
-| target statuses | dropdown | No |  |
+| target statuses | dropdown | Yes | AutoStomp |
 | wait for all targets knocked | toggle | No |  |
 | prioritize over reloading | toggle | No |  |
 
@@ -915,7 +915,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| disable when | dropdown | No |  |
+| disable when | dropdown | Partial | Shop (pause when target selected / alive) |
 | minimum clips | slider | Yes | Shop |
 | purchase amount | slider | Yes | Shop |
 
@@ -924,13 +924,13 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | purchase if below | slider | Yes | Shop |
-| try cooldown | slider | No |  |
+| try cooldown | slider | Yes | Shop |
 
 ## anti_stomp_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| teleport back | toggle | No |  |
+| teleport back | toggle | Yes | AntiStomp |
 
 ## anti_report_settings
 
@@ -944,7 +944,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| disable when | dropdown | No |  |
+| disable when | dropdown | Partial | Shop (pause when target selected / alive) |
 
 ## auto_heal_settings
 
@@ -952,7 +952,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | purchase if below | slider | Yes | Shop |
 | try cooldown | slider | Yes | Shop |
-| stop following while healing | toggle | No |  |
+| stop following while healing | toggle | Yes | Shop / Follow |
 
 ## rapid_fire_settings
 
@@ -984,7 +984,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | automatic | toggle | No |  |
 | target bind | keybind | No |  |
 | untarget when | dropdown | No |  |
-| target statuses | dropdown | No |  |
+| target statuses | dropdown | Yes | Legit |
 | ignore if | dropdown | Partial | Legit (shared ignore knocked / protected; per-feature FOV) |
 | field of view | slider | Partial | Legit (shared ignore knocked / protected; per-feature FOV) |
 
