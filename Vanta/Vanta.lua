@@ -2587,6 +2587,513 @@ function Utility.rejoin()
 	end
 end
 
+---@module Feedback
+---What you see and hear when you shoot. The game's own shot call is watched (read only, passed straight on) to learn where each shot was sent from and to; a drop
+---in another player's health shortly after, close to where the shot was sent, counts as the hit. Every effect is a short-lived object with a life time,
+---updated by one RenderStepped step and removed when it expires, when its toggle goes off, and on unload.
+local Feedback = {
+	shots = {},
+	effects = {},
+	health = {},
+	sounds = {},
+	hooked = false,
+	active = true,
+	overlay = nil,
+	lastShotAt = 0,
+}
+
+local SOUND_NAMES = { "neverlose", "primordial", "sparkle", "mc bow", "break", "skeet", "rust", "agpa1", "agpa2", "Beep1", "bubble", "copperbell", "cowbell", "huhh", "quake" }
+local SOUND_URL = "https://raw.githubusercontent.com/haltorillshoot/Visions-hook/main/assets/neverlose%20recode/assets/"
+
+local function guiParent()
+	local ok, hidden = pcall(function()
+		return gethui()
+	end)
+
+	return ok and hidden or game:GetService("CoreGui")
+end
+
+---Adds a timed effect. `step(age, life)` returns false when it is done early; `destroy()` frees what it made.
+local function addEffect(life, step, destroy)
+	Feedback.effects[#Feedback.effects + 1] = { born = os.clock(), life = life, step = step, destroy = destroy }
+end
+
+local function newLine()
+	local line = Drawing.new("Line")
+
+	line.Visible = true
+
+	return line
+end
+
+local function colourFor(name, lethalName, lethal)
+	local colour = pickerColor(lethal and lethalName or name, lethal and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 255, 255))
+
+	return colour
+end
+
+---Frees every effect (unload, or a toggle going off clears only its own kind through `kind`).
+function Feedback.clear()
+	for _, effect in Feedback.effects do
+		effect.destroy()
+	end
+
+	table.clear(Feedback.effects)
+
+	if Feedback.overlay then
+		Feedback.overlay.Parent:Destroy()
+		Feedback.overlay = nil
+	end
+end
+
+function Feedback.render()
+	local now = os.clock()
+	local index = 1
+
+	while index <= #Feedback.effects do
+		local effect = Feedback.effects[index]
+		local age = now - effect.born
+
+		if age >= effect.life or effect.step(age, effect.life) == false then
+			effect.destroy()
+			table.remove(Feedback.effects, index)
+		else
+			index += 1
+		end
+	end
+end
+
+-- Individual effects ------------------------------------------------------------------------------------------------------------------------
+
+local function marker2d(lethal)
+	local colour = colourFor("fb_marker2d_color", "fb_marker2d_lethal", lethal)
+	local thickness = flag("fb_marker2d_thickness", 2)
+	local lines = { newLine(), newLine(), newLine(), newLine() }
+	local signs = { Vector2.new(1, 1), Vector2.new(-1, 1), Vector2.new(1, -1), Vector2.new(-1, -1) }
+
+	addEffect(flag("fb_marker2d_life", 0.4), function(age, life)
+		local centre = camera.ViewportSize / 2
+		local spread = 3 + age / life * 4
+
+		for index, line in lines do
+			line.From = centre + signs[index] * spread
+			line.To = centre + signs[index] * (spread + 6)
+			line.Thickness = thickness
+			line.Color = colour
+			line.Transparency = 1 - age / life
+		end
+	end, function()
+		for _, line in lines do
+			line:Remove()
+		end
+	end)
+end
+
+local function marker3d(position, lethal)
+	local colour = colourFor("fb_marker3d_color", "fb_marker3d_lethal", lethal)
+	local thickness = flag("fb_marker3d_thickness", 2)
+	local lines = { newLine(), newLine(), newLine(), newLine() }
+	local signs = { Vector2.new(1, 1), Vector2.new(-1, 1), Vector2.new(1, -1), Vector2.new(-1, -1) }
+
+	addEffect(flag("fb_marker3d_life", 0.6), function(age, life)
+		local point, onScreen = camera:WorldToViewportPoint(position)
+		local centre = Vector2.new(point.X, point.Y)
+		local visible = onScreen and point.Z > 0
+
+		for index, line in lines do
+			line.Visible = visible
+			line.From = centre + signs[index] * 3
+			line.To = centre + signs[index] * 10
+			line.Thickness = thickness
+			line.Color = colour
+			line.Transparency = 1 - age / life
+		end
+	end, function()
+		for _, line in lines do
+			line:Remove()
+		end
+	end)
+end
+
+local function damageNumber(position, damage, lethal)
+	local text = Drawing.new("Text")
+
+	text.Visible = true
+	text.Text = tostring(math.floor(damage + 0.5))
+	text.Size = flag("fb_damage_size", 18)
+	text.Center = true
+	text.Outline = true
+	text.Font = Drawing.Fonts and Drawing.Fonts.UI or 0
+	text.Color = colourFor("fb_damage_color", "fb_damage_lethal", lethal)
+
+	addEffect(flag("fb_damage_life", 1), function(age, life)
+		local point, onScreen = camera:WorldToViewportPoint(position + Vector3.new(0, 1.5 + age * 3, 0))
+
+		text.Visible = onScreen and point.Z > 0
+		text.Position = Vector2.new(point.X, point.Y)
+		text.Transparency = 1 - age / life
+	end, function()
+		text:Remove()
+	end)
+end
+
+local function hitOverlay(lethal)
+	if not Feedback.overlay then
+		local gui = Instance.new("ScreenGui")
+
+		gui.Name = ""
+		gui.IgnoreGuiInset = true
+		gui.DisplayOrder = 10
+		gui.Parent = guiParent()
+
+		local frame = Instance.new("Frame")
+
+		frame.Size = UDim2.fromScale(1, 1)
+		frame.BorderSizePixel = 0
+		frame.BackgroundTransparency = 1
+		frame.Parent = gui
+		Feedback.overlay = frame
+	end
+
+	local frame = Feedback.overlay
+	local colour = colourFor("fb_overlay_color", "fb_overlay_lethal", lethal)
+
+	frame.BackgroundColor3 = colour
+
+	addEffect(flag("fb_overlay_life", 0.35), function(age, life)
+		frame.BackgroundTransparency = 0.65 + 0.35 * (age / life)
+	end, function()
+		frame.BackgroundTransparency = 1
+	end)
+end
+
+local function hitChams(character, lethal)
+	if not character then
+		return
+	end
+
+	if flag("fb_chams_last_only", true) then
+		for _, effect in Feedback.effects do
+			if effect.kind == "chams" then
+				effect.born = -math.huge
+			end
+		end
+	end
+
+	local highlight = Instance.new("Highlight")
+
+	highlight.Adornee = character
+	highlight.FillColor = colourFor("fb_chams_color", "fb_chams_lethal", lethal)
+	highlight.OutlineColor = highlight.FillColor
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Parent = guiParent()
+
+	addEffect(flag("fb_chams_life", 0.5), function(age, life)
+		highlight.FillTransparency = 0.3 + 0.7 * (age / life)
+		highlight.OutlineTransparency = age / life
+	end, function()
+		highlight:Destroy()
+	end)
+
+	Feedback.effects[#Feedback.effects].kind = "chams"
+end
+
+local function hitParticles(position, lethal)
+	local anchor = Instance.new("Part")
+
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.one
+	anchor.Position = position
+	anchor.Parent = workspace
+
+	local emitter = Instance.new("ParticleEmitter")
+
+	emitter.Enabled = false
+	emitter.Color = ColorSequence.new(colourFor("fb_particle_color", "fb_particle_lethal", lethal))
+	emitter.Lifetime = NumberRange.new(0.4, 0.8)
+	emitter.Speed = NumberRange.new(8, 16)
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Size = NumberSequence.new(0.4, 0)
+	emitter.LightEmission = 1
+	emitter.Parent = anchor
+	emitter:Emit(flag("fb_particle_count", 20))
+
+	addEffect(1.2, function() end, function()
+		anchor:Destroy()
+	end)
+end
+
+local function hitSkeleton(character)
+	if not character then
+		return
+	end
+
+	local colour = pickerColor("fb_skeleton_color", Color3.fromRGB(255, 255, 255))
+	local thickness = flag("fb_skeleton_thickness", 1)
+	local joints = {}
+
+	for _, descendant in character:GetDescendants() do
+		if descendant:IsA("Motor6D") and descendant.Part0 and descendant.Part1 then
+			joints[#joints + 1] = { descendant.Part0, descendant.Part1, newLine() }
+		end
+	end
+
+	addEffect(flag("fb_skeleton_life", 0.6), function(age, life)
+		for _, joint in joints do
+			local from, fromOn = camera:WorldToViewportPoint(joint[1].Position)
+			local to, toOn = camera:WorldToViewportPoint(joint[2].Position)
+			local line = joint[3]
+
+			line.Visible = fromOn and toOn and from.Z > 0 and to.Z > 0
+			line.From, line.To = Vector2.new(from.X, from.Y), Vector2.new(to.X, to.Y)
+			line.Thickness = thickness
+			line.Color = colour
+			line.Transparency = 1 - age / life
+		end
+	end, function()
+		for _, joint in joints do
+			joint[3]:Remove()
+		end
+	end)
+end
+
+local function bulletTracer(origin, hit)
+	local colour = pickerColor("fb_tracer_color", Color3.fromRGB(255, 255, 255))
+	local line = newLine()
+
+	addEffect(flag("fb_tracer_life", 0.5), function(age, life)
+		local from, fromOn = camera:WorldToViewportPoint(origin)
+		local to, toOn = camera:WorldToViewportPoint(hit)
+
+		line.Visible = (fromOn or toOn) and (from.Z > 0 or to.Z > 0)
+		line.From, line.To = Vector2.new(from.X, from.Y), Vector2.new(to.X, to.Y)
+		line.Thickness = flag("fb_tracer_thickness", 1)
+		line.Color = colour
+		line.Transparency = 1 - age / life
+	end, function()
+		line:Remove()
+	end)
+end
+
+local function bulletImpact(hit)
+	local ball = Instance.new("Part")
+
+	ball.Shape = Enum.PartType.Ball
+	ball.Anchored = true
+	ball.CanCollide = false
+	ball.CanQuery = false
+	ball.CanTouch = false
+	ball.Material = Enum.Material.Neon
+	ball.Color = pickerColor("fb_impact_color", Color3.fromRGB(255, 200, 80))
+	ball.Size = Vector3.one * 0.8
+	ball.Position = hit
+	ball.Parent = workspace
+
+	addEffect(flag("fb_impact_life", 0.8), function(age, life)
+		ball.Transparency = age / life
+	end, function()
+		ball:Destroy()
+	end)
+end
+
+-- Hit sound ----------------------------------------------------------------------------------------------------------------------------------
+
+---Downloads the chosen sound from the repository once (kept in the workspace folder `Vanta/sounds`) and returns an asset id for it.
+---@param name string
+function Feedback.soundId(name)
+	if Feedback.sounds[name] then
+		return Feedback.sounds[name]
+	end
+
+	local ok, id = pcall(function()
+		if not isfolder("Vanta") then
+			makefolder("Vanta")
+		end
+
+		if not isfolder("Vanta/sounds") then
+			makefolder("Vanta/sounds")
+		end
+
+		local path = "Vanta/sounds/" .. name .. ".ogg"
+
+		if not isfile(path) then
+			writefile(path, game:HttpGet(SOUND_URL .. name:gsub(" ", "%%20") .. ".ogg"))
+		end
+
+		return getcustomasset(path)
+	end)
+
+	if ok and id then
+		Feedback.sounds[name] = id
+
+		return id
+	end
+
+	return nil
+end
+
+local function hitSound()
+	local id = Feedback.soundId(flag("fb_sound_name", "neverlose"))
+
+	if not id then
+		return
+	end
+
+	local sound = Instance.new("Sound")
+
+	sound.SoundId = id
+	sound.Volume = flag("fb_sound_volume", 1)
+	sound.Parent = game:GetService("SoundService")
+	sound:Play()
+	game:GetService("Debris"):AddItem(sound, 5)
+end
+
+-- Events -------------------------------------------------------------------------------------------------------------------------------------
+
+---A confirmed hit: runs every effect that is on.
+---@param position Vector3 where the shot was sent to
+---@param character Model? the player hit
+---@param damage number
+---@param lethal boolean
+function Feedback.hit(position, character, damage, lethal)
+	if flag("fb_marker2d", false) then marker2d(lethal) end
+	if flag("fb_marker3d", false) then marker3d(position, lethal) end
+	if flag("fb_damage", false) then damageNumber(position, damage, lethal) end
+	if flag("fb_overlay", false) then hitOverlay(lethal) end
+	if flag("fb_chams", false) then hitChams(character, lethal) end
+	if flag("fb_particle", false) then hitParticles(position, lethal) end
+	if flag("fb_skeleton", false) then hitSkeleton(character) end
+	if flag("fb_sound", false) then hitSound() end
+
+	if flag("fb_notify_hits", false) and notifications then
+		notifications:create_notification({ name = string.format("hit %s for %d", character and character.Name or "?", damage) })
+	end
+end
+
+---A shot sent to the server. Pellets of one shotgun shot arrive together and count as one.
+function Feedback.shot(tool, origin, hit)
+	local now = os.clock()
+	local last = Feedback.shots[#Feedback.shots]
+
+	if last and last.tool == tool and now - last.at < 0.05 then
+		return
+	end
+
+	local entry = { at = now, tool = tool, origin = origin, hit = hit, confirmed = false }
+
+	Feedback.shots[#Feedback.shots + 1] = entry
+
+	if #Feedback.shots > 8 then
+		table.remove(Feedback.shots, 1)
+	end
+
+	if flag("fb_tracer", false) then bulletTracer(origin, hit) end
+	if flag("fb_impact", false) then bulletImpact(hit) end
+
+	if flag("fb_notify_miss", false) and notifications then
+		task.delay(0.4 + Util.ping(), function()
+			if not entry.confirmed then
+				notifications:create_notification({ name = "shot: no hit" })
+			end
+		end)
+	end
+end
+
+---Which recent shot does a health drop at `position` belong to?
+local function matchShot(position)
+	local now = os.clock()
+
+	for index = #Feedback.shots, 1, -1 do
+		local entry = Feedback.shots[index]
+
+		if now - entry.at > 0.6 + Util.ping() then
+			break
+		end
+
+		if not entry.confirmed and (entry.hit - position).Magnitude < 30 then
+			return entry
+		end
+	end
+
+	return nil
+end
+
+local function watchPlayer(player, maid)
+	local function watchCharacter(character)
+		local humanoid = character:WaitForChild("Humanoid", 5)
+
+		if not humanoid then
+			return
+		end
+
+		Feedback.health[humanoid] = humanoid.Health
+
+		maid:give(humanoid.HealthChanged:Connect(function(health)
+			local before = Feedback.health[humanoid] or health
+
+			Feedback.health[humanoid] = health
+
+			if before - health < 0.5 then
+				return
+			end
+
+			local root = character:FindFirstChild("HumanoidRootPart")
+			local entry = root and matchShot(root.Position)
+
+			if entry then
+				entry.confirmed = true
+				Feedback.hit(entry.hit, character, before - health, health <= 5 or Players.knocked(player))
+			end
+		end))
+	end
+
+	if player.Character then
+		task.spawn(watchCharacter, player.Character)
+	end
+
+	maid:give(player.CharacterAdded:Connect(watchCharacter))
+end
+
+---Starts watching: other players' health, and the game's shot call.
+---@param maid table
+function Feedback.start(maid)
+	for _, player in playersService:GetPlayers() do
+		if player ~= localPlayer then
+			watchPlayer(player, maid)
+		end
+	end
+
+	maid:give(playersService.PlayerAdded:Connect(function(player)
+		watchPlayer(player, maid)
+	end))
+
+	if not Feedback.hooked then
+		Feedback.hooked = true
+
+		local original
+		original = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+			if Feedback.active and getnamecallmethod() == "FireServer" and not checkcaller() then
+				local kind, handle, origin, hit = ...
+
+				if kind == "ShootGun" and typeof(origin) == "Vector3" and typeof(hit) == "Vector3" then
+					pcall(Feedback.shot, typeof(handle) == "Instance" and handle.Parent or nil, origin, hit)
+				end
+			end
+
+			return original(self, ...)
+		end))
+	end
+
+	maid:give(function()
+		Feedback.active = false
+		Feedback.clear()
+	end)
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -2673,6 +3180,8 @@ function Ragebot.start()
 	Ragebot.maid:give(runService.PreRender:Connect(Body.restore))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Visuals.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Esp.render))
+	Ragebot.maid:give(runService.RenderStepped:Connect(Feedback.render))
+	Feedback.start(Ragebot.maid)
 	Ragebot.maid:give(runService.RenderStepped:Connect(AimAssist.step))
 	Ragebot.maid:give(runService.Stepped:Connect(Movement.stepped))
 	Ragebot.maid:give(Esp.clear)
@@ -2915,6 +3424,74 @@ aimSection:toggle({ name = "ignore spawn protected", flag = "aimassist_ignore_pr
 aimSection:toggle({ name = "show fov", flag = "aimassist_show_fov" })
 aimSection:colorpicker({ name = "fov colour", flag = "aimassist_fov_color", color = Color3.fromRGB(255, 255, 255) })
 
+local hits = window:tab({ name = "hits" })
+local hitsColumn = hits:column({})
+local markerSection = hitsColumn:section({ name = "hit markers" })
+markerSection:toggle({ name = "2d hit marker", flag = "fb_marker2d" })
+markerSection:slider({ name = "2d lifetime", flag = "fb_marker2d_life", min = 0.1, max = 2, default = 0.4, interval = 0.05, suffix = "s" })
+markerSection:slider({ name = "2d thickness", flag = "fb_marker2d_thickness", min = 1, max = 5, default = 2, interval = 1, suffix = "px" })
+markerSection:colorpicker({ name = "2d colour", flag = "fb_marker2d_color", color = Color3.fromRGB(255, 255, 255) })
+markerSection:colorpicker({ name = "2d lethal colour", flag = "fb_marker2d_lethal", color = Color3.fromRGB(255, 60, 60) })
+markerSection:toggle({ name = "3d hit marker", flag = "fb_marker3d" })
+markerSection:slider({ name = "3d lifetime", flag = "fb_marker3d_life", min = 0.1, max = 3, default = 0.6, interval = 0.05, suffix = "s" })
+markerSection:slider({ name = "3d thickness", flag = "fb_marker3d_thickness", min = 1, max = 5, default = 2, interval = 1, suffix = "px" })
+markerSection:colorpicker({ name = "3d colour", flag = "fb_marker3d_color", color = Color3.fromRGB(255, 255, 255) })
+markerSection:colorpicker({ name = "3d lethal colour", flag = "fb_marker3d_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+local damageSection = hitsColumn:section({ name = "damage number" })
+damageSection:toggle({ name = "enabled", flag = "fb_damage" })
+damageSection:slider({ name = "lifetime", flag = "fb_damage_life", min = 0.2, max = 3, default = 1, interval = 0.05, suffix = "s" })
+damageSection:slider({ name = "size", flag = "fb_damage_size", min = 10, max = 40, default = 18, interval = 1, suffix = "px" })
+damageSection:colorpicker({ name = "colour", flag = "fb_damage_color", color = Color3.fromRGB(255, 255, 255) })
+damageSection:colorpicker({ name = "lethal colour", flag = "fb_damage_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+local soundSection = hitsColumn:section({ name = "hit sound" })
+soundSection:toggle({ name = "enabled", flag = "fb_sound" })
+soundSection:dropdown({ name = "sound", flag = "fb_sound_name", items = SOUND_NAMES, default = "neverlose", scrolling = true })
+soundSection:slider({ name = "volume", flag = "fb_sound_volume", min = 0, max = 5, default = 1, interval = 0.1, suffix = "" })
+
+local hitsColumn2 = hits:column({})
+local overlaySection = hitsColumn2:section({ name = "hit overlay" })
+overlaySection:toggle({ name = "enabled", flag = "fb_overlay" })
+overlaySection:slider({ name = "lifetime", flag = "fb_overlay_life", min = 0.1, max = 2, default = 0.35, interval = 0.05, suffix = "s" })
+overlaySection:colorpicker({ name = "colour", flag = "fb_overlay_color", color = Color3.fromRGB(255, 255, 255) })
+overlaySection:colorpicker({ name = "lethal colour", flag = "fb_overlay_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+local chamsSection = hitsColumn2:section({ name = "hit chams" })
+chamsSection:toggle({ name = "enabled", flag = "fb_chams" })
+chamsSection:toggle({ name = "only last hit", flag = "fb_chams_last_only", default = true })
+chamsSection:slider({ name = "lifetime", flag = "fb_chams_life", min = 0.1, max = 3, default = 0.5, interval = 0.05, suffix = "s" })
+chamsSection:colorpicker({ name = "colour", flag = "fb_chams_color", color = Color3.fromRGB(255, 255, 255) })
+chamsSection:colorpicker({ name = "lethal colour", flag = "fb_chams_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+local particleSection = hitsColumn2:section({ name = "hit particle" })
+particleSection:toggle({ name = "enabled", flag = "fb_particle" })
+particleSection:slider({ name = "amount", flag = "fb_particle_count", min = 1, max = 100, default = 20, interval = 1, suffix = "" })
+particleSection:colorpicker({ name = "colour", flag = "fb_particle_color", color = Color3.fromRGB(255, 255, 255) })
+particleSection:colorpicker({ name = "lethal colour", flag = "fb_particle_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+local skeletonSection = hitsColumn2:section({ name = "hit skeleton" })
+skeletonSection:toggle({ name = "enabled", flag = "fb_skeleton" })
+skeletonSection:slider({ name = "lifetime", flag = "fb_skeleton_life", min = 0.1, max = 3, default = 0.6, interval = 0.05, suffix = "s" })
+skeletonSection:slider({ name = "thickness", flag = "fb_skeleton_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
+skeletonSection:colorpicker({ name = "colour", flag = "fb_skeleton_color", color = Color3.fromRGB(255, 255, 255) })
+
+local hitsColumn3 = hits:column({})
+local tracerSection2 = hitsColumn3:section({ name = "bullet tracers" })
+tracerSection2:toggle({ name = "local tracers", flag = "fb_tracer" })
+tracerSection2:slider({ name = "lifetime", flag = "fb_tracer_life", min = 0.1, max = 3, default = 0.5, interval = 0.05, suffix = "s" })
+tracerSection2:slider({ name = "thickness", flag = "fb_tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
+tracerSection2:colorpicker({ name = "colour", flag = "fb_tracer_color", color = Color3.fromRGB(255, 255, 255) })
+
+local impactSection = hitsColumn3:section({ name = "bullet impacts" })
+impactSection:toggle({ name = "local impacts", flag = "fb_impact" })
+impactSection:slider({ name = "lifetime", flag = "fb_impact_life", min = 0.1, max = 3, default = 0.8, interval = 0.05, suffix = "s" })
+impactSection:colorpicker({ name = "colour", flag = "fb_impact_color", color = Color3.fromRGB(255, 200, 80) })
+
+local notifySection = hitsColumn3:section({ name = "shot notifications" })
+notifySection:toggle({ name = "notify hits", flag = "fb_notify_hits" })
+notifySection:toggle({ name = "notify shots with no hit", flag = "fb_notify_miss" })
+
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})
 local miscSection = miscColumn:section({ name = "script" })
@@ -2953,6 +3530,6 @@ miscSection:button({ name = "unload", callback = unload })
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, aimassist = AimAssist, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, aimassist = AimAssist, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })

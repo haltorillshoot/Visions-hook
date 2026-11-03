@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 98, Partial 19, No 393, Declined 7.
+**Totals (517 controls):** Yes 136, Partial 21, No 353, Declined 7.
 
 ## panel_section
 
@@ -273,20 +273,20 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | player bullet volume | slider | No |  |
 | mute gun sounds | toggle | No |  |
 | player bullet tracers | toggle | No |  |
-| local bullet impacts | toggle | No |  |
+| local bullet impacts | toggle | Yes | Feedback |
 | override armor pop | toggle | No |  |
-| local bullet tracers | toggle | No |  |
-| shot notifications | toggle | No |  |
+| local bullet tracers | toggle | Yes | Feedback |
+| shot notifications | toggle | Partial | Feedback (hit / no hit) |
 | local bullet sound | toggle | No |  |
-| damage number | toggle | No |  |
-| 3d hit marker | toggle | No |  |
-| 2d hit marker | toggle | No |  |
-| hit skeleton | toggle | No |  |
-| hit particle | toggle | No |  |
+| damage number | toggle | Yes | Feedback |
+| 3d hit marker | toggle | Yes | Feedback |
+| 2d hit marker | toggle | Yes | Feedback |
+| hit skeleton | toggle | Yes | Feedback |
+| hit particle | toggle | Yes | Feedback |
 | rpg warning | toggle | No |  |
-| hit overlay | toggle | No |  |
-| hit sound | toggle | No |  |
-| hit chams | toggle | No |  |
+| hit overlay | toggle | Yes | Feedback |
+| hit sound | toggle | Yes | Feedback |
+| hit chams | toggle | Yes | Feedback |
 
 ## player_bullet_tracers_settings
 
@@ -306,9 +306,9 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | animation | dropdown | No |  |
 | pop color | colorpicker | No |  |
 | style | dropdown | No |  |
-| color | colorpicker | No |  |
+| color | colorpicker | Yes | Feedback |
 | outline color | colorpicker | No |  |
-| lifetime | slider | No |  |
+| lifetime | slider | Yes | Feedback |
 
 ## override_armor_pop_settings
 
@@ -323,17 +323,17 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | type | dropdown | No |  |
 | style | dropdown | No |  |
-| color | colorpicker | No |  |
+| color | colorpicker | Yes | Feedback |
 | outline color | colorpicker | No |  |
 | gradient color | colorpicker | No |  |
-| lifetime | slider | No |  |
+| lifetime | slider | Yes | Feedback |
 | one line for shotguns | toggle | No |  |
 
 ## shot_notifications_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| notify when | dropdown | No |  |
+| notify when | dropdown | Partial | Feedback |
 | failed color | colorpicker | No |  |
 | hit color | colorpicker | No |  |
 
@@ -350,9 +350,9 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | font | dropdown | No |  |
-| lifetime | slider | No |  |
-| color | colorpicker | No |  |
-| lethal color | colorpicker | No |  |
+| lifetime | slider | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
+| lethal color | colorpicker | Yes | Feedback |
 | outline color | colorpicker | No |  |
 | show ragebot data | toggle | No |  |
 
@@ -360,20 +360,20 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| lifetime | slider | No |  |
-| thickness | slider | No |  |
-| color | colorpicker | No |  |
-| lethal color | colorpicker | No |  |
+| lifetime | slider | Yes | Feedback |
+| thickness | slider | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
+| lethal color | colorpicker | Yes | Feedback |
 | outline color | colorpicker | No |  |
 
 ## d2_hit_marker_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| lifetime | slider | No |  |
-| thickness | slider | No |  |
-| color | colorpicker | No |  |
-| lethal color | colorpicker | No |  |
+| lifetime | slider | Yes | Feedback |
+| thickness | slider | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
+| lethal color | colorpicker | Yes | Feedback |
 | outline color | colorpicker | No |  |
 
 ## hit_skeleton_settings
@@ -381,17 +381,17 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | animation | dropdown | No |  |
-| lifetime | slider | No |  |
-| thickness | slider | No |  |
-| color | colorpicker | No |  |
+| lifetime | slider | Yes | Feedback |
+| thickness | slider | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
 
 ## hit_particle_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | behind walls | toggle | No |  |
-| lethal color | colorpicker | No |  |
-| color | colorpicker | No |  |
+| lethal color | colorpicker | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
 | particle | dropdown | No |  |
 
 ## rpg_warning_settings
@@ -404,26 +404,26 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| lifetime | slider | No |  |
-| color | colorpicker | No |  |
-| lethal color | colorpicker | No |  |
+| lifetime | slider | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
+| lethal color | colorpicker | Yes | Feedback |
 
 ## hit_sound_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| sound | dropdown | No |  |
-| volume | slider | No |  |
+| sound | dropdown | Yes | Feedback (sounds fetched from this repository) |
+| volume | slider | Yes | Feedback (sounds fetched from this repository) |
 
 ## hit_chams_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| only last hit | toggle | No |  |
+| only last hit | toggle | Yes | Feedback |
 | animation | dropdown | No |  |
 | type | dropdown | No |  |
-| lifetime | slider | No |  |
-| color | colorpicker | No |  |
+| lifetime | slider | Yes | Feedback |
+| color | colorpicker | Yes | Feedback |
 
 ## visuals_other_section
 

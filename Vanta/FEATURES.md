@@ -67,3 +67,9 @@ The shop module buys through the shop parts in `Workspace.Ignored.Shop`: 105 dis
 | Aim assist | Hold key, camera or mouse method, head/chest/root, FOV circle, max distance, horizontal and vertical smoothing, visibility check, ignore knocked and protected | No (needs players) |
 | Movement | Speed, flight, noclip, jump power (a game-side reset is overridden through a `__newindex` hook), anti sit | Jump power holds 120 across frames and restores to 50; noclip leaves 0 colliding parts; flight hovers; speed needs walking input |
 | Utility | Anti AFK, rejoin, watermark switch | Watermark switch yes; rejoin and anti AFK not run |
+
+## Hit and shot feedback (added)
+
+Ten of the older "game" visuals now exist as the Feedback module: 2D and 3D hit markers, damage numbers, hit sound (15 sounds from this repository's `assets`, fetched once into `Vanta/sounds` and played through `getcustomasset`), hit overlay, hit chams, hit particles, hit skeleton, local bullet tracers, local bullet impacts; shot notifications are partial (hit, or no hit). A shot is learned from the game's own `ShootGun` call (a read-only hook that passes the call straight on); a health drop on another player within 0.6 s and 30 studs of where the shot was sent counts as the hit.
+
+Tested live: every effect created from a synthetic shot and hit (nine effects alive, then none after their lifetimes, no leftover parts), the overlay and chams objects, the sound download, load and playback (0.86 s clip, names with a space work). Not tested: the real shot hook and the real hit match (no second player). Not reproduced: player bullet tracers and volume, mute gun sounds, local bullet sound, RPG warning, override armor pop.
