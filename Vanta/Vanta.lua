@@ -276,7 +276,7 @@ function Target.step(now)
 
 	if player then
 		local gone = player.Parent ~= playersService
-		local knocked = Players.knocked(player) and flag("target_skip_knocked", true) and not flag("target_hold_knocked", false)
+		local knocked = Players.knocked(player) and flag("target_skip_knocked", true) and not flag("target_hold_knocked", false) and not flag("autostomp_enabled", false)
 
 		if gone or knocked then
 			setTarget(nil)
@@ -972,6 +972,202 @@ function AutoFire.step(now)
 	chosen.tool:Activate()
 end
 
+---@module AutoStomp
+---Finishes a knocked target: the body stands over its torso and asks the server to stomp. Asked before Follow and Void Spam, so a knocked target is
+---stomped instead of followed.
+local AutoStomp = { lastStomp = 0 }
+
+local STOMP_OFFSET = Vector3.new(0, 3, 0)
+
+function AutoStomp.want(now)
+	if not flag("autostomp_enabled", false) then
+		return nil
+	end
+
+	local player = Target.player
+	local character = player and player.Character
+
+	if not character or not Players.knocked(player) then
+		return nil
+	end
+
+	-- a target that has died (or is loading again) has nothing left to stomp
+	if flag("autostomp_stop_dead", true) and Players.phase(player) == "respawning" then
+		return nil
+	end
+
+	local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
+
+	-- a body that is being carried or flung cannot be stomped
+	if not torso or character:FindFirstChild("GRABBING_CONSTRAINT") or torso.AssemblyLinearVelocity.Magnitude > 100 then
+		return nil
+	end
+
+	if Util.inVoid(torso.Position) or Players.knocked(localPlayer) then
+		return nil
+	end
+
+	if now - AutoStomp.lastStomp >= 0.05 then
+		local event = mainEvent()
+
+		if event then
+			AutoStomp.lastStomp = now
+			event:FireServer("Stomp")
+		end
+	end
+
+	return CFrame.new(torso.Position + STOMP_OFFSET)
+end
+
+---@module Visuals
+---Drawing-library visuals: the FOV circle, a tracer to the aim, a ring round the target, and the camera on the target. Objects are created when a
+---feature is switched on and removed when it goes off, never every frame.
+local Visuals = { objects = {}, ringSegments = 24, cameraSwapped = false }
+
+local function drawing(kind, key, properties)
+	local object = Visuals.objects[key]
+
+	if not object then
+		object = Drawing.new(kind)
+		Visuals.objects[key] = object
+	end
+
+	for name, value in properties do
+		object[name] = value
+	end
+
+	return object
+end
+
+local function removeDrawing(key)
+	local object = Visuals.objects[key]
+
+	if object then
+		object:Remove()
+		Visuals.objects[key] = nil
+	end
+end
+
+local function pickerColor(name, fallback)
+	local picker = flag(name)
+
+	if type(picker) == "table" and picker.Color then
+		return picker.Color, 1 - (picker.Transparency or 0)
+	end
+
+	return fallback, 1
+end
+
+function Visuals.clear()
+	for key in Visuals.objects do
+		removeDrawing(key)
+	end
+
+	if Visuals.cameraSwapped then
+		Visuals.cameraSwapped = false
+
+		local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+		if humanoid then
+			camera.CameraSubject = humanoid
+		end
+	end
+end
+
+function Visuals.render()
+	local enabled = flag("ragebot_enabled", false)
+	local viewport = camera.ViewportSize
+	local mouseLocation = userInputService:GetMouseLocation()
+	local aim = Follow.aim
+	local player = Target.player
+
+	-- FOV circle
+	if enabled and flag("fov_show", false) then
+		local colour, opacity = pickerColor("fov_color", Color3.fromRGB(255, 255, 255))
+		local activeColour, activeOpacity = pickerColor("fov_active_color", Color3.fromRGB(255, 80, 80))
+		local active = player ~= nil
+
+		drawing("Circle", "fov", {
+			Visible = true,
+			Position = mouseLocation,
+			Radius = flag("target_fov", 180),
+			Thickness = 1,
+			NumSides = 64,
+			Filled = false,
+			Color = active and activeColour or colour,
+			Transparency = active and activeOpacity or opacity,
+		})
+	else
+		removeDrawing("fov")
+	end
+
+	-- Tracer
+	if enabled and flag("tracer_show", false) and aim and not Util.inVoid(aim) then
+		local screen, onScreen = camera:WorldToViewportPoint(aim)
+		local colour, opacity = pickerColor("tracer_color", Color3.fromRGB(255, 255, 255))
+		local origin = flag("tracer_origin", "bottom")
+		local from = origin == "mouse" and mouseLocation or origin == "center" and viewport / 2 or Vector2.new(viewport.X / 2, viewport.Y)
+
+		drawing("Line", "tracer", {
+			Visible = onScreen,
+			From = from,
+			To = Vector2.new(screen.X, screen.Y),
+			Thickness = flag("tracer_thickness", 1),
+			Color = colour,
+			Transparency = opacity,
+		})
+	else
+		removeDrawing("tracer")
+	end
+
+	-- 3D ring round the target's feet
+	if enabled and flag("circle_show", false) and aim and not Util.inVoid(aim) then
+		local colour, opacity = pickerColor("circle_color", Color3.fromRGB(180, 120, 255))
+		local radius = flag("circle_radius", 4)
+		local spin = os.clock() * 1.5
+		local previous
+
+		for index = 0, Visuals.ringSegments do
+			local angle = spin + index / Visuals.ringSegments * math.pi * 2
+			local point, onScreen = camera:WorldToViewportPoint(aim + Vector3.new(math.cos(angle) * radius, -3, math.sin(angle) * radius))
+			local current = Vector2.new(point.X, point.Y)
+
+			if previous then
+				drawing("Line", "ring" .. index, {
+					Visible = onScreen and point.Z > 0,
+					From = previous,
+					To = current,
+					Thickness = 1,
+					Color = colour,
+					Transparency = opacity,
+				})
+			end
+
+			previous = current
+		end
+	else
+		for index = 0, Visuals.ringSegments do
+			removeDrawing("ring" .. index)
+		end
+	end
+
+	-- the camera on the target
+	local humanoid = player and player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+
+	if enabled and flag("view_target", false) and humanoid then
+		camera.CameraSubject = humanoid
+		Visuals.cameraSwapped = true
+	elseif Visuals.cameraSwapped then
+		Visuals.cameraSwapped = false
+
+		local own = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+		if own then
+			camera.CameraSubject = own
+		end
+	end
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -990,6 +1186,7 @@ function Ragebot.start()
 		end
 	end
 
+	Body.addProvider("autostomp", AutoStomp.want)
 	Body.addProvider("voidspam", VoidSpam.want)
 	Body.addProvider("follow", Follow.want)
 	VoidSpam.gunReady = AutoFire.anyReady
@@ -1024,6 +1221,8 @@ function Ragebot.start()
 	end))
 
 	Ragebot.maid:give(runService.PreRender:Connect(Body.restore))
+	Ragebot.maid:give(runService.RenderStepped:Connect(Visuals.render))
+	Ragebot.maid:give(Visuals.clear)
 
 	Ragebot.maid:give(userInputService.InputBegan:Connect(function(input, processed)
 		local bind = library.flags["target_key"]
@@ -1075,6 +1274,10 @@ targetSection:toggle({ name = "skip spawn protected", flag = "target_skip_protec
 targetSection:toggle({ name = "skip knocked", flag = "target_skip_knocked", default = true })
 targetSection:toggle({ name = "keep knocked target", flag = "target_hold_knocked" })
 
+local stompSection = ragebotColumn:section({ name = "auto stomp" })
+stompSection:toggle({ name = "enabled", flag = "autostomp_enabled" })
+stompSection:toggle({ name = "stop when target dead", flag = "autostomp_stop_dead", default = true })
+
 local fireColumn = rage:column({})
 local fireSection = fireColumn:section({ name = "auto fire" })
 fireSection:toggle({ name = "enabled", flag = "autofire_enabled" })
@@ -1111,6 +1314,28 @@ voidSection:slider({ name = "void time", flag = "voidspam_void", min = 0.05, max
 voidSection:slider({ name = "window time", flag = "voidspam_window", min = 0.05, max = 0.6, default = 0.12, interval = 0.01, suffix = "s" })
 voidSection:toggle({ name = "hide while waiting", flag = "voidspam_hide_waiting", default = true })
 
+local visuals = window:tab({ name = "visuals" })
+local visualsColumn = visuals:column({})
+local fovSection = visualsColumn:section({ name = "fov circle" })
+fovSection:toggle({ name = "show", flag = "fov_show" })
+fovSection:colorpicker({ name = "colour", flag = "fov_color", color = Color3.fromRGB(255, 255, 255) })
+fovSection:colorpicker({ name = "active colour", flag = "fov_active_color", color = Color3.fromRGB(255, 80, 80) })
+
+local tracerSection = visualsColumn:section({ name = "tracer" })
+tracerSection:toggle({ name = "show", flag = "tracer_show" })
+tracerSection:colorpicker({ name = "colour", flag = "tracer_color", color = Color3.fromRGB(255, 255, 255) })
+tracerSection:slider({ name = "thickness", flag = "tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
+tracerSection:dropdown({ name = "origin", flag = "tracer_origin", items = { "bottom", "center", "mouse" }, default = "bottom" })
+
+local targetVisualColumn = visuals:column({})
+local circleSection = targetVisualColumn:section({ name = "target circle" })
+circleSection:toggle({ name = "show", flag = "circle_show" })
+circleSection:colorpicker({ name = "colour", flag = "circle_color", color = Color3.fromRGB(180, 120, 255) })
+circleSection:slider({ name = "radius", flag = "circle_radius", min = 1, max = 20, default = 4, interval = 0.5, suffix = " st" })
+
+local cameraSection = targetVisualColumn:section({ name = "camera" })
+cameraSection:toggle({ name = "view target", flag = "view_target" })
+
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})
 local miscSection = miscColumn:section({ name = "script" })
@@ -1134,6 +1359,6 @@ miscSection:button({ name = "unload", callback = unload })
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp }
 
 notifications:create_notification({ name = "loaded vanta" })
