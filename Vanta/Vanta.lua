@@ -4647,6 +4647,506 @@ function Misc.step()
 	end
 end
 
+---@module Skins
+---Gun and bat skins on your own client. ReplicatedStorage.SkinModules (a module returning, per gun, every skin with the mesh to use and where it sits) is
+---read, and a chosen skin is put on the gun by hiding its mesh and welding the skin's mesh in its place; the skin's shoot sound and particles are taken
+---from ReplicatedStorage.SkinAssets when it has them. Other players see the gun as it is. Choices are kept in `Vanta/skins.json` and applied again whenever
+---a tool is added to the backpack or the character.
+local Skins = { choices = {}, states = setmetatable({}, { __mode = "k" }), data = nil, guns = {} }
+
+local SKIN_FILE = "Vanta/skins.json"
+
+local function skinModules()
+	return game:GetService("ReplicatedStorage"):FindFirstChild("SkinModules")
+end
+
+function Skins.load()
+	local modules = skinModules()
+
+	if modules then
+		local ok, data = pcall(require, modules)
+
+		Skins.data = ok and type(data) == "table" and data or nil
+	end
+
+	local ok, decoded = pcall(function()
+		return game:GetService("HttpService"):JSONDecode(readfile(SKIN_FILE))
+	end)
+
+	if ok and type(decoded) == "table" then
+		Skins.choices = decoded
+	end
+end
+
+local function saveChoices()
+	pcall(function()
+		if not isfolder("Vanta") then
+			makefolder("Vanta")
+		end
+
+		writefile(SKIN_FILE, game:GetService("HttpService"):JSONEncode(Skins.choices))
+	end)
+end
+
+---The weapons that can be skinned: guns that have a model in SkinModules, and the bat.
+function Skins.weapons()
+	local list = {}
+	local modules = skinModules()
+	local models = modules and modules:FindFirstChild("GunModels")
+
+	if Skins.data and models then
+		for name in Skins.data do
+			if type(name) == "string" and models:FindFirstChild(name) and name ~= "[Knife]" then
+				list[#list + 1] = name
+			end
+		end
+	end
+
+	if modules and modules:FindFirstChild("Bats") then
+		list[#list + 1] = "[Bat]"
+	end
+
+	table.sort(list)
+
+	return #list > 0 and list or { "none" }
+end
+
+---Skin names for a weapon, "default" first.
+function Skins.skinsFor(weapon)
+	local list = {}
+
+	if weapon == "[Bat]" then
+		local bats = skinModules() and skinModules():FindFirstChild("Bats")
+
+		for _, skin in bats and bats:GetChildren() or {} do
+			list[#list + 1] = skin.Name
+		end
+	elseif Skins.data and Skins.data[weapon] then
+		for name in Skins.data[weapon] do
+			list[#list + 1] = tostring(name)
+		end
+	end
+
+	table.sort(list)
+	table.insert(list, 1, "default")
+
+	return list
+end
+
+local function stateOf(tool, mesh)
+	local state = Skins.states[tool]
+
+	if not state then
+		state = { mesh = mesh, transparency = mesh.Transparency, texture = mesh.TextureID, clones = {}, added = {}, removed = {}, sound = nil }
+		Skins.states[tool] = state
+	end
+
+	return state
+end
+
+---Puts a tool back to the game's own look.
+function Skins.reset(tool)
+	local state = Skins.states[tool]
+
+	if not state then
+		return
+	end
+
+	Skins.states[tool] = nil
+
+	for _, clone in state.clones do
+		clone:Destroy()
+	end
+
+	if state.mesh and state.mesh.Parent then
+		state.mesh.Transparency = state.transparency
+		pcall(function()
+			state.mesh.TextureID = state.texture
+		end)
+	end
+
+	local handle = tool:FindFirstChild("Handle")
+
+	if handle then
+		local shoot = handle:FindFirstChild("ShootSound")
+
+		if shoot and state.sound then
+			shoot.SoundId = state.sound
+		end
+
+		if state.skinAttribute ~= nil then
+			handle:SetAttribute("SkinName", state.skinAttribute or nil)
+		end
+
+		for _, emitter in state.added do
+			emitter:Destroy()
+		end
+
+		for _, emitter in state.removed do
+			emitter.Parent = handle
+		end
+	end
+end
+
+---Applies the chosen skin of a tool (or leaves it at the game's look).
+function Skins.apply(tool)
+	Skins.reset(tool)
+
+	local choice = Skins.choices[tool.Name]
+
+	if not flag("skins_enabled", false) or not choice or choice == "default" then
+		return
+	end
+
+	local mesh = tool:FindFirstChildOfClass("MeshPart")
+	local modules = skinModules()
+
+	if not mesh or not modules then
+		return
+	end
+
+	if tool.Name == "[Bat]" then
+		local bats = modules:FindFirstChild("Bats")
+		local source = bats and bats:FindFirstChild(choice)
+
+		if not source then
+			return
+		end
+
+		local state = stateOf(tool, mesh)
+		local clone = source:Clone()
+
+		clone.Name = "VantaSkin"
+		clone.CFrame = mesh.CFrame
+		clone.Parent = tool
+
+		local weld = Instance.new("Weld")
+
+		weld.Part0, weld.Part1 = clone, mesh
+		weld.Parent = clone
+		mesh.Transparency = 1
+		state.clones[#state.clones + 1] = clone
+
+		return
+	end
+
+	local info = Skins.data and Skins.data[tool.Name] and Skins.data[tool.Name][choice]
+
+	if not info then
+		return
+	end
+
+	local state = stateOf(tool, mesh)
+
+	if typeof(info.TextureID) == "Instance" then
+		local clone = info.TextureID:Clone()
+
+		clone.Name = "VantaSkin"
+		clone.CFrame = mesh.CFrame
+		clone.Parent = tool
+
+		local weld = Instance.new("Weld")
+
+		weld.Part0, weld.Part1 = clone, mesh
+		weld.C0 = info.CFrame:Inverse()
+		weld.Parent = clone
+		mesh.Transparency = 1
+		state.clones[#state.clones + 1] = clone
+	else
+		mesh.TextureID = tostring(info.TextureID)
+		mesh.Transparency = 0
+	end
+
+	local handle = tool:FindFirstChild("Handle")
+
+	if not handle then
+		return
+	end
+
+	local assets = game:GetService("ReplicatedStorage"):FindFirstChild("SkinAssets")
+	local shoot = handle:FindFirstChild("ShootSound")
+	local sounds = assets and assets:FindFirstChild("GunShootSounds")
+	local gunSounds = sounds and sounds:FindFirstChild(tool.Name)
+	local soundValue = gunSounds and gunSounds:FindFirstChild(choice)
+
+	if shoot and soundValue then
+		state.sound = state.sound or shoot.SoundId
+		shoot.SoundId = soundValue.Value
+	end
+
+	local particles = assets and assets:FindFirstChild("GunHandleParticle")
+	local source = particles and particles:FindFirstChild(choice)
+	local emitter = source and source:FindFirstChildOfClass("ParticleEmitter")
+
+	if emitter then
+		-- the emitters that were there are parked, so the default look can bring them back
+		for _, existing in handle:GetChildren() do
+			if existing:IsA("ParticleEmitter") then
+				state.removed[#state.removed + 1] = existing
+				existing.Parent = nil
+			end
+		end
+
+		local added = emitter:Clone()
+
+		added.Parent = handle
+		state.added[#state.added + 1] = added
+	end
+
+	state.skinAttribute = handle:GetAttribute("SkinName") or false
+	handle:SetAttribute("SkinName", choice)
+end
+
+---Chooses (or clears) a weapon's skin, remembers it and applies it to the tools that exist.
+function Skins.choose(weapon, skin)
+	Skins.choices[weapon] = (skin ~= nil and skin ~= "default") and skin or nil
+	saveChoices()
+	Skins.refresh(weapon)
+end
+
+---Applies the choices again to every tool with this name (every tool when none is given).
+function Skins.refresh(weapon)
+	local character = localPlayer.Character
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+
+	for _, holder in { character, backpack } do
+		if holder then
+			for _, tool in holder:GetChildren() do
+				if tool:IsA("Tool") and (weapon == nil or tool.Name == weapon) then
+					Skins.apply(tool)
+				end
+			end
+		end
+	end
+end
+
+---Applies skins to tools as they appear, and takes every skin off on unload.
+function Skins.start(maid)
+	local function watch(holder)
+		if not holder then
+			return
+		end
+
+		maid:give(holder.ChildAdded:Connect(function(child)
+			if child:IsA("Tool") then
+				task.delay(0.15, function()
+					if child.Parent then
+						Skins.apply(child)
+					end
+				end)
+			end
+		end))
+	end
+
+	watch(localPlayer:FindFirstChildOfClass("Backpack"))
+	watch(localPlayer.Character)
+
+	maid:give(localPlayer.CharacterAdded:Connect(function(character)
+		watch(character)
+		task.delay(1, Skins.refresh)
+	end))
+
+	task.defer(Skins.refresh)
+
+	maid:give(function()
+		for tool in pairs(Skins.states) do
+			Skins.reset(tool)
+		end
+	end)
+end
+
+---@module Inventory
+---The hotbar layout. The game saves a hotbar layout as the setting "HotbarLayout" ({slot number = tool name, food as "FOOD"}) sent with MainEvent
+---"UpdateSingleSetting", and its hotbar arranges itself by it on every spawn. This module works that layout out from the nine slots picked here and sends
+---that same setting, only when it differs from the saved one and at most every 1.5 seconds (the game's own Save Layout button waits one second). No tool is
+---moved on your side. The original also moves the tools that have no slot out of the hotbar through the hotbar script's internals; that is not done here.
+local Inventory = { sentAt = 0, pending = false, lastLayout = nil }
+
+local KNOWN_TOOLS = {
+	"[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "[AUG]", "[Rifle]", "[Flintlock]", "[Shotgun]", "[Drum-Shotgun]", "[SMG]", "[Silencer]",
+	"[SilencerAR]", "[AK47]", "[AR]", "[LMG]", "[P90]", "[Glock]", "[RPG]", "[GrenadeLauncher]", "[Flamethrower]", "[Taser]", "[Knife]", "[Bat]",
+	"[Pitchfork]", "[Shovel]", "[StopSign]", "[Pepper Spray]", "[Grenade]", "[Flashbang]",
+}
+
+local DEFAULT_SLOTS = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "[AUG]", "[Rifle]", "[Flintlock]", "None", "None", "None" }
+
+---The slot choices: None, the known tools and whatever else is owned right now.
+function Inventory.choices()
+	local list = { "None" }
+
+	for _, name in KNOWN_TOOLS do
+		list[#list + 1] = name
+	end
+
+	local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+
+	for _, tool in backpack and backpack:GetChildren() or {} do
+		if tool:IsA("Tool") and not table.find(list, tool.Name) then
+			list[#list + 1] = tool.Name
+		end
+	end
+
+	return list
+end
+
+local function slotName(tool)
+	if tool:FindFirstChild("Eat") or tool:FindFirstChild("Drink") or tool.Name == "[Lettuce]" then
+		return "FOOD"
+	end
+
+	return tool.Name
+end
+
+---The layout for the slots picked, as {["1"] = name, ...}. A slot whose tool is not owned is left out, and every name is used once.
+function Inventory.layout()
+	local tools = {}
+
+	for _, holder in { localPlayer:FindFirstChildOfClass("Backpack"), localPlayer.Character } do
+		for _, tool in holder and holder:GetChildren() or {} do
+			if tool:IsA("Tool") then
+				tools[#tools + 1] = tool
+			end
+		end
+	end
+
+	local layout, named, used = {}, {}, {}
+
+	for slot = 1, 9 do
+		local wanted = flag("sorter_slot_" .. slot, DEFAULT_SLOTS[slot])
+
+		if wanted and wanted ~= "None" then
+			for _, tool in tools do
+				if not used[tool] and tool.Name == wanted then
+					used[tool] = true
+
+					local name = slotName(tool)
+
+					if not named[name] then
+						named[name] = true
+						layout[tostring(slot)] = name
+					end
+
+					break
+				end
+			end
+		end
+	end
+
+	return layout
+end
+
+---Is this layout the one the server already has?
+local function sameAsSaved(layout)
+	local http = game:GetService("HttpService")
+	local ok, saved = pcall(http.JSONDecode, http, localPlayer:GetAttribute("HotbarLayout") or "[]")
+
+	if not ok or type(saved) ~= "table" then
+		return false
+	end
+
+	local byKey = {}
+
+	for key, value in saved do
+		byKey[tostring(key)] = tostring(value)
+	end
+
+	for key, value in layout do
+		if byKey[key] ~= value then
+			return false
+		end
+	end
+
+	for key in byKey do
+		if layout[key] == nil then
+			return false
+		end
+	end
+
+	return true
+end
+
+---Works the layout out and sends it when it is new. `manual` (Sort Now) ignores the auto switch.
+---@return string result what happened, for the notification
+function Inventory.sort(manual)
+	if not manual and not flag("sorter_enabled", false) then
+		return "off"
+	end
+
+	local layout = Inventory.layout()
+
+	if next(layout) == nil then
+		return "no slot picked or no matching tool"
+	end
+
+	if sameAsSaved(layout) then
+		return "already saved"
+	end
+
+	local wait = 1.5 - (os.clock() - Inventory.sentAt)
+
+	if wait > 0 then
+		if not Inventory.pending then
+			Inventory.pending = true
+
+			task.delay(wait, function()
+				Inventory.pending = false
+				Inventory.sort(manual)
+			end)
+		end
+
+		return "waiting"
+	end
+
+	local event = game:GetService("ReplicatedStorage"):FindFirstChild("MainEvent")
+
+	if not event then
+		return "no MainEvent"
+	end
+
+	Inventory.sentAt = os.clock()
+	Inventory.lastLayout = layout
+	event:FireServer("UpdateSingleSetting", "HotbarLayout", game:GetService("HttpService"):JSONEncode(layout))
+
+	return "sent"
+end
+
+---Auto Sorter: sorts when the backpack changes and after a respawn.
+function Inventory.start(maid)
+	local token = 0
+
+	local function request()
+		if not flag("sorter_enabled", false) then
+			return
+		end
+
+		token += 1
+
+		local mine = token
+
+		task.delay(0.6, function()
+			if mine == token then
+				Inventory.sort(false)
+			end
+		end)
+	end
+
+	local function watch(backpack)
+		if backpack then
+			maid:give(backpack.ChildAdded:Connect(request))
+			maid:give(backpack.ChildRemoved:Connect(request))
+		end
+	end
+
+	watch(localPlayer:FindFirstChildOfClass("Backpack"))
+
+	maid:give(localPlayer.CharacterAdded:Connect(function()
+		task.wait(1)
+		watch(localPlayer:FindFirstChildOfClass("Backpack"))
+		request()
+	end))
+end
+
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -4694,6 +5194,8 @@ function Ragebot.start()
 		end
 	end))
 	Status.load()
+	Skins.start(Ragebot.maid)
+	Inventory.start(Ragebot.maid)
 	Ragebot.maid:give(AdStrafe.release)
 	Ragebot.maid:give(Bounty.release)
 
@@ -5311,6 +5813,66 @@ local function buildMenu()
 	autoStatusSection:toggle({ name = "crew mates are friendly", flag = "status_crew" })
 	autoStatusSection:toggle({ name = "friends of an enemy are enemies", flag = "status_enemy_friends" })
 
+	-- the skin list is read before the menu names it
+	Skins.load()
+
+	local skinsTab = window:tab({ name = "skins" })
+	local skinsColumn = skinsTab:column({})
+	local skinSection = skinsColumn:section({ name = "skin changer" })
+	local skinDropdown
+
+	skinSection:toggle({ name = "enabled", flag = "skins_enabled", callback = function()
+		Skins.refresh()
+	end })
+
+	local weaponList = Skins.weapons()
+
+	skinSection:dropdown({ name = "weapon", flag = "skins_weapon", items = weaponList, default = weaponList[1], scrolling = true, callback = function(weapon)
+		if skinDropdown and type(weapon) == "string" then
+			skinDropdown.refresh_options(Skins.skinsFor(weapon))
+			pcall(skinDropdown.set, Skins.choices[weapon] or "default")
+		end
+	end })
+	skinDropdown = skinSection:dropdown({ name = "skin", flag = "skins_skin", items = Skins.skinsFor(weaponList[1]), default = Skins.choices[weaponList[1]] or "default", scrolling = true })
+	skinSection:button({ name = "apply skin to weapon", callback = function()
+		local weapon, skin = flag("skins_weapon"), flag("skins_skin")
+
+		if type(weapon) == "string" and type(skin) == "string" then
+			Skins.choose(weapon, skin)
+			notifications:create_notification({ name = weapon .. ": " .. skin })
+		end
+	end })
+	skinSection:button({ name = "reset this weapon", callback = function()
+		local weapon = flag("skins_weapon")
+
+		if type(weapon) == "string" then
+			Skins.choose(weapon, nil)
+			notifications:create_notification({ name = weapon .. ": default" })
+		end
+	end })
+	skinSection:button({ name = "refresh all skins", callback = function()
+		Skins.refresh()
+	end })
+
+	local inventoryColumn = skinsTab:column({})
+	local sorterSection = inventoryColumn:section({ name = "auto sorter" })
+	local slotDropdowns = {}
+
+	sorterSection:toggle({ name = "enabled", flag = "sorter_enabled" })
+
+	for slot = 1, 9 do
+		slotDropdowns[slot] = sorterSection:dropdown({ name = "slot " .. slot, flag = "sorter_slot_" .. slot, items = Inventory.choices(), default = DEFAULT_SLOTS[slot], scrolling = true })
+	end
+
+	sorterSection:button({ name = "sort now", callback = function()
+		notifications:create_notification({ name = "sorter: " .. Inventory.sort(true) })
+	end })
+	sorterSection:button({ name = "refresh tool list", callback = function()
+		for _, dropdown in slotDropdowns do
+			dropdown.refresh_options(Inventory.choices())
+		end
+	end })
+
 	local misc = window:tab({ name = "misc" })
 	local miscColumn = misc:column({})
 	local miscSection = miscColumn:section({ name = "script" })
@@ -5347,6 +5909,6 @@ buildMenu()
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, status = Status, misc = Misc, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, skins = Skins, inventory = Inventory, status = Status, misc = Misc, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })

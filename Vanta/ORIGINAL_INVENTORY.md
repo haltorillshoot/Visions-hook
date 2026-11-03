@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 263, Partial 36, No 195, Declined 23.
+**Totals (517 controls):** Yes 263, Partial 38, No 193, Declined 23.
 
 ## panel_section
 
@@ -443,8 +443,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| skin changer | toggle | No |  |
-| weapon | dropdown | No |  |
+| skin changer | toggle | Partial | Skins (guns and the bat; knives not reproduced) |
+| weapon | dropdown | Partial | Skins (guns and the bat; knives not reproduced) |
 
 ## custom_skins_section
 
