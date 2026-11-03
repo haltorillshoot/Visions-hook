@@ -34014,6 +34014,7 @@ end
         menu_references["target_selection_cooldown"] = menu_references["target_selection_settings"]:create_element({["name"] = "cooldown"}, {["slider"] = {["flag"] = "target_selection_cooldown", ["default"] = 0.03, ["min"] = 0, ["max"] = 0.5, ["suffix"] = "s", ["min_text"] = "none", ["decimals"] = 2}})
         menu_references["target_selection_cooldown"]:set_visible(false)
         menu_references["target_selection_target_bind"] = menu_references["target_selection_settings"]:create_element({["name"] = "target bind"}, {["keybind"] = {["flag"] = "target_selection_target_bind", ["default"] = Enum["KeyCode"]["E"]}})
+        menu_references["target_selection_switch_bind"] = menu_references["target_selection_settings"]:create_element({["name"] = "switch target"}, {["keybind"] = {["flag"] = "target_selection_switch_bind", ["default"] = Enum["KeyCode"]["Q"]}})
         menu_references["target_selection_target_when_shot_at"] = menu_references["target_selection_settings"]:create_element({["name"] = "target when shot at"}, {["toggle"] = {["flag"] = "target_selection_target_when_shot_at"}})
         menu_references["target_selection_target_when_shot_at_force"] = menu_references["target_selection_settings"]:create_element({["name"] = "force"}, {["toggle"] = {["flag"] = "target_selection_target_when_shot_at_force"}})
         menu_references["target_selection_wait_for_protection"] = menu_references["target_selection_settings"]:create_element({["name"] = "wait for spawn protection"}, {["toggle"] = {["flag"] = "target_selection_wait_for_protection", ["default"] = true}})
@@ -34672,6 +34673,11 @@ end
     -- on, with the hide manager covering for them, and pick_ragebot_target only passes over them while someone else
     -- can be hit. While looking for a stand-in (hide_manager.replacement is set) nobody in that state counts.
     hide_manager["is_pickable"] = LPH_NO_VIRTUALIZE(function(data)
+        -- The switch target key passes over the current target for the one pick it makes.
+        if hide_manager["skip_target"] == data then
+            return false
+        end
+
         if not hide_manager["replacement"] and (target_list["count"] > 0 or ragebot_targets[data] == true or hide_manager["manual_pick"] == true) then
             return true
         end
@@ -38072,6 +38078,19 @@ end
                 hide_manager["manual_pick"] = true
                 pcall(pick_ragebot_target, 0, local_parts["HumanoidRootPart"])
                 hide_manager["manual_pick"] = false
+            end
+        end
+    end)
+
+    -- Switch target: moves to the next player the picker would take, passing over the current one. Nothing changes when nobody else can be taken.
+    create_connection(menu_references["target_selection_switch_bind"]["on_key_press"], function()
+        if flags["ragebot"] and ragebot_target then
+            hide_manager["skip_target"] = ragebot_target
+            local ok, picked = pcall(pick_ragebot_target, 0, local_parts["HumanoidRootPart"], true)
+            hide_manager["skip_target"] = nil
+
+            if ok and picked and picked ~= ragebot_target then
+                set_ragebot_target(picked, "ragebot target switched to "..picked[2]["Name"])
             end
         end
     end)
