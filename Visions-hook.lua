@@ -10884,13 +10884,13 @@ function Session.buildSettingsPanels(rows)
 	-- merges close spots and aims at the best scoring one. The distance penalty is shared; the rest belongs to one of them (the lerp is the weighted one's:
 	-- the cluster resolver holds its spot and goes straight onto the target once it is close).
 	local clusterRows, weightedRows = {}, {}
-	panelList(resolver, "Type", "resolver_type", { "cluster", "weighted" }, "cluster", function(value)
+	panelList(resolver, "Type", "resolver_type", { "cluster", "weighted", "hybrid" }, "cluster", function(value)
 		for _, row in ipairs(clusterRows) do
-			row:SetVisible(isPicked(value, "cluster"))
+			row:SetVisible(isPicked(value, "cluster") or isPicked(value, "hybrid"))
 		end
 
 		for _, row in ipairs(weightedRows) do
-			row:SetVisible(isPicked(value, "weighted"))
+			row:SetVisible(isPicked(value, "weighted") or isPicked(value, "hybrid"))
 		end
 	end)
 	-- 0.1 to 10 seconds; click the number to type one (0.1, 1.1 ...)
@@ -33988,7 +33988,7 @@ end
         menu_references["auto_equip_distance_check"] = menu_references["auto_equip_settings"]:create_element({["name"] = "distance check"}, {["toggle"] = {["flag"] = "auto_equip_distance_check", ["default"] = false}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "spam resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
-        menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["resolver_type"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "resolver_type", ["options"] = {"cluster", "weighted", "hybrid"}, ["default"] = {"cluster"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["ue_resolver_refresh"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "refresh time"}, {["slider"] = {["flag"] = "ue_resolver_refresh", ["min"] = 0.1, ["max"] = 10, ["default"] = 1, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["ue_resolver_forgiveness"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "forgiveness"}, {["slider"] = {["flag"] = "ue_resolver_forgiveness", ["min"] = 0, ["max"] = 20, ["default"] = 14.4, ["decimals"] = 1}})
         menu_references["ue_resolver_void_bonus"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "out of void bonus"}, {["slider"] = {["flag"] = "ue_resolver_void_bonus", ["min"] = 0, ["max"] = 12, ["default"] = 5, ["decimals"] = 1}})
@@ -35162,6 +35162,7 @@ end
 
                 -- the share of the history that sits in the winning cluster (the center panel shows it as "resolved")
                 hide_manager["resolver_confidence"] = ue_resolver_result and best_count / count or 0
+                hide_manager["cluster_confidence"] = hide_manager["resolver_confidence"]
             end
         end
 
@@ -35279,12 +35280,56 @@ end
         end
 
         hide_manager["resolver_confidence"] = best and clamp(best_score / (accuracy * 2), 0, 1) or 0
+        hide_manager["weighted_confidence"] = hide_manager["resolver_confidence"]
 
         if best and best_score > accuracy then
             return best
         end
 
         return nil
+    end)
+
+    -- >> ( hybrid resolver )
+    -- Both resolvers above run on the same sightings, each with its own history, and their answers are put together. When both have an answer and
+    -- they land within the cluster radius of each other the aim is the middle of the two, each pulled by how sure it is (its confidence); when they
+    -- disagree the one that is surer wins, and the cluster answer wins a tie (it holds still between refreshes, the weighted one follows the newest
+    -- spot). When only one has an answer that one is used, so the hybrid never aims worse than the weaker of the two would have alone.
+    hide_manager["hybrid_resolve"] = LPH_NO_VIRTUALIZE(function(hitbox_position, current_time)
+        local cluster_spot = ue_resolve(hitbox_position, current_time)
+        local cluster_sure = cluster_spot and hide_manager["cluster_confidence"] or 0
+        local weighted_spot = hide_manager["weighted_resolve"](hitbox_position, current_time)
+        local weighted_sure = weighted_spot and hide_manager["weighted_confidence"] or 0
+
+        if cluster_spot and weighted_spot then
+            if (cluster_spot - weighted_spot)["Magnitude"] <= ue_resolver_radius then
+                local total = cluster_sure + weighted_sure
+
+                hide_manager["resolver_confidence"] = math["min"](1, math["max"](cluster_sure, weighted_sure) + 0.2 * math["min"](cluster_sure, weighted_sure))
+
+                if total <= 0 then
+                    return cluster_spot
+                end
+
+                return cluster_spot:Lerp(weighted_spot, weighted_sure / total)
+            end
+
+            if weighted_sure > cluster_sure then
+                hide_manager["resolver_confidence"] = weighted_sure
+                return weighted_spot
+            end
+
+            hide_manager["resolver_confidence"] = cluster_sure
+            return cluster_spot
+        end
+
+        if cluster_spot then
+            hide_manager["resolver_confidence"] = cluster_sure
+            return cluster_spot
+        end
+
+        hide_manager["resolver_confidence"] = weighted_sure
+
+        return weighted_spot
     end)
 
     -- Everything the void readings and the Spam cycle remember about the target they were taken from. Cleared when the target changes or dies, so a
@@ -35296,6 +35341,8 @@ end
         hide_manager["spam_void_target"] = nil
         hide_manager["spam_void_seen_at"] = nil
         hide_manager["fling_check"] = nil
+        hide_manager["cluster_confidence"] = nil
+        hide_manager["weighted_confidence"] = nil
     end)
 
     set_ragebot_target = LPH_NO_VIRTUALIZE(function(target, message)
@@ -37124,7 +37171,9 @@ end
                     local weighted = hide_manager["resolver_weighted"] == true
                     local resolved
 
-                    if weighted then
+                    if hide_manager["resolver_hybrid"] == true then
+                        resolved = hide_manager["hybrid_resolve"](hitbox_position, current_time)
+                    elseif weighted then
                         resolved = hide_manager["weighted_resolve"](hitbox_position, current_time)
                     else
                         resolved = ue_resolve(hitbox_position, current_time)
@@ -37892,9 +37941,11 @@ end
 
     -- Resolver type: the history of one kind is no use to the other, and only the rows of the type in use are shown.
     create_connection(menu_references["resolver_type"]["on_dropdown_change"], function(value)
+        local hybrid = value[1] == "hybrid"
         local weighted = value[1] == "weighted"
 
         hide_manager["resolver_weighted"] = weighted
+        hide_manager["resolver_hybrid"] = hybrid
         hide_manager["weighted_positions"] = {}
 
         for k in defensive_positions do defensive_positions[k] = nil end
@@ -37902,11 +37953,11 @@ end
         ue_resolver_result = nil
 
         for _, name in {"ue_resolver_refresh", "ue_resolver_forgiveness", "ue_resolver_void_bonus"} do
-            menu_references[name]:set_visible(not weighted)
+            menu_references[name]:set_visible(not weighted or hybrid)
         end
 
         for _, name in {"void_spam_resolver_position_weight", "void_spam_resolver_forget_rate", "void_spam_resolver_void_weight", "void_spam_resolver_accuracy", "ue_resolver_lerp"} do
-            menu_references[name]:set_visible(weighted)
+            menu_references[name]:set_visible(weighted or hybrid)
         end
     end)
 
