@@ -4484,6 +4484,30 @@ function World.step()
 	end
 
 	-- switched-off settings go back to what the game had
+	if not flag("world_atmosphere", false) then
+		dropMade("atmosphere")
+
+		local existing = lighting:FindFirstChildOfClass("Atmosphere")
+
+		if existing then
+			for _, property in { "Color", "Decay", "Haze", "Glare", "Offset", "Density" } do
+				World.putBack(existing, property)
+			end
+		end
+	end
+
+	if not (flag("world_sky", false) and SKIES[skyName]) then
+		dropMade("sky")
+
+		local existing = lighting:FindFirstChildOfClass("Sky")
+
+		if existing then
+			for face in SKIES["stormy"] do
+				World.putBack(existing, "Skybox" .. face)
+			end
+		end
+	end
+
 	if not flag("world_time", false) then
 		World.putBack(lighting, "ClockTime")
 	end

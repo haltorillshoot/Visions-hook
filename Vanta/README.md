@@ -46,9 +46,4 @@ Every module reads its settings from the UI flags each frame, so a loaded config
 
 ## Limitations and untested parts
 
-- **Not tested against another player.** The only test client was alone in its server. Tested live: loading, unloading, config save and load, all 37 flags created, the resolver (cluster, normal mover, void), Follow styles and Void Spam moving the body with the real position restored every frame, and clean disable.
-- **Not tested:** target selection and the target key against real players, Auto Fire (no loaded gun was available), silent aim, reload requests, and whether the server accepts the shots.
-- **No anti-cheat handling.** Da Hood's client anti-cheat may react to the movement; Visions-hook has its own handling for that, which this script does not include.
-- The silent aim hook sits on `__index` of every instance and cannot be removed; it passes straight through when nothing is aimed. Unloading and reloading adds another pass-through layer.
-- The Priv9 library is loaded from `i77lhm/Libraries`; if that file changes, the menu can change with it.
-- There is no visuals tab because there are no visual features yet.
+See `AUDIT.md` for the full list. In short: almost nothing that needs a real opponent has been run (real shots, hit matching, silent aim, the triggerbot, Auto Stomp, Auto Fire, Auto Equip, Quick Draw, Full Auto), there is no anti-cheat handling, the metamethod hooks cannot be removed (they pass straight through after unload), and the Priv9 library is loaded from `i77lhm/Libraries`, so the menu can change if that file does. Features that fake or change what the server sees, or that avoid moderation, are deliberately not reproduced.

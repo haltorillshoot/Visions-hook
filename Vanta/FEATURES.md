@@ -1,6 +1,6 @@
 # Vanta feature checklist against Visions-hook
 
-This is an honest status list, not a claim of completeness. Vanta does **not** yet reproduce every Visions-hook feature.
+This is an honest status list, not a claim of completeness. Vanta does **not** reproduce every Visions-hook feature. The current state is in `AUDIT.md`; the first two tables here are from the first round and are out of date.
 
 How it was built: the 28 top-level features of the current menu (`rows.<name> = <Section>:AddLabel(...)` in `Visions-hook.lua`, lines 16958 to 17350) and their option panels were read and listed with a script. Line numbers below are in `Visions-hook.lua` at the time of writing.
 
@@ -47,13 +47,9 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 | Auto Heal (17328) | Heals | Partial | Buys popcorn and eats it below a health percentage, with the eat interval. Missing: Stop Following While Healing | No (needs damage; not run) |
 | Void (17350) | Void hide, spam and bait | Partial | Has the spam cycle with void and window times and the ready-gun gate, hide while waiting, Type (random, deep, bait), Deep Distance, Offset, and Bait (distance, cooldown, time, freeze, spot random or where you stood, skipped when another gun covers the spot or health is low). Missing: Disable When, Force When, Stop If Forced, Out With Target, Hide While Target Hides | Yes on a self target: deep spot stable at 1.1e8 studs, 16 bait visits in 3 s, bait at the standing spot, cycle ran, body restored, clean disable |
 
-## The older menu
+## The older menu and the final audit
 
-`ORIGINAL_INVENTORY.md` lists all 517 controls of the older menu in `Visions-hook.lua`, section by section, each with a status: 98 Yes, 19 Partial, 393 No, 7 Declined. The systems with no entry in the top-level list above are in it: the legit bot (aim assist done; silent aim, triggerbot and recoil/spread options not), player ESP (box, name, distance, tool, health, armor done; chams, highlight, image, icons and the per-status colours not), movement (speed, flight, noclip, jump power, anti sit done), the lighting and weather settings, the hit and bullet feedback (tracers, markers, sounds, chams), the local character visuals, skins, the animation tools and trash talk, none of which are in Vanta yet. Not yet read in detail: the Des Hood part, the inventory sorter and the intro animation.
-
-## What the final audit shows
-
-The audit you asked for cannot be signed off: 393 of the 517 older-menu controls are not implemented, 7 are declined, and nothing here was tested against a real opponent. The table in `ORIGINAL_INVENTORY.md` is the full account.
+`ORIGINAL_INVENTORY.md` lists all 517 controls of the older menu with a status (Yes 306, Partial 40, No 145, Declined 26). The summary table and the feature table above were written early and are out of date; `AUDIT.md` has the current feature-by-feature table, the live harness results and the limitations. The sections below record what each round added and tested.
 
 ## Shop (added)
 
