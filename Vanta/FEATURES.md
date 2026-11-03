@@ -81,3 +81,16 @@ The legit bot is now three features that share one player finder (`Legit.best`):
 Tested live with a second account in the server: the finders pick the right player and part; aim assist turned the camera onto the player (20.0 degrees off to 0.02 in half a second); the target key selects, clears and selects again; ESP drew every element on the other player; Follow held the body exactly 15.0 studs from them with the real position restored each frame. Not tested: silent aim and the triggerbot (they need a held mouse button or a gun and a shot; nothing was fired at the other account).
 
 Not reproduced: bullet manipulation, force hit, range enhancer and double tap (they change what is claimed to the server), reduce shotgun spread (changes the shot data), remove recoil (the original drops the game's recoil packet through its event forwarder; not rebuilt).
+
+## World, crosshair and character visuals (added)
+
+All of these are local to your screen and put back what they replaced.
+
+- **World:** time of day, ambient colours, lighting technology (written through the reflection library), atmosphere (the game's own is changed when it has one), colour correction (saturation, contrast, tint), blur, five skyboxes, rain or snow that follows the camera, hide chat, hide the cursor icon, switch 3D rendering off. The game rewrites some of these on its own, so the ones that are on are written every frame. The original spoofs the values the game reads back to hide the change; that is not done here.
+- **Crosshair:** four lines with gap, size, thickness, outline and rotation, optionally on the target, a different colour while there is a target, and a state panel (shopping, void spam phase, following, targeting, idle).
+- **Character:** highlight, material, china hat, particle aura, rainbow highlight on the tool in hand.
+- **ESP:** chams (fill) and highlight (outline), through walls or not.
+
+Tested live: every world setting switched on and off (time, sky id, atmosphere density, colour correction 1.5 and blur 9 created as separate effects and then removed, weather patch created and destroyed, cursor hidden and restored, lighting technology set); crosshair nine objects drawn and cleared; character highlight, hat, aura and 24 ForceField parts applied and fully reverted; ESP chams on the second account on and off.
+
+The main chunk had reached the limit of 200 local variables while this was added (the script failed to run until the menu was moved into a function); the menu now builds inside `buildMenu()`.

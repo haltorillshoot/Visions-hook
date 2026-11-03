@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 152, Partial 24, No 326, Declined 15.
+**Totals (517 controls):** Yes 204, Partial 33, No 264, Declined 16.
 
 ## panel_section
 
@@ -149,16 +149,16 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | background noise | toggle | No |  |
-| lighting mode | toggle | No |  |
-| world time | toggle | No |  |
-| atmosphere | toggle | No |  |
-| saturation | toggle | No |  |
-| contrast | toggle | No |  |
+| lighting mode | toggle | Yes | World |
+| world time | toggle | Yes | World |
+| atmosphere | toggle | Yes | World |
+| saturation | toggle | Yes | World |
+| contrast | toggle | Yes | World |
 | textures | toggle | No |  |
-| ambient | toggle | No |  |
-| weather | toggle | No |  |
-| skybox | toggle | No |  |
-| tint | toggle | No |  |
+| ambient | toggle | Yes | World |
+| weather | toggle | Yes | World |
+| skybox | toggle | Yes | World |
+| tint | toggle | Yes | World |
 
 ## background_noise_settings
 
@@ -171,12 +171,12 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| color | colorpicker | No |  |
-| decay | colorpicker | No |  |
-| haze | slider | No |  |
-| glare | slider | No |  |
-| offset | slider | No |  |
-| density | slider | No |  |
+| color | colorpicker | Yes | World |
+| decay | colorpicker | Yes | World |
+| haze | slider | Yes | World |
+| glare | slider | Yes | World |
+| offset | slider | Yes | World |
+| density | slider | Yes | World |
 
 ## textures_settings
 
@@ -188,33 +188,33 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| outdoor color | colorpicker | No |  |
-| color | colorpicker | No |  |
+| outdoor color | colorpicker | Yes | World |
+| color | colorpicker | Yes | World |
 
 ## weather_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| type | dropdown | No |  |
-| color | colorpicker | No |  |
-| rate | slider | No |  |
+| type | dropdown | Yes | World |
+| color | colorpicker | Yes | World |
+| rate | slider | Yes | World |
 
 ## skybox_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| sky | dropdown | No |  |
+| sky | dropdown | Yes | World (5 skyboxes) |
 
 ## hud_section
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| server position indicator | toggle | No |  |
+| server position indicator | toggle | Declined | part of the fake position feature |
 | crosshair animations | toggle | No |  |
-| drawing crosshair | toggle | No |  |
-| center panel | toggle | No |  |
+| drawing crosshair | toggle | Yes | Crosshair / World |
+| center panel | toggle | Partial | Crosshair (state and target text) |
 | aspect ratio | toggle | No |  |
-| show chat | toggle | No |  |
+| show chat | toggle | Yes | Crosshair / World |
 | statistics window | toggle | No |  |
 
 ## server_position_indicator_settings
@@ -242,28 +242,28 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| follow target | toggle | No |  |
+| follow target | toggle | Yes | Crosshair |
 | style | dropdown | No |  |
-| target indicator | toggle | No |  |
-| indicator color | colorpicker | No |  |
+| target indicator | toggle | Partial | Crosshair (target colour) |
+| indicator color | colorpicker | Partial | Crosshair (target colour) |
 | animation style | dropdown | No |  |
 | speed | slider | No |  |
 | target outline color | colorpicker | No |  |
 | target line color | colorpicker | No |  |
-| outline color | colorpicker | No |  |
-| line color | colorpicker | No |  |
-| line thickness | slider | No |  |
-| line size | slider | No |  |
-| gap size | slider | No |  |
-| rotating | slider | No |  |
+| outline color | colorpicker | Yes | Crosshair |
+| line color | colorpicker | Yes | Crosshair |
+| line thickness | slider | Yes | Crosshair |
+| line size | slider | Yes | Crosshair |
+| gap size | slider | Yes | Crosshair |
+| rotating | slider | Yes | Crosshair |
 
 ## center_panel_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| show state | toggle | No |  |
-| primary color | colorpicker | No |  |
-| show target | toggle | No |  |
+| show state | toggle | Yes | Crosshair |
+| primary color | colorpicker | Yes | Crosshair |
+| show target | toggle | Yes | Crosshair |
 | secondary color | colorpicker | No |  |
 
 ## game_section
@@ -429,15 +429,15 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| hide game crosshair | toggle | No |  |
-| disable rendering | toggle | No |  |
-| motion blur | toggle | No |  |
+| hide game crosshair | toggle | Partial | World (cursor icon / blur effect) |
+| disable rendering | toggle | Yes | World |
+| motion blur | toggle | Partial | World (cursor icon / blur effect) |
 
 ## motion_blur_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| intensity | slider | No |  |
+| intensity | slider | Yes | World |
 
 ## skins_editor_section
 
@@ -460,12 +460,12 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | box | toggle | Yes | Esp |
 | name | toggle | Yes | Esp |
 | image | toggle | No |  |
-| chams | toggle | No |  |
+| chams | toggle | Yes | Esp |
 | material | toggle | No |  |
 | tool text | toggle | Yes | Esp |
 | tool icon | toggle | No |  |
 | distance | toggle | Yes | Esp |
-| highlight | toggle | No |  |
+| highlight | toggle | Yes | Esp |
 | armor bar | toggle | Yes | Esp |
 | health bar | toggle | Yes | Esp |
 | health text | toggle | Yes | Esp |
@@ -507,8 +507,8 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| behind walls | toggle | No |  |
-| color | colorpicker | No |  |
+| behind walls | toggle | Yes | Esp |
+| color | colorpicker | Partial | Esp (one colour, one target colour) |
 | enemy color | colorpicker | No |  |
 | friendly color | colorpicker | No |  |
 
@@ -548,11 +548,11 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| behind walls | toggle | No |  |
-| color | colorpicker | No |  |
+| behind walls | toggle | Yes | Esp |
+| color | colorpicker | Partial | Esp |
 | enemy color | colorpicker | No |  |
 | friendly color | colorpicker | No |  |
-| outline color | colorpicker | No |  |
+| outline color | colorpicker | Yes | Esp |
 | enemy outline color | colorpicker | No |  |
 | friendly outline color | colorpicker | No |  |
 
@@ -601,28 +601,28 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| character highlight | toggle | No |  |
-| character material | toggle | No |  |
+| character highlight | toggle | Yes | LocalChar |
+| character material | toggle | Yes | LocalChar |
 | custom character | toggle | No |  |
 | skinny | toggle | No |  |
 | material tools | toggle | No |  |
-| rainbow weapon chams | toggle | No |  |
-| china hat | toggle | No |  |
-| particle aura | toggle | No |  |
+| rainbow weapon chams | toggle | Yes | LocalChar |
+| china hat | toggle | Yes | LocalChar |
+| particle aura | toggle | Yes | LocalChar |
 
 ## local_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| material | dropdown | No |  |
-| color | colorpicker | No |  |
+| material | dropdown | Partial | LocalChar |
+| color | colorpicker | Partial | LocalChar |
 
 ## character_highlight_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| color | colorpicker | No |  |
-| outline | colorpicker | No |  |
+| color | colorpicker | Yes | LocalChar |
+| outline | colorpicker | Yes | LocalChar |
 
 ## custom_character_settings
 
@@ -649,26 +649,26 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| speed | slider | No |  |
+| speed | slider | Yes | LocalChar |
 | saturation | slider | No |  |
 | brightness | slider | No |  |
-| transparency | slider | No |  |
+| transparency | slider | Yes | LocalChar |
 | material | dropdown | No |  |
 
 ## china_hat_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| color | colorpicker | No |  |
+| color | colorpicker | Yes | LocalChar |
 | light color | colorpicker | No |  |
-| scale | slider | No |  |
+| scale | slider | Yes | LocalChar |
 | light brightness | slider | No |  |
 
 ## particle_aura_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| color | colorpicker | No |  |
+| color | colorpicker | Yes | LocalChar |
 | particle | dropdown | No |  |
 
 ## general_section

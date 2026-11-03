@@ -2131,11 +2131,52 @@ local function hideEntry(entry)
 	end
 end
 
+local function hideCham(entry)
+	if entry.cham then
+		entry.cham.Enabled = false
+	end
+end
+
+---Chams (a fill) and Highlight (an outline) are one Highlight object; it is drawn through walls unless Behind Walls is off.
+local function updateCham(entry, character, isTarget)
+	local fill, outline = flag("esp_chams", false), flag("esp_highlight", false)
+
+	if not (fill or outline) then
+		hideCham(entry)
+
+		return
+	end
+
+	local cham = entry.cham
+
+	if not cham or cham.Adornee ~= character then
+		if cham then
+			cham:Destroy()
+		end
+
+		cham = Instance.new("Highlight")
+		cham.Parent = game:GetService("CoreGui")
+		entry.cham = cham
+	end
+
+	cham.Adornee = character
+	cham.Enabled = true
+	cham.DepthMode = flag("esp_chams_walls", true) and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+	cham.FillColor = pickerColor(isTarget and "esp_target_color" or "esp_color", isTarget and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255))
+	cham.FillTransparency = fill and flag("esp_chams_transparency", 0.5) or 1
+	cham.OutlineColor = pickerColor("esp_highlight_color", Color3.new(1, 1, 1))
+	cham.OutlineTransparency = outline and 0 or 1
+end
+
 local function destroyEntry(player)
 	local entry = Esp.players[player]
 
 	if not entry then
 		return
+	end
+
+	if entry.cham then
+		entry.cham:Destroy()
 	end
 
 	for _, key in ESP_PARTS do
@@ -2170,9 +2211,12 @@ function Esp.draw(player)
 
 	if not (root and head and humanoid) or Util.inVoid(root.Position) then
 		hideEntry(entry)
+		hideCham(entry)
 
 		return false
 	end
+
+	updateCham(entry, character, player == Target.player)
 
 	local top = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.7, 0))
 	local bottom = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
@@ -3308,6 +3352,522 @@ function Feedback.start(maid)
 	end)
 end
 
+---@module World
+---Local world settings: time, ambient, atmosphere, colour correction, weather, skybox, lighting technology, blur, chat, game crosshair, 3D rendering.
+---Nothing here is sent to the server. Each setting keeps what it replaced and puts it back when its toggle goes off or the script unloads. The game
+---changes some of these values on its own, so the ones that are on are written again every frame.
+local World = { saved = {}, made = {}, weather = nil :: Part?, lastTech = nil :: string?, chatHidden = nil :: boolean?, cursorHidden = nil :: boolean?, renderOff = nil :: boolean?, active = true }
+
+local lighting = game:GetService("Lighting")
+local starterGui = game:GetService("StarterGui")
+
+local SKIES = {
+	["stormy"] = { Up = "http://www.roblox.com/asset/?id=18703232671", Bk = "http://www.roblox.com/asset/?id=18703245834", Lf = "http://www.roblox.com/asset/?id=18703237556", Dn = "http://www.roblox.com/asset/?id=18703243349", Ft = "http://www.roblox.com/asset/?id=18703240532", Rt = "http://www.roblox.com/asset/?id=18703235430" },
+	["blue space"] = { Lf = "rbxassetid://15536114370", Up = "rbxassetid://15536117282", Rt = "rbxassetid://15536118762", Ft = "rbxassetid://15536116141", Dn = "rbxassetid://15536112543", Bk = "rbxassetid://15536110634" },
+	["pink"] = { Up = "rbxassetid://12216108877", Lf = "rbxassetid://12216110170", Rt = "rbxassetid://12216110471", Ft = "rbxassetid://12216109489", Bk = "rbxassetid://12216109205", Dn = "rbxassetid://12216109875" },
+	["black storm"] = { Lf = "rbxassetid://15502507918", Up = "rbxassetid://15502511911", Rt = "rbxassetid://15502509398", Ft = "rbxassetid://15502510289", Dn = "rbxassetid://15502508460", Bk = "rbxassetid://15502511288" },
+	["realistic"] = { Up = "rbxassetid://653719321", Dn = "rbxassetid://653718790", Lf = "rbxassetid://653719190", Ft = "rbxassetid://653719067", Rt = "rbxassetid://653718931", Bk = "rbxassetid://653719502" },
+}
+
+local SKY_NAMES = { "stormy", "blue space", "pink", "black storm", "realistic" }
+
+---Remember the first value of a property so it can be put back.
+local function remember(object, property)
+	World.saved[object] = World.saved[object] or {}
+
+	if World.saved[object][property] == nil then
+		World.saved[object][property] = object[property]
+	end
+end
+
+---Writes a property, remembering what it was.
+local function setProperty(object, property, value)
+	remember(object, property)
+
+	if object[property] ~= value then
+		object[property] = value
+	end
+end
+
+---An effect or sky made by Vanta, created only while the feature is on.
+local function made(key, make)
+	local object = World.made[key]
+
+	if not object or not object.Parent then
+		object = make()
+		World.made[key] = object
+	end
+
+	return object
+end
+
+local function dropMade(key)
+	if World.made[key] then
+		World.made[key]:Destroy()
+		World.made[key] = nil
+	end
+end
+
+local function colourOf(name, fallback)
+	local picked = pickerColor(name, fallback)
+
+	return picked
+end
+
+function World.step()
+	-- time of day
+	if flag("world_time", false) then
+		setProperty(lighting, "ClockTime", flag("world_time_value", 12))
+	end
+
+	-- ambient
+	if flag("world_ambient", false) then
+		setProperty(lighting, "Ambient", colourOf("world_ambient_color", Color3.fromRGB(120, 120, 140)))
+		setProperty(lighting, "OutdoorAmbient", colourOf("world_outdoor_color", Color3.fromRGB(140, 140, 160)))
+	end
+
+	-- lighting technology (the property is not scriptable, so it is written through the reflection library)
+	if flag("world_technology", false) then
+		local wanted = flag("world_technology_value", "future")
+		local technology = wanted == "shadowmap" and Enum.Technology.ShadowMap or wanted == "voxel" and Enum.Technology.Voxel or Enum.Technology.Future
+
+		if World.lastTech ~= wanted or lighting.Technology ~= technology then
+			World.lastTech = wanted
+
+			if World.saved[lighting] == nil or World.saved[lighting].Technology == nil then
+				World.saved[lighting] = World.saved[lighting] or {}
+				World.saved[lighting].Technology = lighting.Technology
+			end
+
+			pcall(sethiddenproperty, lighting, "Technology", technology)
+		end
+	end
+
+	-- atmosphere: the game's own is changed when there is one
+	if flag("world_atmosphere", false) then
+		local atmosphere = lighting:FindFirstChildOfClass("Atmosphere") or made("atmosphere", function()
+			local created = Instance.new("Atmosphere")
+
+			created.Parent = lighting
+
+			return created
+		end)
+
+		setProperty(atmosphere, "Color", colourOf("world_atmosphere_color", Color3.fromRGB(199, 199, 199)))
+		setProperty(atmosphere, "Decay", colourOf("world_atmosphere_decay", Color3.fromRGB(106, 112, 125)))
+		setProperty(atmosphere, "Haze", flag("world_atmosphere_haze", 1))
+		setProperty(atmosphere, "Glare", flag("world_atmosphere_glare", 0))
+		setProperty(atmosphere, "Offset", flag("world_atmosphere_offset", 0))
+		setProperty(atmosphere, "Density", flag("world_atmosphere_density", 0.3))
+	end
+
+	-- saturation, contrast and tint through one colour correction effect
+	if flag("world_colour", false) then
+		local correction = made("colour", function()
+			local effect = Instance.new("ColorCorrectionEffect")
+
+			effect.Parent = lighting
+
+			return effect
+		end)
+
+		correction.Saturation = flag("world_saturation", 0)
+		correction.Contrast = flag("world_contrast", 0)
+		correction.TintColor = colourOf("world_tint", Color3.new(1, 1, 1))
+	else
+		dropMade("colour")
+	end
+
+	-- blur
+	if flag("world_blur", false) then
+		made("blur", function()
+			local effect = Instance.new("BlurEffect")
+
+			effect.Parent = lighting
+
+			return effect
+		end).Size = flag("world_blur_size", 6)
+	else
+		dropMade("blur")
+	end
+
+	-- skybox
+	local skyName = flag("world_sky_name", "stormy")
+
+	if flag("world_sky", false) and SKIES[skyName] then
+		local sky = lighting:FindFirstChildOfClass("Sky") or made("sky", function()
+			local created = Instance.new("Sky")
+
+			created.Parent = lighting
+
+			return created
+		end)
+
+		for face, id in SKIES[skyName] do
+			setProperty(sky, "Skybox" .. face, id)
+		end
+	end
+
+	-- weather: a patch of particles that follows the camera
+	if flag("world_weather", false) then
+		local kind = flag("world_weather_type", "rain")
+		local patch = World.weather
+
+		if not patch or not patch.Parent or patch:GetAttribute("kind") ~= kind then
+			if patch then
+				patch:Destroy()
+			end
+
+			patch = Instance.new("Part")
+			patch.Anchored = true
+			patch.CanCollide = false
+			patch.CanQuery = false
+			patch.CanTouch = false
+			patch.Transparency = 1
+			patch.Size = Vector3.new(80, 1, 80)
+			patch:SetAttribute("kind", kind)
+
+			local emitter = Instance.new("ParticleEmitter")
+
+			emitter.EmissionDirection = Enum.NormalId.Bottom
+			emitter.Lifetime = NumberRange.new(2, 3)
+			emitter.Speed = NumberRange.new(kind == "rain" and 70 or 12)
+			emitter.SpreadAngle = Vector2.new(kind == "rain" and 2 or 25, 0)
+			emitter.Size = NumberSequence.new(kind == "rain" and 0.12 or 0.25)
+			emitter.Transparency = NumberSequence.new(0.2)
+			emitter.Parent = patch
+			patch.Parent = camera
+			World.weather = patch
+		end
+
+		local emitter = patch:FindFirstChildOfClass("ParticleEmitter")
+
+		emitter.Rate = flag("world_weather_rate", 300)
+		emitter.Color = ColorSequence.new(colourOf("world_weather_color", kind == "rain" and Color3.fromRGB(170, 190, 255) or Color3.new(1, 1, 1)))
+		patch.CFrame = CFrame.new(camera.CFrame.Position + Vector3.new(0, 45, 0))
+	elseif World.weather then
+		World.weather:Destroy()
+		World.weather = nil
+	end
+
+	-- chat window, game crosshair, 3D rendering
+	if flag("world_hide_chat", false) ~= World.chatHidden then
+		World.chatHidden = flag("world_hide_chat", false)
+		pcall(starterGui.SetCoreGuiEnabled, starterGui, Enum.CoreGuiType.Chat, not World.chatHidden)
+	end
+
+	if flag("world_hide_cursor", false) ~= World.cursorHidden then
+		World.cursorHidden = flag("world_hide_cursor", false)
+		userInputService.MouseIconEnabled = not World.cursorHidden
+	end
+
+	if flag("world_no_render", false) ~= World.renderOff then
+		World.renderOff = flag("world_no_render", false)
+		pcall(runService.Set3dRenderingEnabled, runService, not World.renderOff)
+	end
+
+	-- switched-off settings go back to what the game had
+	if not flag("world_time", false) then
+		World.putBack(lighting, "ClockTime")
+	end
+
+	if not flag("world_ambient", false) then
+		World.putBack(lighting, "Ambient")
+		World.putBack(lighting, "OutdoorAmbient")
+	end
+end
+
+---Puts one property back to what it was before Vanta changed it.
+function World.putBack(object, property)
+	local saved = World.saved[object]
+
+	if saved and saved[property] ~= nil then
+		object[property] = saved[property]
+		saved[property] = nil
+	end
+end
+
+---Everything off: properties restored, made objects removed.
+function World.restore()
+	for object, properties in World.saved do
+		if object.Parent then
+			for property, value in properties do
+				if property == "Technology" then
+					pcall(sethiddenproperty, object, "Technology", value)
+				else
+					pcall(function()
+						object[property] = value
+					end)
+				end
+			end
+		end
+	end
+
+	World.saved = {}
+
+	for key in World.made do
+		dropMade(key)
+	end
+
+	if World.weather then
+		World.weather:Destroy()
+		World.weather = nil
+	end
+
+	if World.chatHidden then
+		pcall(starterGui.SetCoreGuiEnabled, starterGui, Enum.CoreGuiType.Chat, true)
+	end
+
+	if World.cursorHidden then
+		userInputService.MouseIconEnabled = true
+	end
+
+	if World.renderOff then
+		pcall(runService.Set3dRenderingEnabled, runService, true)
+	end
+
+	World.chatHidden, World.cursorHidden, World.renderOff, World.lastTech = nil, nil, nil, nil
+end
+
+---@module Crosshair
+---A Drawing crosshair at the centre of the screen (or on the target), with an optional state panel under it.
+local Crosshair = { objects = {}, angle = 0 }
+
+local function crosshairLine(index)
+	local line = Crosshair.objects[index]
+
+	if not line then
+		line = Drawing.new("Line")
+		Crosshair.objects[index] = line
+	end
+
+	return line
+end
+
+function Crosshair.clear()
+	for _, object in Crosshair.objects do
+		object:Remove()
+	end
+
+	Crosshair.objects = {}
+end
+
+function Crosshair.render(dt)
+	local panel = flag("crosshair_panel", false)
+
+	if not flag("crosshair_enabled", false) and not panel then
+		if next(Crosshair.objects) then
+			Crosshair.clear()
+		end
+
+		return
+	end
+
+	local centre = camera.ViewportSize / 2
+
+	if flag("crosshair_follow", false) and Follow.aim and not Util.inVoid(Follow.aim) then
+		local point, onScreen = camera:WorldToViewportPoint(Follow.aim)
+
+		if onScreen and point.Z > 0 then
+			centre = Vector2.new(point.X, point.Y)
+		end
+	end
+
+	local hasTarget = Target.player ~= nil
+
+	if flag("crosshair_enabled", false) then
+		local size = flag("crosshair_size", 8)
+		local gap = flag("crosshair_gap", 4)
+		local thickness = flag("crosshair_thickness", 1)
+		local colour = pickerColor(hasTarget and "crosshair_target_color" or "crosshair_color", hasTarget and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255))
+		local outline = pickerColor("crosshair_outline", Color3.new(0, 0, 0))
+
+		Crosshair.angle += dt * math.rad(flag("crosshair_spin", 0))
+
+		for index = 0, 3 do
+			local direction = Vector2.new(math.cos(Crosshair.angle + index * math.pi / 2), math.sin(Crosshair.angle + index * math.pi / 2))
+			local from, to = centre + direction * gap, centre + direction * (gap + size)
+			local back = crosshairLine("back" .. index)
+			local front = crosshairLine("front" .. index)
+
+			back.Visible, back.From, back.To, back.Thickness, back.Color = true, from, to, thickness + 2, outline
+			front.Visible, front.From, front.To, front.Thickness, front.Color = true, from, to, thickness, colour
+		end
+	else
+		for index = 0, 3 do
+			local back, front = Crosshair.objects["back" .. index], Crosshair.objects["front" .. index]
+
+			if back then back.Visible = false end
+			if front then front.Visible = false end
+		end
+	end
+
+	if panel then
+		local text = Crosshair.objects.panel
+
+		if not text then
+			text = Drawing.new("Text")
+			Crosshair.objects.panel = text
+		end
+
+		local state = Shop.busy() and "shopping" or (flag("voidspam_enabled", false) and ("void spam: " .. VoidSpam.phase))
+			or (flag("follow_enabled", false) and hasTarget and "following") or (hasTarget and "targeting") or "idle"
+
+		text.Visible = true
+		text.Text = state .. (hasTarget and (" - " .. Target.player.Name) or "")
+		text.Position = Vector2.new(centre.X, centre.Y + flag("crosshair_size", 8) + 22)
+		text.Size = 13
+		text.Center = true
+		text.Outline = true
+		text.Font = Drawing.Fonts and Drawing.Fonts.UI or 0
+		text.Color = pickerColor("crosshair_panel_color", Color3.fromRGB(255, 255, 255))
+	elseif Crosshair.objects.panel then
+		Crosshair.objects.panel:Remove()
+		Crosshair.objects.panel = nil
+	end
+end
+
+---@module LocalChar
+---Your own character: a highlight, a material, a hat, an aura and a rainbow on the tool in hand. Local to your screen.
+local LocalChar = { highlight = nil, hat = nil, aura = nil, tool = nil, materials = {}, hue = 0 }
+
+local function dropObject(key)
+	if LocalChar[key] then
+		LocalChar[key]:Destroy()
+		LocalChar[key] = nil
+	end
+end
+
+function LocalChar.restore()
+	dropObject("highlight")
+	dropObject("hat")
+	dropObject("aura")
+	dropObject("tool")
+
+	for part, original in LocalChar.materials do
+		if part.Parent then
+			part.Material = original
+		end
+	end
+
+	LocalChar.materials = {}
+end
+
+function LocalChar.step(dt)
+	local character = localPlayer.Character
+	local head = character and character:FindFirstChild("Head")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+
+	if not (character and head and root) then
+		return
+	end
+
+	-- highlight
+	if flag("char_highlight", false) then
+		if not LocalChar.highlight or LocalChar.highlight.Adornee ~= character then
+			dropObject("highlight")
+			LocalChar.highlight = Instance.new("Highlight")
+			LocalChar.highlight.Parent = game:GetService("CoreGui")
+		end
+
+		LocalChar.highlight.Adornee = character
+		LocalChar.highlight.FillColor = pickerColor("char_highlight_fill", Color3.fromRGB(180, 120, 255))
+		LocalChar.highlight.OutlineColor = pickerColor("char_highlight_outline", Color3.new(1, 1, 1))
+		LocalChar.highlight.FillTransparency = flag("char_highlight_fill_transparency", 0.6)
+	else
+		dropObject("highlight")
+	end
+
+	-- material
+	if flag("char_material", false) then
+		local material = Enum.Material[flag("char_material_value", "ForceField")]
+
+		for _, part in character:GetDescendants() do
+			if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+				LocalChar.materials[part] = LocalChar.materials[part] or part.Material
+				part.Material = material
+			end
+		end
+	elseif next(LocalChar.materials) then
+		for part, original in LocalChar.materials do
+			if part.Parent then
+				part.Material = original
+			end
+		end
+
+		LocalChar.materials = {}
+	end
+
+	-- china hat: a cone on the head
+	if flag("char_hat", false) then
+		if not LocalChar.hat or not LocalChar.hat.Parent then
+			dropObject("hat")
+
+			local hat = Instance.new("Part")
+			local mesh = Instance.new("SpecialMesh")
+
+			mesh.MeshType = Enum.MeshType.FileMesh
+			mesh.MeshId = "rbxassetid://1033714"
+			mesh.Parent = hat
+			hat.Anchored = true
+			hat.CanCollide = false
+			hat.CanQuery = false
+			hat.CanTouch = false
+			hat.Material = Enum.Material.Neon
+			hat.Size = Vector3.one
+			hat.Parent = camera
+			LocalChar.hat = hat
+		end
+
+		local scale = flag("char_hat_scale", 1.6)
+
+		LocalChar.hat.Color = pickerColor("char_hat_color", Color3.fromRGB(255, 120, 200))
+		LocalChar.hat.Mesh.Scale = Vector3.new(scale * 1.2, scale * 0.45, scale * 1.2)
+		LocalChar.hat.CFrame = CFrame.new(head.Position + Vector3.new(0, 0.9 + scale * 0.1, 0))
+	else
+		dropObject("hat")
+	end
+
+	-- particle aura
+	if flag("char_aura", false) then
+		if not LocalChar.aura or LocalChar.aura.Parent ~= root then
+			dropObject("aura")
+			LocalChar.aura = Instance.new("ParticleEmitter")
+			LocalChar.aura.Rate = 25
+			LocalChar.aura.Lifetime = NumberRange.new(0.8, 1.4)
+			LocalChar.aura.Speed = NumberRange.new(1, 3)
+			LocalChar.aura.SpreadAngle = Vector2.new(180, 180)
+			LocalChar.aura.Size = NumberSequence.new(0.35, 0)
+			LocalChar.aura.LightEmission = 1
+			LocalChar.aura.Parent = root
+		end
+
+		LocalChar.aura.Color = ColorSequence.new(pickerColor("char_aura_color", Color3.fromRGB(120, 200, 255)))
+	else
+		dropObject("aura")
+	end
+
+	-- rainbow on the tool in hand
+	local tool = character:FindFirstChildOfClass("Tool")
+
+	if flag("char_rainbow", false) and tool then
+		LocalChar.hue = (LocalChar.hue + dt * flag("char_rainbow_speed", 0.4)) % 1
+
+		if not LocalChar.tool or LocalChar.tool.Adornee ~= tool then
+			dropObject("tool")
+			LocalChar.tool = Instance.new("Highlight")
+			LocalChar.tool.Parent = game:GetService("CoreGui")
+			LocalChar.tool.Adornee = tool
+		end
+
+		LocalChar.tool.FillColor = Color3.fromHSV(LocalChar.hue, 1, 1)
+		LocalChar.tool.OutlineColor = Color3.fromHSV((LocalChar.hue + 0.5) % 1, 1, 1)
+		LocalChar.tool.FillTransparency = flag("char_rainbow_transparency", 0.3)
+	else
+		dropObject("tool")
+	end
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -3394,6 +3954,12 @@ function Ragebot.start()
 	Ragebot.maid:give(runService.PreRender:Connect(Body.restore))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Visuals.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Esp.render))
+	Ragebot.maid:give(runService.RenderStepped:Connect(World.step))
+	Ragebot.maid:give(runService.RenderStepped:Connect(Crosshair.render))
+	Ragebot.maid:give(runService.RenderStepped:Connect(LocalChar.step))
+	Ragebot.maid:give(World.restore)
+	Ragebot.maid:give(Crosshair.clear)
+	Ragebot.maid:give(LocalChar.restore)
 	Ragebot.maid:give(runService.RenderStepped:Connect(Feedback.render))
 	Feedback.start(Ragebot.maid)
 	Ragebot.maid:give(runService.RenderStepped:Connect(AimAssist.step))
@@ -3447,318 +4013,6 @@ local window = library:window({ name = "vanta" })
 
 notifications:create_notification({ name = "loading vanta..." })
 
-local rage = window:tab({ name = "rage" })
-local ragebotColumn = rage:column({})
-local mainSection = ragebotColumn:section({ name = "ragebot" })
-mainSection:toggle({ name = "enabled", flag = "ragebot_enabled" })
-mainSection:keybind({ name = "target key", flag = "target_key", key = Enum.KeyCode.E, mode = "Hold" })
-mainSection:toggle({ name = "automatic target", flag = "target_automatic" })
-mainSection:toggle({ name = "notify target changes", flag = "notify_target", default = true })
-
-local targetSection = ragebotColumn:section({ name = "target selection" })
-targetSection:dropdown({ name = "priority", flag = "target_priority", items = { "closest to mouse", "closest to character", "lowest health", "random" }, default = "closest to mouse" })
-targetSection:slider({ name = "fov", flag = "target_fov", min = 10, max = 1000, default = 180, interval = 1, suffix = "px" })
-targetSection:slider({ name = "max distance", flag = "target_distance", min = 50, max = 3000, default = 1000, interval = 10, suffix = " st" })
-targetSection:slider({ name = "automatic cooldown", flag = "target_cooldown", min = 0.05, max = 2, default = 0.25, interval = 0.05, suffix = "s" })
-targetSection:dropdown({ name = "ignore if", flag = "target_ignore_if", items = { "in void", "protected", "knocked" }, default = { "in void", "protected", "knocked" }, multi = true })
-targetSection:dropdown({ name = "untarget when", flag = "target_untarget_when", items = { "dead", "knocked", "flung" }, default = { "dead" }, multi = true })
-
-local stompSection = ragebotColumn:section({ name = "auto stomp" })
-stompSection:toggle({ name = "enabled", flag = "autostomp_enabled" })
-stompSection:toggle({ name = "stop when target dead", flag = "autostomp_stop_dead", default = true })
-
-local fireColumn = rage:column({})
-local fireSection = fireColumn:section({ name = "auto fire" })
-fireSection:toggle({ name = "enabled", flag = "autofire_enabled" })
-fireSection:dropdown({ name = "hitboxes", flag = "autofire_hitbox", items = { "head", "body", "arms", "legs" }, default = { "head" }, multi = true })
-fireSection:toggle({ name = "full auto (hold mouse)", flag = "fullauto_enabled" })
-fireSection:slider({ name = "full auto speed", flag = "fullauto_speed", min = 1, max = 100, default = 100, interval = 1, suffix = "%" })
-fireSection:toggle({ name = "quick draw", flag = "quickdraw_enabled" })
-fireSection:dropdown({ name = "quick draw guns", flag = "quickdraw_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock" }, default = { "rifle", "double-barrel sg", "flintlock", "revolver" }, multi = true })
-fireSection:toggle({ name = "a/d strafe", flag = "adstrafe_enabled" })
-fireSection:slider({ name = "a/d interval", flag = "adstrafe_interval", min = 0.05, max = 1, default = 0.22, interval = 0.01, suffix = "s" })
-fireSection:toggle({ name = "auto reload", flag = "autofire_reload", default = true })
-fireSection:slider({ name = "gun gap", flag = "autofire_gap", min = 0, max = 300, default = 40, interval = 5, suffix = "ms" })
-
-local resolverSection = fireColumn:section({ name = "resolver" })
-resolverSection:dropdown({ name = "mode", flag = "resolver_mode", items = { "off", "cluster", "adaptive" }, default = "adaptive" })
-resolverSection:slider({ name = "cluster radius", flag = "resolver_radius", min = 2, max = 60, default = 12, interval = 1, suffix = " st" })
-resolverSection:slider({ name = "history window", flag = "resolver_window", min = 0.25, max = 3, default = 1.5, interval = 0.05, suffix = "s" })
-resolverSection:slider({ name = "hold last spot", flag = "resolver_hold", min = 0, max = 4, default = 1.5, interval = 0.1, suffix = "s" })
-resolverSection:slider({ name = "lead", flag = "resolver_lead", min = 0, max = 200, default = 100, interval = 5, suffix = "%" })
-
-local move = window:tab({ name = "movement" })
-local followColumn = move:column({})
-local followSection = followColumn:section({ name = "follow target" })
-followSection:toggle({ name = "enabled", flag = "follow_enabled" })
-followSection:dropdown({ name = "style", flag = "follow_style", items = { "orbit", "random", "above", "strafe above", "teleport", "zigzag" }, default = "orbit" })
-followSection:slider({ name = "distance", flag = "follow_distance", min = 2, max = 200, default = 15, interval = 1, suffix = " st" })
-followSection:slider({ name = "height", flag = "follow_height", min = -100, max = 100, default = 0, interval = 1, suffix = " st" })
-followSection:slider({ name = "orbit speed", flag = "follow_speed", min = 1, max = 100, default = 75, interval = 1, suffix = "%" })
-followSection:slider({ name = "reposition every", flag = "follow_reposition", min = 0, max = 2, default = 0.05, interval = 0.01, suffix = "s" })
-followSection:toggle({ name = "follow into void", flag = "follow_into_void", default = true })
-followSection:dropdown({ name = "stop if", flag = "follow_stop_if", items = { "no gun equipped", "target knocked", "reloading" }, default = { "no gun equipped", "target knocked", "reloading" }, multi = true })
-followSection:toggle({ name = "lead", flag = "follow_lead", default = true })
-followSection:slider({ name = "lead time", flag = "follow_lead_time", min = 0, max = 300, default = 80, interval = 5, suffix = "ms" })
-followSection:dropdown({ name = "orbit shape", flag = "follow_shape", items = { "circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart" }, default = "circle" })
-
-local skySection = followColumn:section({ name = "above settings" })
-skySection:slider({ name = "height min", flag = "follow_sky_min", min = 1, max = 100, default = 10, interval = 1, suffix = " st" })
-skySection:slider({ name = "height max", flag = "follow_sky_max", min = 2, max = 200, default = 20, interval = 1, suffix = " st" })
-skySection:slider({ name = "zig zag height", flag = "follow_zigzag_height", min = -50, max = 50, default = 3, interval = 1, suffix = " st" })
-skySection:slider({ name = "zig zag speed", flag = "follow_zigzag_speed", min = 1, max = 100, default = 35, interval = 1, suffix = "x" })
-skySection:slider({ name = "teleport min", flag = "follow_teleport_min", min = 1, max = 100, default = 2, interval = 1, suffix = " st" })
-skySection:slider({ name = "teleport max", flag = "follow_teleport_max", min = 2, max = 200, default = 17, interval = 1, suffix = " st" })
-
-local characterColumn = move:column({})
-local characterSection = characterColumn:section({ name = "character" })
-characterSection:toggle({ name = "speed", flag = "move_speed" })
-characterSection:slider({ name = "speed value", flag = "move_speed_value", min = 1, max = 100, default = 20, interval = 1, suffix = " st/s" })
-characterSection:toggle({ name = "flight", flag = "move_flight" })
-characterSection:slider({ name = "flight speed", flag = "move_flight_speed", min = 10, max = 200, default = 60, interval = 1, suffix = " st/s" })
-characterSection:toggle({ name = "noclip", flag = "move_noclip" })
-characterSection:toggle({ name = "jump power", flag = "move_jump" })
-characterSection:slider({ name = "jump power value", flag = "move_jump_power", min = 10, max = 300, default = 70, interval = 1, suffix = "" })
-characterSection:toggle({ name = "anti sit", flag = "move_antisit" })
-
-local voidColumn = move:column({})
-local voidSection = voidColumn:section({ name = "void spam" })
-voidSection:toggle({ name = "enabled", flag = "voidspam_enabled" })
-voidSection:slider({ name = "void time", flag = "voidspam_void", min = 0.05, max = 1.5, default = 0.35, interval = 0.01, suffix = "s" })
-voidSection:slider({ name = "window time", flag = "voidspam_window", min = 0.05, max = 0.6, default = 0.12, interval = 0.01, suffix = "s" })
-voidSection:toggle({ name = "hide while waiting", flag = "voidspam_hide_waiting", default = true })
-voidSection:dropdown({ name = "type", flag = "voidspam_type", items = { "random", "deep", "bait" }, default = "random" })
-voidSection:slider({ name = "deep distance", flag = "voidspam_deep", min = 1, max = 1000, default = 100, interval = 1, suffix = "m st" })
-voidSection:slider({ name = "offset", flag = "voidspam_offset", min = 0, max = 30, default = 3, interval = 1, suffix = " st" })
-
-local baitSection = voidColumn:section({ name = "bait" })
-baitSection:slider({ name = "bait distance", flag = "voidspam_bait_distance", min = 200, max = 2500, default = 250, interval = 10, suffix = " st" })
-baitSection:slider({ name = "bait cooldown", flag = "voidspam_bait_cooldown", min = 0.01, max = 1.5, default = 0.5, interval = 0.01, suffix = "s" })
-baitSection:slider({ name = "bait time", flag = "voidspam_bait_time", min = 0.01, max = 1, default = 0.03, interval = 0.01, suffix = "s" })
-baitSection:toggle({ name = "bait freeze", flag = "voidspam_bait_freeze" })
-baitSection:dropdown({ name = "bait spot", flag = "voidspam_bait_spot", items = { "random", "where you stood" }, default = "random" })
-
-local visuals = window:tab({ name = "visuals" })
-local visualsColumn = visuals:column({})
-local fovSection = visualsColumn:section({ name = "fov circle" })
-fovSection:toggle({ name = "show", flag = "fov_show" })
-fovSection:colorpicker({ name = "colour", flag = "fov_color", color = Color3.fromRGB(255, 255, 255) })
-fovSection:colorpicker({ name = "active colour", flag = "fov_active_color", color = Color3.fromRGB(255, 80, 80) })
-
-local tracerSection = visualsColumn:section({ name = "tracer" })
-tracerSection:toggle({ name = "show", flag = "tracer_show" })
-tracerSection:colorpicker({ name = "colour", flag = "tracer_color", color = Color3.fromRGB(255, 255, 255) })
-tracerSection:slider({ name = "thickness", flag = "tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
-tracerSection:dropdown({ name = "origin", flag = "tracer_origin", items = { "bottom", "center", "mouse" }, default = "bottom" })
-
-local targetVisualColumn = visuals:column({})
-local circleSection = targetVisualColumn:section({ name = "target circle" })
-circleSection:toggle({ name = "show", flag = "circle_show" })
-circleSection:colorpicker({ name = "colour", flag = "circle_color", color = Color3.fromRGB(180, 120, 255) })
-circleSection:slider({ name = "radius", flag = "circle_radius", min = 1, max = 20, default = 4, interval = 0.5, suffix = " st" })
-
-local cameraSection = targetVisualColumn:section({ name = "camera" })
-cameraSection:toggle({ name = "view target", flag = "view_target" })
-
-local followVisualSection = targetVisualColumn:section({ name = "follow spot" })
-followVisualSection:toggle({ name = "visualize", flag = "follow_visualize" })
-followVisualSection:colorpicker({ name = "colour", flag = "follow_visualize_color", color = Color3.fromRGB(120, 200, 255) })
-
--- the shop parts are read before the menu is built so the manual purchase list can name them
-Shop.scan()
-
-local shopTab = window:tab({ name = "shop" })
-local shopColumn = shopTab:column({})
-local purchaseSection = shopColumn:section({ name = "purchasing" })
-purchaseSection:toggle({ name = "safe purchasing", flag = "shop_safe" })
-purchaseSection:dropdown({ name = "avoid", flag = "shop_safe_avoid", items = { "target", "anyone" }, default = "target" })
-purchaseSection:slider({ name = "avoid within", flag = "shop_safe_distance", min = 10, max = 200, default = 50, interval = 1, suffix = " st" })
-purchaseSection:slider({ name = "keep cash", flag = "shop_keep_cash", min = 0, max = 50000, default = 5000, interval = 100, suffix = "$" })
-purchaseSection:toggle({ name = "notifications", flag = "shop_notify", default = true })
-purchaseSection:dropdown({ name = "item", flag = "shop_manual_item", items = #Shop.names > 0 and Shop.names or { "none" }, default = Shop.items["popcorn"] and "popcorn" or nil, scrolling = true })
-purchaseSection:button({ name = "buy item", callback = function()
-	local chosen = flag("shop_manual_item")
-
-	if type(chosen) == "string" and not Shop.request(chosen) then
-		notifications:create_notification({ name = "cannot buy " .. chosen .. " right now" })
-	end
-end })
-
-local autoSection = shopColumn:section({ name = "auto armor" })
-autoSection:toggle({ name = "enabled", flag = "shop_armor" })
-autoSection:slider({ name = "buy if below", flag = "shop_armor_below", min = 1, max = 200, default = 52, interval = 1, suffix = "" })
-
-local ammoSection = shopColumn:section({ name = "auto ammo" })
-ammoSection:toggle({ name = "enabled", flag = "shop_ammo" })
-ammoSection:slider({ name = "minimum clips", flag = "shop_ammo_clips", min = 0, max = 10, default = 2, interval = 1, suffix = "" })
-ammoSection:slider({ name = "packs per purchase", flag = "shop_ammo_packs", min = 1, max = 20, default = 1, interval = 1, suffix = "" })
-
-local shopColumn2 = shopTab:column({})
-local healSection = shopColumn2:section({ name = "auto heal" })
-healSection:toggle({ name = "enabled", flag = "shop_heal" })
-healSection:slider({ name = "heal below", flag = "shop_heal_below", min = 1, max = 100, default = 50, interval = 1, suffix = "%" })
-healSection:slider({ name = "eat every", flag = "shop_heal_cooldown", min = 0.05, max = 1, default = 0.3, interval = 0.05, suffix = "s" })
-
-local maskSection = shopColumn2:section({ name = "auto mask" })
-maskSection:toggle({ name = "enabled", flag = "shop_mask" })
-
-local loadoutSection = shopColumn2:section({ name = "auto loadout" })
-loadoutSection:toggle({ name = "enabled", flag = "shop_loadout" })
-loadoutSection:dropdown({ name = "guns", flag = "shop_loadout_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock", "silencer", "knife" }, default = { "rifle" }, multi = true })
-loadoutSection:slider({ name = "ammo packs", flag = "shop_loadout_packs", min = 0, max = 20, default = 5, interval = 1, suffix = "" })
-
-
-local espColumn = visuals:column({})
-local espSection = espColumn:section({ name = "player esp" })
-espSection:toggle({ name = "enabled", flag = "esp_enabled" })
-espSection:toggle({ name = "only target", flag = "esp_only_target" })
-espSection:toggle({ name = "box", flag = "esp_box", default = true })
-espSection:toggle({ name = "name", flag = "esp_name", default = true })
-espSection:toggle({ name = "use display name", flag = "esp_display_name", default = true })
-espSection:toggle({ name = "distance", flag = "esp_distance" })
-espSection:dropdown({ name = "unit", flag = "esp_unit", items = { "studs", "metres" }, default = "studs" })
-espSection:toggle({ name = "tool text", flag = "esp_tool" })
-espSection:toggle({ name = "uppercase tool", flag = "esp_tool_upper" })
-espSection:toggle({ name = "health bar", flag = "esp_health_bar", default = true })
-espSection:toggle({ name = "health text", flag = "esp_health_text" })
-espSection:toggle({ name = "hide health text if full", flag = "esp_health_hide_full", default = true })
-espSection:toggle({ name = "armor bar", flag = "esp_armor_bar" })
-espSection:toggle({ name = "hide armor bar if none", flag = "esp_armor_hide_none", default = true })
-espSection:colorpicker({ name = "colour", flag = "esp_color", color = Color3.fromRGB(255, 255, 255) })
-espSection:colorpicker({ name = "target colour", flag = "esp_target_color", color = Color3.fromRGB(255, 80, 80) })
-
-local legit = window:tab({ name = "legit" })
-local legitColumn = legit:column({})
-local aimSection = legitColumn:section({ name = "aim assist" })
-aimSection:toggle({ name = "enabled", flag = "aimassist_enabled" })
-aimSection:keybind({ name = "aim key", flag = "aimassist_key", key = Enum.KeyCode.Q, mode = "Hold" })
-aimSection:dropdown({ name = "method", flag = "aimassist_method", items = { "camera", "mouse" }, default = "camera" })
-aimSection:dropdown({ name = "hitbox", flag = "aimassist_hitbox", items = { "head", "chest", "root" }, default = "head" })
-aimSection:slider({ name = "field of view", flag = "aimassist_fov", min = 10, max = 800, default = 120, interval = 1, suffix = "px" })
-aimSection:slider({ name = "max distance", flag = "aimassist_distance", min = 50, max = 3000, default = 500, interval = 10, suffix = " st" })
-aimSection:slider({ name = "horizontal smoothing", flag = "aimassist_h_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
-aimSection:slider({ name = "vertical smoothing", flag = "aimassist_v_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
-aimSection:toggle({ name = "visible only", flag = "aimassist_visible", default = true })
-aimSection:slider({ name = "target swap cooldown", flag = "legit_swap_cooldown", min = 0, max = 2, default = 0, interval = 0.05, suffix = "s" })
-aimSection:toggle({ name = "show fov", flag = "aimassist_show_fov" })
-aimSection:colorpicker({ name = "fov colour", flag = "aimassist_fov_color", color = Color3.fromRGB(255, 255, 255) })
-
-local hits = window:tab({ name = "hits" })
-local hitsColumn = hits:column({})
-local markerSection = hitsColumn:section({ name = "hit markers" })
-markerSection:toggle({ name = "2d hit marker", flag = "fb_marker2d" })
-markerSection:slider({ name = "2d lifetime", flag = "fb_marker2d_life", min = 0.1, max = 2, default = 0.4, interval = 0.05, suffix = "s" })
-markerSection:slider({ name = "2d thickness", flag = "fb_marker2d_thickness", min = 1, max = 5, default = 2, interval = 1, suffix = "px" })
-markerSection:colorpicker({ name = "2d colour", flag = "fb_marker2d_color", color = Color3.fromRGB(255, 255, 255) })
-markerSection:colorpicker({ name = "2d lethal colour", flag = "fb_marker2d_lethal", color = Color3.fromRGB(255, 60, 60) })
-markerSection:toggle({ name = "3d hit marker", flag = "fb_marker3d" })
-markerSection:slider({ name = "3d lifetime", flag = "fb_marker3d_life", min = 0.1, max = 3, default = 0.6, interval = 0.05, suffix = "s" })
-markerSection:slider({ name = "3d thickness", flag = "fb_marker3d_thickness", min = 1, max = 5, default = 2, interval = 1, suffix = "px" })
-markerSection:colorpicker({ name = "3d colour", flag = "fb_marker3d_color", color = Color3.fromRGB(255, 255, 255) })
-markerSection:colorpicker({ name = "3d lethal colour", flag = "fb_marker3d_lethal", color = Color3.fromRGB(255, 60, 60) })
-
-local damageSection = hitsColumn:section({ name = "damage number" })
-damageSection:toggle({ name = "enabled", flag = "fb_damage" })
-damageSection:slider({ name = "lifetime", flag = "fb_damage_life", min = 0.2, max = 3, default = 1, interval = 0.05, suffix = "s" })
-damageSection:slider({ name = "size", flag = "fb_damage_size", min = 10, max = 40, default = 18, interval = 1, suffix = "px" })
-damageSection:colorpicker({ name = "colour", flag = "fb_damage_color", color = Color3.fromRGB(255, 255, 255) })
-damageSection:colorpicker({ name = "lethal colour", flag = "fb_damage_lethal", color = Color3.fromRGB(255, 60, 60) })
-
-local soundSection = hitsColumn:section({ name = "hit sound" })
-soundSection:toggle({ name = "enabled", flag = "fb_sound" })
-soundSection:dropdown({ name = "sound", flag = "fb_sound_name", items = SOUND_NAMES, default = "neverlose", scrolling = true })
-soundSection:slider({ name = "volume", flag = "fb_sound_volume", min = 0, max = 5, default = 1, interval = 0.1, suffix = "" })
-
-local hitsColumn2 = hits:column({})
-local overlaySection = hitsColumn2:section({ name = "hit overlay" })
-overlaySection:toggle({ name = "enabled", flag = "fb_overlay" })
-overlaySection:slider({ name = "lifetime", flag = "fb_overlay_life", min = 0.1, max = 2, default = 0.35, interval = 0.05, suffix = "s" })
-overlaySection:colorpicker({ name = "colour", flag = "fb_overlay_color", color = Color3.fromRGB(255, 255, 255) })
-overlaySection:colorpicker({ name = "lethal colour", flag = "fb_overlay_lethal", color = Color3.fromRGB(255, 60, 60) })
-
-local chamsSection = hitsColumn2:section({ name = "hit chams" })
-chamsSection:toggle({ name = "enabled", flag = "fb_chams" })
-chamsSection:toggle({ name = "only last hit", flag = "fb_chams_last_only", default = true })
-chamsSection:slider({ name = "lifetime", flag = "fb_chams_life", min = 0.1, max = 3, default = 0.5, interval = 0.05, suffix = "s" })
-chamsSection:colorpicker({ name = "colour", flag = "fb_chams_color", color = Color3.fromRGB(255, 255, 255) })
-chamsSection:colorpicker({ name = "lethal colour", flag = "fb_chams_lethal", color = Color3.fromRGB(255, 60, 60) })
-
-local particleSection = hitsColumn2:section({ name = "hit particle" })
-particleSection:toggle({ name = "enabled", flag = "fb_particle" })
-particleSection:slider({ name = "amount", flag = "fb_particle_count", min = 1, max = 100, default = 20, interval = 1, suffix = "" })
-particleSection:colorpicker({ name = "colour", flag = "fb_particle_color", color = Color3.fromRGB(255, 255, 255) })
-particleSection:colorpicker({ name = "lethal colour", flag = "fb_particle_lethal", color = Color3.fromRGB(255, 60, 60) })
-
-local skeletonSection = hitsColumn2:section({ name = "hit skeleton" })
-skeletonSection:toggle({ name = "enabled", flag = "fb_skeleton" })
-skeletonSection:slider({ name = "lifetime", flag = "fb_skeleton_life", min = 0.1, max = 3, default = 0.6, interval = 0.05, suffix = "s" })
-skeletonSection:slider({ name = "thickness", flag = "fb_skeleton_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
-skeletonSection:colorpicker({ name = "colour", flag = "fb_skeleton_color", color = Color3.fromRGB(255, 255, 255) })
-
-local hitsColumn3 = hits:column({})
-local tracerSection2 = hitsColumn3:section({ name = "bullet tracers" })
-tracerSection2:toggle({ name = "local tracers", flag = "fb_tracer" })
-tracerSection2:slider({ name = "lifetime", flag = "fb_tracer_life", min = 0.1, max = 3, default = 0.5, interval = 0.05, suffix = "s" })
-tracerSection2:slider({ name = "thickness", flag = "fb_tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
-tracerSection2:colorpicker({ name = "colour", flag = "fb_tracer_color", color = Color3.fromRGB(255, 255, 255) })
-
-local impactSection = hitsColumn3:section({ name = "bullet impacts" })
-impactSection:toggle({ name = "local impacts", flag = "fb_impact" })
-impactSection:slider({ name = "lifetime", flag = "fb_impact_life", min = 0.1, max = 3, default = 0.8, interval = 0.05, suffix = "s" })
-impactSection:colorpicker({ name = "colour", flag = "fb_impact_color", color = Color3.fromRGB(255, 200, 80) })
-
-local notifySection = hitsColumn3:section({ name = "shot notifications" })
-notifySection:toggle({ name = "notify hits", flag = "fb_notify_hits" })
-notifySection:toggle({ name = "notify shots with no hit", flag = "fb_notify_miss" })
-
-local legitColumn2 = legit:column({})
-local sharedSection = legitColumn2:section({ name = "shared" })
-sharedSection:toggle({ name = "ignore knocked", flag = "legit_ignore_knocked", default = true })
-sharedSection:toggle({ name = "ignore spawn protected", flag = "legit_ignore_protected", default = true })
-
-local silentSection = legitColumn2:section({ name = "silent aim" })
-silentSection:toggle({ name = "enabled", flag = "silent_enabled" })
-silentSection:dropdown({ name = "hitbox", flag = "silent_hitbox", items = { "head", "chest", "root" }, default = "head" })
-silentSection:slider({ name = "field of view", flag = "silent_fov", min = 10, max = 800, default = 120, interval = 1, suffix = "px" })
-silentSection:slider({ name = "max distance", flag = "silent_distance", min = 50, max = 3000, default = 500, interval = 10, suffix = " st" })
-silentSection:slider({ name = "max curve", flag = "silent_curve", min = 1, max = 90, default = 30, interval = 1, suffix = "deg" })
-silentSection:toggle({ name = "dont curve vertically", flag = "silent_flat" })
-silentSection:slider({ name = "redirect chance", flag = "silent_chance", min = 0, max = 100, default = 100, interval = 1, suffix = "%" })
-silentSection:toggle({ name = "visible only", flag = "silent_visible", default = true })
-silentSection:toggle({ name = "show fov", flag = "silent_show_fov" })
-silentSection:colorpicker({ name = "fov colour", flag = "silent_fov_color", color = Color3.fromRGB(180, 180, 255) })
-
-local triggerSection = legitColumn2:section({ name = "triggerbot" })
-triggerSection:toggle({ name = "enabled", flag = "trigger_enabled" })
-triggerSection:dropdown({ name = "hitboxes", flag = "trigger_hitboxes", items = { "head", "body", "arms", "legs" }, default = { "head", "body" }, multi = true })
-triggerSection:slider({ name = "max distance (0 = gun range)", flag = "trigger_distance", min = 0, max = 2500, default = 0, interval = 10, suffix = " st" })
-triggerSection:slider({ name = "refresh rate", flag = "trigger_refresh", min = 0, max = 0.5, default = 0, interval = 0.01, suffix = "s" })
-triggerSection:slider({ name = "hover time", flag = "trigger_hover", min = 0, max = 0.3, default = 0, interval = 0.01, suffix = "s" })
-triggerSection:slider({ name = "cooldown", flag = "trigger_cooldown", min = 0, max = 1, default = 0, interval = 0.01, suffix = "s" })
-triggerSection:slider({ name = "delay", flag = "trigger_delay", min = 0, max = 0.5, default = 0, interval = 0.01, suffix = "s" })
-
-local misc = window:tab({ name = "misc" })
-local miscColumn = misc:column({})
-local miscSection = miscColumn:section({ name = "script" })
-local utilitySection = miscColumn:section({ name = "utility" })
-utilitySection:toggle({ name = "anti bounty", flag = "antibounty_enabled" })
-utilitySection:toggle({ name = "auto bounty", flag = "autobounty_enabled" })
-utilitySection:toggle({ name = "anti stomp", flag = "antistomp_enabled" })
-utilitySection:toggle({ name = "anti afk", flag = "utility_antiafk" })
-utilitySection:toggle({ name = "watermark", flag = "utility_watermark", default = true, callback = function(visible)
-	if library.watermark_outline then
-		library.watermark_outline.Visible = visible
-	end
-end })
-utilitySection:button({ name = "rejoin", callback = function()
-	notifications:create_notification({ name = "rejoining..." })
-	Utility.rejoin()
-end })
-
-miscSection:button({ name = "test notification", callback = function()
-	notifications:create_notification({ name = "vanta is running" })
-end })
-
 local function unload()
 	Ragebot.stop()
 	Resolver.reset()
@@ -3770,11 +4024,418 @@ local function unload()
 	end
 end
 
-miscSection:button({ name = "unload", callback = unload })
+-- The menu is built inside a function: the main chunk is close to the limit of 200 local variables.
+local function buildMenu()
+	local rage = window:tab({ name = "rage" })
+	local ragebotColumn = rage:column({})
+	local mainSection = ragebotColumn:section({ name = "ragebot" })
+	mainSection:toggle({ name = "enabled", flag = "ragebot_enabled" })
+	mainSection:keybind({ name = "target key", flag = "target_key", key = Enum.KeyCode.E, mode = "Hold" })
+	mainSection:toggle({ name = "automatic target", flag = "target_automatic" })
+	mainSection:toggle({ name = "notify target changes", flag = "notify_target", default = true })
+
+	local targetSection = ragebotColumn:section({ name = "target selection" })
+	targetSection:dropdown({ name = "priority", flag = "target_priority", items = { "closest to mouse", "closest to character", "lowest health", "random" }, default = "closest to mouse" })
+	targetSection:slider({ name = "fov", flag = "target_fov", min = 10, max = 1000, default = 180, interval = 1, suffix = "px" })
+	targetSection:slider({ name = "max distance", flag = "target_distance", min = 50, max = 3000, default = 1000, interval = 10, suffix = " st" })
+	targetSection:slider({ name = "automatic cooldown", flag = "target_cooldown", min = 0.05, max = 2, default = 0.25, interval = 0.05, suffix = "s" })
+	targetSection:dropdown({ name = "ignore if", flag = "target_ignore_if", items = { "in void", "protected", "knocked" }, default = { "in void", "protected", "knocked" }, multi = true })
+	targetSection:dropdown({ name = "untarget when", flag = "target_untarget_when", items = { "dead", "knocked", "flung" }, default = { "dead" }, multi = true })
+
+	local stompSection = ragebotColumn:section({ name = "auto stomp" })
+	stompSection:toggle({ name = "enabled", flag = "autostomp_enabled" })
+	stompSection:toggle({ name = "stop when target dead", flag = "autostomp_stop_dead", default = true })
+
+	local fireColumn = rage:column({})
+	local fireSection = fireColumn:section({ name = "auto fire" })
+	fireSection:toggle({ name = "enabled", flag = "autofire_enabled" })
+	fireSection:dropdown({ name = "hitboxes", flag = "autofire_hitbox", items = { "head", "body", "arms", "legs" }, default = { "head" }, multi = true })
+	fireSection:toggle({ name = "full auto (hold mouse)", flag = "fullauto_enabled" })
+	fireSection:slider({ name = "full auto speed", flag = "fullauto_speed", min = 1, max = 100, default = 100, interval = 1, suffix = "%" })
+	fireSection:toggle({ name = "quick draw", flag = "quickdraw_enabled" })
+	fireSection:dropdown({ name = "quick draw guns", flag = "quickdraw_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock" }, default = { "rifle", "double-barrel sg", "flintlock", "revolver" }, multi = true })
+	fireSection:toggle({ name = "a/d strafe", flag = "adstrafe_enabled" })
+	fireSection:slider({ name = "a/d interval", flag = "adstrafe_interval", min = 0.05, max = 1, default = 0.22, interval = 0.01, suffix = "s" })
+	fireSection:toggle({ name = "auto reload", flag = "autofire_reload", default = true })
+	fireSection:slider({ name = "gun gap", flag = "autofire_gap", min = 0, max = 300, default = 40, interval = 5, suffix = "ms" })
+
+	local resolverSection = fireColumn:section({ name = "resolver" })
+	resolverSection:dropdown({ name = "mode", flag = "resolver_mode", items = { "off", "cluster", "adaptive" }, default = "adaptive" })
+	resolverSection:slider({ name = "cluster radius", flag = "resolver_radius", min = 2, max = 60, default = 12, interval = 1, suffix = " st" })
+	resolverSection:slider({ name = "history window", flag = "resolver_window", min = 0.25, max = 3, default = 1.5, interval = 0.05, suffix = "s" })
+	resolverSection:slider({ name = "hold last spot", flag = "resolver_hold", min = 0, max = 4, default = 1.5, interval = 0.1, suffix = "s" })
+	resolverSection:slider({ name = "lead", flag = "resolver_lead", min = 0, max = 200, default = 100, interval = 5, suffix = "%" })
+
+	local move = window:tab({ name = "movement" })
+	local followColumn = move:column({})
+	local followSection = followColumn:section({ name = "follow target" })
+	followSection:toggle({ name = "enabled", flag = "follow_enabled" })
+	followSection:dropdown({ name = "style", flag = "follow_style", items = { "orbit", "random", "above", "strafe above", "teleport", "zigzag" }, default = "orbit" })
+	followSection:slider({ name = "distance", flag = "follow_distance", min = 2, max = 200, default = 15, interval = 1, suffix = " st" })
+	followSection:slider({ name = "height", flag = "follow_height", min = -100, max = 100, default = 0, interval = 1, suffix = " st" })
+	followSection:slider({ name = "orbit speed", flag = "follow_speed", min = 1, max = 100, default = 75, interval = 1, suffix = "%" })
+	followSection:slider({ name = "reposition every", flag = "follow_reposition", min = 0, max = 2, default = 0.05, interval = 0.01, suffix = "s" })
+	followSection:toggle({ name = "follow into void", flag = "follow_into_void", default = true })
+	followSection:dropdown({ name = "stop if", flag = "follow_stop_if", items = { "no gun equipped", "target knocked", "reloading" }, default = { "no gun equipped", "target knocked", "reloading" }, multi = true })
+	followSection:toggle({ name = "lead", flag = "follow_lead", default = true })
+	followSection:slider({ name = "lead time", flag = "follow_lead_time", min = 0, max = 300, default = 80, interval = 5, suffix = "ms" })
+	followSection:dropdown({ name = "orbit shape", flag = "follow_shape", items = { "circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart" }, default = "circle" })
+
+	local skySection = followColumn:section({ name = "above settings" })
+	skySection:slider({ name = "height min", flag = "follow_sky_min", min = 1, max = 100, default = 10, interval = 1, suffix = " st" })
+	skySection:slider({ name = "height max", flag = "follow_sky_max", min = 2, max = 200, default = 20, interval = 1, suffix = " st" })
+	skySection:slider({ name = "zig zag height", flag = "follow_zigzag_height", min = -50, max = 50, default = 3, interval = 1, suffix = " st" })
+	skySection:slider({ name = "zig zag speed", flag = "follow_zigzag_speed", min = 1, max = 100, default = 35, interval = 1, suffix = "x" })
+	skySection:slider({ name = "teleport min", flag = "follow_teleport_min", min = 1, max = 100, default = 2, interval = 1, suffix = " st" })
+	skySection:slider({ name = "teleport max", flag = "follow_teleport_max", min = 2, max = 200, default = 17, interval = 1, suffix = " st" })
+
+	local characterColumn = move:column({})
+	local characterSection = characterColumn:section({ name = "character" })
+	characterSection:toggle({ name = "speed", flag = "move_speed" })
+	characterSection:slider({ name = "speed value", flag = "move_speed_value", min = 1, max = 100, default = 20, interval = 1, suffix = " st/s" })
+	characterSection:toggle({ name = "flight", flag = "move_flight" })
+	characterSection:slider({ name = "flight speed", flag = "move_flight_speed", min = 10, max = 200, default = 60, interval = 1, suffix = " st/s" })
+	characterSection:toggle({ name = "noclip", flag = "move_noclip" })
+	characterSection:toggle({ name = "jump power", flag = "move_jump" })
+	characterSection:slider({ name = "jump power value", flag = "move_jump_power", min = 10, max = 300, default = 70, interval = 1, suffix = "" })
+	characterSection:toggle({ name = "anti sit", flag = "move_antisit" })
+
+	local voidColumn = move:column({})
+	local voidSection = voidColumn:section({ name = "void spam" })
+	voidSection:toggle({ name = "enabled", flag = "voidspam_enabled" })
+	voidSection:slider({ name = "void time", flag = "voidspam_void", min = 0.05, max = 1.5, default = 0.35, interval = 0.01, suffix = "s" })
+	voidSection:slider({ name = "window time", flag = "voidspam_window", min = 0.05, max = 0.6, default = 0.12, interval = 0.01, suffix = "s" })
+	voidSection:toggle({ name = "hide while waiting", flag = "voidspam_hide_waiting", default = true })
+	voidSection:dropdown({ name = "type", flag = "voidspam_type", items = { "random", "deep", "bait" }, default = "random" })
+	voidSection:slider({ name = "deep distance", flag = "voidspam_deep", min = 1, max = 1000, default = 100, interval = 1, suffix = "m st" })
+	voidSection:slider({ name = "offset", flag = "voidspam_offset", min = 0, max = 30, default = 3, interval = 1, suffix = " st" })
+
+	local baitSection = voidColumn:section({ name = "bait" })
+	baitSection:slider({ name = "bait distance", flag = "voidspam_bait_distance", min = 200, max = 2500, default = 250, interval = 10, suffix = " st" })
+	baitSection:slider({ name = "bait cooldown", flag = "voidspam_bait_cooldown", min = 0.01, max = 1.5, default = 0.5, interval = 0.01, suffix = "s" })
+	baitSection:slider({ name = "bait time", flag = "voidspam_bait_time", min = 0.01, max = 1, default = 0.03, interval = 0.01, suffix = "s" })
+	baitSection:toggle({ name = "bait freeze", flag = "voidspam_bait_freeze" })
+	baitSection:dropdown({ name = "bait spot", flag = "voidspam_bait_spot", items = { "random", "where you stood" }, default = "random" })
+
+	local visuals = window:tab({ name = "visuals" })
+	local visualsColumn = visuals:column({})
+	local fovSection = visualsColumn:section({ name = "fov circle" })
+	fovSection:toggle({ name = "show", flag = "fov_show" })
+	fovSection:colorpicker({ name = "colour", flag = "fov_color", color = Color3.fromRGB(255, 255, 255) })
+	fovSection:colorpicker({ name = "active colour", flag = "fov_active_color", color = Color3.fromRGB(255, 80, 80) })
+
+	local tracerSection = visualsColumn:section({ name = "tracer" })
+	tracerSection:toggle({ name = "show", flag = "tracer_show" })
+	tracerSection:colorpicker({ name = "colour", flag = "tracer_color", color = Color3.fromRGB(255, 255, 255) })
+	tracerSection:slider({ name = "thickness", flag = "tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
+	tracerSection:dropdown({ name = "origin", flag = "tracer_origin", items = { "bottom", "center", "mouse" }, default = "bottom" })
+
+	local targetVisualColumn = visuals:column({})
+	local circleSection = targetVisualColumn:section({ name = "target circle" })
+	circleSection:toggle({ name = "show", flag = "circle_show" })
+	circleSection:colorpicker({ name = "colour", flag = "circle_color", color = Color3.fromRGB(180, 120, 255) })
+	circleSection:slider({ name = "radius", flag = "circle_radius", min = 1, max = 20, default = 4, interval = 0.5, suffix = " st" })
+
+	local cameraSection = targetVisualColumn:section({ name = "camera" })
+	cameraSection:toggle({ name = "view target", flag = "view_target" })
+
+	local followVisualSection = targetVisualColumn:section({ name = "follow spot" })
+	followVisualSection:toggle({ name = "visualize", flag = "follow_visualize" })
+	followVisualSection:colorpicker({ name = "colour", flag = "follow_visualize_color", color = Color3.fromRGB(120, 200, 255) })
+
+	-- the shop parts are read before the menu is built so the manual purchase list can name them
+	Shop.scan()
+
+	local shopTab = window:tab({ name = "shop" })
+	local shopColumn = shopTab:column({})
+	local purchaseSection = shopColumn:section({ name = "purchasing" })
+	purchaseSection:toggle({ name = "safe purchasing", flag = "shop_safe" })
+	purchaseSection:dropdown({ name = "avoid", flag = "shop_safe_avoid", items = { "target", "anyone" }, default = "target" })
+	purchaseSection:slider({ name = "avoid within", flag = "shop_safe_distance", min = 10, max = 200, default = 50, interval = 1, suffix = " st" })
+	purchaseSection:slider({ name = "keep cash", flag = "shop_keep_cash", min = 0, max = 50000, default = 5000, interval = 100, suffix = "$" })
+	purchaseSection:toggle({ name = "notifications", flag = "shop_notify", default = true })
+	purchaseSection:dropdown({ name = "item", flag = "shop_manual_item", items = #Shop.names > 0 and Shop.names or { "none" }, default = Shop.items["popcorn"] and "popcorn" or nil, scrolling = true })
+	purchaseSection:button({ name = "buy item", callback = function()
+		local chosen = flag("shop_manual_item")
+
+		if type(chosen) == "string" and not Shop.request(chosen) then
+			notifications:create_notification({ name = "cannot buy " .. chosen .. " right now" })
+		end
+	end })
+
+	local autoSection = shopColumn:section({ name = "auto armor" })
+	autoSection:toggle({ name = "enabled", flag = "shop_armor" })
+	autoSection:slider({ name = "buy if below", flag = "shop_armor_below", min = 1, max = 200, default = 52, interval = 1, suffix = "" })
+
+	local ammoSection = shopColumn:section({ name = "auto ammo" })
+	ammoSection:toggle({ name = "enabled", flag = "shop_ammo" })
+	ammoSection:slider({ name = "minimum clips", flag = "shop_ammo_clips", min = 0, max = 10, default = 2, interval = 1, suffix = "" })
+	ammoSection:slider({ name = "packs per purchase", flag = "shop_ammo_packs", min = 1, max = 20, default = 1, interval = 1, suffix = "" })
+
+	local shopColumn2 = shopTab:column({})
+	local healSection = shopColumn2:section({ name = "auto heal" })
+	healSection:toggle({ name = "enabled", flag = "shop_heal" })
+	healSection:slider({ name = "heal below", flag = "shop_heal_below", min = 1, max = 100, default = 50, interval = 1, suffix = "%" })
+	healSection:slider({ name = "eat every", flag = "shop_heal_cooldown", min = 0.05, max = 1, default = 0.3, interval = 0.05, suffix = "s" })
+
+	local maskSection = shopColumn2:section({ name = "auto mask" })
+	maskSection:toggle({ name = "enabled", flag = "shop_mask" })
+
+	local loadoutSection = shopColumn2:section({ name = "auto loadout" })
+	loadoutSection:toggle({ name = "enabled", flag = "shop_loadout" })
+	loadoutSection:dropdown({ name = "guns", flag = "shop_loadout_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock", "silencer", "knife" }, default = { "rifle" }, multi = true })
+	loadoutSection:slider({ name = "ammo packs", flag = "shop_loadout_packs", min = 0, max = 20, default = 5, interval = 1, suffix = "" })
+
+
+	local espColumn = visuals:column({})
+	local espSection = espColumn:section({ name = "player esp" })
+	espSection:toggle({ name = "enabled", flag = "esp_enabled" })
+	espSection:toggle({ name = "only target", flag = "esp_only_target" })
+	espSection:toggle({ name = "box", flag = "esp_box", default = true })
+	espSection:toggle({ name = "name", flag = "esp_name", default = true })
+	espSection:toggle({ name = "use display name", flag = "esp_display_name", default = true })
+	espSection:toggle({ name = "distance", flag = "esp_distance" })
+	espSection:dropdown({ name = "unit", flag = "esp_unit", items = { "studs", "metres" }, default = "studs" })
+	espSection:toggle({ name = "tool text", flag = "esp_tool" })
+	espSection:toggle({ name = "uppercase tool", flag = "esp_tool_upper" })
+	espSection:toggle({ name = "health bar", flag = "esp_health_bar", default = true })
+	espSection:toggle({ name = "health text", flag = "esp_health_text" })
+	espSection:toggle({ name = "hide health text if full", flag = "esp_health_hide_full", default = true })
+	espSection:toggle({ name = "armor bar", flag = "esp_armor_bar" })
+	espSection:toggle({ name = "hide armor bar if none", flag = "esp_armor_hide_none", default = true })
+	espSection:colorpicker({ name = "colour", flag = "esp_color", color = Color3.fromRGB(255, 255, 255) })
+	espSection:colorpicker({ name = "target colour", flag = "esp_target_color", color = Color3.fromRGB(255, 80, 80) })
+	espSection:toggle({ name = "chams", flag = "esp_chams" })
+	espSection:slider({ name = "chams transparency", flag = "esp_chams_transparency", min = 0, max = 1, default = 0.5, interval = 0.05, suffix = "" })
+	espSection:toggle({ name = "chams behind walls", flag = "esp_chams_walls", default = true })
+	espSection:toggle({ name = "highlight outline", flag = "esp_highlight" })
+	espSection:colorpicker({ name = "outline colour", flag = "esp_highlight_color", color = Color3.new(1, 1, 1) })
+
+	local legit = window:tab({ name = "legit" })
+	local legitColumn = legit:column({})
+	local aimSection = legitColumn:section({ name = "aim assist" })
+	aimSection:toggle({ name = "enabled", flag = "aimassist_enabled" })
+	aimSection:keybind({ name = "aim key", flag = "aimassist_key", key = Enum.KeyCode.Q, mode = "Hold" })
+	aimSection:dropdown({ name = "method", flag = "aimassist_method", items = { "camera", "mouse" }, default = "camera" })
+	aimSection:dropdown({ name = "hitbox", flag = "aimassist_hitbox", items = { "head", "chest", "root" }, default = "head" })
+	aimSection:slider({ name = "field of view", flag = "aimassist_fov", min = 10, max = 800, default = 120, interval = 1, suffix = "px" })
+	aimSection:slider({ name = "max distance", flag = "aimassist_distance", min = 50, max = 3000, default = 500, interval = 10, suffix = " st" })
+	aimSection:slider({ name = "horizontal smoothing", flag = "aimassist_h_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
+	aimSection:slider({ name = "vertical smoothing", flag = "aimassist_v_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
+	aimSection:toggle({ name = "visible only", flag = "aimassist_visible", default = true })
+	aimSection:slider({ name = "target swap cooldown", flag = "legit_swap_cooldown", min = 0, max = 2, default = 0, interval = 0.05, suffix = "s" })
+	aimSection:toggle({ name = "show fov", flag = "aimassist_show_fov" })
+	aimSection:colorpicker({ name = "fov colour", flag = "aimassist_fov_color", color = Color3.fromRGB(255, 255, 255) })
+
+	local hits = window:tab({ name = "hits" })
+	local hitsColumn = hits:column({})
+	local markerSection = hitsColumn:section({ name = "hit markers" })
+	markerSection:toggle({ name = "2d hit marker", flag = "fb_marker2d" })
+	markerSection:slider({ name = "2d lifetime", flag = "fb_marker2d_life", min = 0.1, max = 2, default = 0.4, interval = 0.05, suffix = "s" })
+	markerSection:slider({ name = "2d thickness", flag = "fb_marker2d_thickness", min = 1, max = 5, default = 2, interval = 1, suffix = "px" })
+	markerSection:colorpicker({ name = "2d colour", flag = "fb_marker2d_color", color = Color3.fromRGB(255, 255, 255) })
+	markerSection:colorpicker({ name = "2d lethal colour", flag = "fb_marker2d_lethal", color = Color3.fromRGB(255, 60, 60) })
+	markerSection:toggle({ name = "3d hit marker", flag = "fb_marker3d" })
+	markerSection:slider({ name = "3d lifetime", flag = "fb_marker3d_life", min = 0.1, max = 3, default = 0.6, interval = 0.05, suffix = "s" })
+	markerSection:slider({ name = "3d thickness", flag = "fb_marker3d_thickness", min = 1, max = 5, default = 2, interval = 1, suffix = "px" })
+	markerSection:colorpicker({ name = "3d colour", flag = "fb_marker3d_color", color = Color3.fromRGB(255, 255, 255) })
+	markerSection:colorpicker({ name = "3d lethal colour", flag = "fb_marker3d_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+	local damageSection = hitsColumn:section({ name = "damage number" })
+	damageSection:toggle({ name = "enabled", flag = "fb_damage" })
+	damageSection:slider({ name = "lifetime", flag = "fb_damage_life", min = 0.2, max = 3, default = 1, interval = 0.05, suffix = "s" })
+	damageSection:slider({ name = "size", flag = "fb_damage_size", min = 10, max = 40, default = 18, interval = 1, suffix = "px" })
+	damageSection:colorpicker({ name = "colour", flag = "fb_damage_color", color = Color3.fromRGB(255, 255, 255) })
+	damageSection:colorpicker({ name = "lethal colour", flag = "fb_damage_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+	local soundSection = hitsColumn:section({ name = "hit sound" })
+	soundSection:toggle({ name = "enabled", flag = "fb_sound" })
+	soundSection:dropdown({ name = "sound", flag = "fb_sound_name", items = SOUND_NAMES, default = "neverlose", scrolling = true })
+	soundSection:slider({ name = "volume", flag = "fb_sound_volume", min = 0, max = 5, default = 1, interval = 0.1, suffix = "" })
+
+	local hitsColumn2 = hits:column({})
+	local overlaySection = hitsColumn2:section({ name = "hit overlay" })
+	overlaySection:toggle({ name = "enabled", flag = "fb_overlay" })
+	overlaySection:slider({ name = "lifetime", flag = "fb_overlay_life", min = 0.1, max = 2, default = 0.35, interval = 0.05, suffix = "s" })
+	overlaySection:colorpicker({ name = "colour", flag = "fb_overlay_color", color = Color3.fromRGB(255, 255, 255) })
+	overlaySection:colorpicker({ name = "lethal colour", flag = "fb_overlay_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+	local chamsSection = hitsColumn2:section({ name = "hit chams" })
+	chamsSection:toggle({ name = "enabled", flag = "fb_chams" })
+	chamsSection:toggle({ name = "only last hit", flag = "fb_chams_last_only", default = true })
+	chamsSection:slider({ name = "lifetime", flag = "fb_chams_life", min = 0.1, max = 3, default = 0.5, interval = 0.05, suffix = "s" })
+	chamsSection:colorpicker({ name = "colour", flag = "fb_chams_color", color = Color3.fromRGB(255, 255, 255) })
+	chamsSection:colorpicker({ name = "lethal colour", flag = "fb_chams_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+	local particleSection = hitsColumn2:section({ name = "hit particle" })
+	particleSection:toggle({ name = "enabled", flag = "fb_particle" })
+	particleSection:slider({ name = "amount", flag = "fb_particle_count", min = 1, max = 100, default = 20, interval = 1, suffix = "" })
+	particleSection:colorpicker({ name = "colour", flag = "fb_particle_color", color = Color3.fromRGB(255, 255, 255) })
+	particleSection:colorpicker({ name = "lethal colour", flag = "fb_particle_lethal", color = Color3.fromRGB(255, 60, 60) })
+
+	local skeletonSection = hitsColumn2:section({ name = "hit skeleton" })
+	skeletonSection:toggle({ name = "enabled", flag = "fb_skeleton" })
+	skeletonSection:slider({ name = "lifetime", flag = "fb_skeleton_life", min = 0.1, max = 3, default = 0.6, interval = 0.05, suffix = "s" })
+	skeletonSection:slider({ name = "thickness", flag = "fb_skeleton_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
+	skeletonSection:colorpicker({ name = "colour", flag = "fb_skeleton_color", color = Color3.fromRGB(255, 255, 255) })
+
+	local hitsColumn3 = hits:column({})
+	local tracerSection2 = hitsColumn3:section({ name = "bullet tracers" })
+	tracerSection2:toggle({ name = "local tracers", flag = "fb_tracer" })
+	tracerSection2:slider({ name = "lifetime", flag = "fb_tracer_life", min = 0.1, max = 3, default = 0.5, interval = 0.05, suffix = "s" })
+	tracerSection2:slider({ name = "thickness", flag = "fb_tracer_thickness", min = 1, max = 5, default = 1, interval = 1, suffix = "px" })
+	tracerSection2:colorpicker({ name = "colour", flag = "fb_tracer_color", color = Color3.fromRGB(255, 255, 255) })
+
+	local impactSection = hitsColumn3:section({ name = "bullet impacts" })
+	impactSection:toggle({ name = "local impacts", flag = "fb_impact" })
+	impactSection:slider({ name = "lifetime", flag = "fb_impact_life", min = 0.1, max = 3, default = 0.8, interval = 0.05, suffix = "s" })
+	impactSection:colorpicker({ name = "colour", flag = "fb_impact_color", color = Color3.fromRGB(255, 200, 80) })
+
+	local notifySection = hitsColumn3:section({ name = "shot notifications" })
+	notifySection:toggle({ name = "notify hits", flag = "fb_notify_hits" })
+	notifySection:toggle({ name = "notify shots with no hit", flag = "fb_notify_miss" })
+
+	local legitColumn2 = legit:column({})
+	local sharedSection = legitColumn2:section({ name = "shared" })
+	sharedSection:toggle({ name = "ignore knocked", flag = "legit_ignore_knocked", default = true })
+	sharedSection:toggle({ name = "ignore spawn protected", flag = "legit_ignore_protected", default = true })
+
+	local silentSection = legitColumn2:section({ name = "silent aim" })
+	silentSection:toggle({ name = "enabled", flag = "silent_enabled" })
+	silentSection:dropdown({ name = "hitbox", flag = "silent_hitbox", items = { "head", "chest", "root" }, default = "head" })
+	silentSection:slider({ name = "field of view", flag = "silent_fov", min = 10, max = 800, default = 120, interval = 1, suffix = "px" })
+	silentSection:slider({ name = "max distance", flag = "silent_distance", min = 50, max = 3000, default = 500, interval = 10, suffix = " st" })
+	silentSection:slider({ name = "max curve", flag = "silent_curve", min = 1, max = 90, default = 30, interval = 1, suffix = "deg" })
+	silentSection:toggle({ name = "dont curve vertically", flag = "silent_flat" })
+	silentSection:slider({ name = "redirect chance", flag = "silent_chance", min = 0, max = 100, default = 100, interval = 1, suffix = "%" })
+	silentSection:toggle({ name = "visible only", flag = "silent_visible", default = true })
+	silentSection:toggle({ name = "show fov", flag = "silent_show_fov" })
+	silentSection:colorpicker({ name = "fov colour", flag = "silent_fov_color", color = Color3.fromRGB(180, 180, 255) })
+
+	local triggerSection = legitColumn2:section({ name = "triggerbot" })
+	triggerSection:toggle({ name = "enabled", flag = "trigger_enabled" })
+	triggerSection:dropdown({ name = "hitboxes", flag = "trigger_hitboxes", items = { "head", "body", "arms", "legs" }, default = { "head", "body" }, multi = true })
+	triggerSection:slider({ name = "max distance (0 = gun range)", flag = "trigger_distance", min = 0, max = 2500, default = 0, interval = 10, suffix = " st" })
+	triggerSection:slider({ name = "refresh rate", flag = "trigger_refresh", min = 0, max = 0.5, default = 0, interval = 0.01, suffix = "s" })
+	triggerSection:slider({ name = "hover time", flag = "trigger_hover", min = 0, max = 0.3, default = 0, interval = 0.01, suffix = "s" })
+	triggerSection:slider({ name = "cooldown", flag = "trigger_cooldown", min = 0, max = 1, default = 0, interval = 0.01, suffix = "s" })
+	triggerSection:slider({ name = "delay", flag = "trigger_delay", min = 0, max = 0.5, default = 0, interval = 0.01, suffix = "s" })
+
+	local world = window:tab({ name = "world" })
+	local worldColumn = world:column({})
+	local timeSection = worldColumn:section({ name = "time and light" })
+	timeSection:toggle({ name = "world time", flag = "world_time" })
+	timeSection:slider({ name = "clock time", flag = "world_time_value", min = 0, max = 24, default = 12, interval = 0.1, suffix = "h" })
+	timeSection:toggle({ name = "ambient", flag = "world_ambient" })
+	timeSection:colorpicker({ name = "indoor colour", flag = "world_ambient_color", color = Color3.fromRGB(120, 120, 140) })
+	timeSection:colorpicker({ name = "outdoor colour", flag = "world_outdoor_color", color = Color3.fromRGB(140, 140, 160) })
+	timeSection:toggle({ name = "lighting mode", flag = "world_technology" })
+	timeSection:dropdown({ name = "mode", flag = "world_technology_value", items = { "voxel", "shadowmap", "future" }, default = "future" })
+
+	local atmosphereSection = worldColumn:section({ name = "atmosphere" })
+	atmosphereSection:toggle({ name = "enabled", flag = "world_atmosphere" })
+	atmosphereSection:colorpicker({ name = "colour", flag = "world_atmosphere_color", color = Color3.fromRGB(199, 199, 199) })
+	atmosphereSection:colorpicker({ name = "decay", flag = "world_atmosphere_decay", color = Color3.fromRGB(106, 112, 125) })
+	atmosphereSection:slider({ name = "haze", flag = "world_atmosphere_haze", min = 0, max = 10, default = 1, interval = 0.1, suffix = "" })
+	atmosphereSection:slider({ name = "glare", flag = "world_atmosphere_glare", min = 0, max = 10, default = 0, interval = 0.1, suffix = "" })
+	atmosphereSection:slider({ name = "offset", flag = "world_atmosphere_offset", min = 0, max = 1, default = 0, interval = 0.05, suffix = "" })
+	atmosphereSection:slider({ name = "density", flag = "world_atmosphere_density", min = 0, max = 1, default = 0.3, interval = 0.01, suffix = "" })
+
+	local worldColumn2 = world:column({})
+	local colourSection = worldColumn2:section({ name = "colour and blur" })
+	colourSection:toggle({ name = "colour correction", flag = "world_colour" })
+	colourSection:slider({ name = "saturation", flag = "world_saturation", min = -1, max = 3, default = 0, interval = 0.05, suffix = "" })
+	colourSection:slider({ name = "contrast", flag = "world_contrast", min = -1, max = 2, default = 0, interval = 0.05, suffix = "" })
+	colourSection:colorpicker({ name = "tint", flag = "world_tint", color = Color3.new(1, 1, 1) })
+	colourSection:toggle({ name = "blur", flag = "world_blur" })
+	colourSection:slider({ name = "blur size", flag = "world_blur_size", min = 0, max = 30, default = 6, interval = 1, suffix = "" })
+
+	local worldSkySection = worldColumn2:section({ name = "sky and weather" })
+	worldSkySection:toggle({ name = "skybox", flag = "world_sky" })
+	worldSkySection:dropdown({ name = "sky", flag = "world_sky_name", items = SKY_NAMES, default = "stormy" })
+	worldSkySection:toggle({ name = "weather", flag = "world_weather" })
+	worldSkySection:dropdown({ name = "type", flag = "world_weather_type", items = { "rain", "snow" }, default = "rain" })
+	worldSkySection:slider({ name = "rate", flag = "world_weather_rate", min = 20, max = 1500, default = 300, interval = 10, suffix = "" })
+	worldSkySection:colorpicker({ name = "colour", flag = "world_weather_color", color = Color3.fromRGB(170, 190, 255) })
+
+	local worldColumn3 = world:column({})
+	local screenSection = worldColumn3:section({ name = "screen" })
+	screenSection:toggle({ name = "hide chat", flag = "world_hide_chat" })
+	screenSection:toggle({ name = "hide cursor icon", flag = "world_hide_cursor" })
+	screenSection:toggle({ name = "disable 3d rendering", flag = "world_no_render" })
+
+	local hud = window:tab({ name = "hud" })
+	local hudColumn = hud:column({})
+	local crosshairSection = hudColumn:section({ name = "crosshair" })
+	crosshairSection:toggle({ name = "enabled", flag = "crosshair_enabled" })
+	crosshairSection:toggle({ name = "follow target", flag = "crosshair_follow" })
+	crosshairSection:slider({ name = "line size", flag = "crosshair_size", min = 2, max = 40, default = 8, interval = 1, suffix = "px" })
+	crosshairSection:slider({ name = "gap size", flag = "crosshair_gap", min = 0, max = 30, default = 4, interval = 1, suffix = "px" })
+	crosshairSection:slider({ name = "line thickness", flag = "crosshair_thickness", min = 1, max = 6, default = 1, interval = 1, suffix = "px" })
+	crosshairSection:slider({ name = "rotation", flag = "crosshair_spin", min = 0, max = 720, default = 0, interval = 10, suffix = "deg/s" })
+	crosshairSection:colorpicker({ name = "colour", flag = "crosshair_color", color = Color3.fromRGB(255, 255, 255) })
+	crosshairSection:colorpicker({ name = "target colour", flag = "crosshair_target_color", color = Color3.fromRGB(255, 80, 80) })
+	crosshairSection:colorpicker({ name = "outline colour", flag = "crosshair_outline", color = Color3.new(0, 0, 0) })
+
+	local panelSection = hudColumn:section({ name = "state panel" })
+	panelSection:toggle({ name = "show panel", flag = "crosshair_panel" })
+	panelSection:colorpicker({ name = "colour", flag = "crosshair_panel_color", color = Color3.fromRGB(255, 255, 255) })
+
+	local characterTab = window:tab({ name = "character" })
+	local charColumn = characterTab:column({})
+	local charHighlightSection = charColumn:section({ name = "highlight and material" })
+	charHighlightSection:toggle({ name = "character highlight", flag = "char_highlight" })
+	charHighlightSection:colorpicker({ name = "fill colour", flag = "char_highlight_fill", color = Color3.fromRGB(180, 120, 255) })
+	charHighlightSection:colorpicker({ name = "outline colour", flag = "char_highlight_outline", color = Color3.new(1, 1, 1) })
+	charHighlightSection:slider({ name = "fill transparency", flag = "char_highlight_fill_transparency", min = 0, max = 1, default = 0.6, interval = 0.05, suffix = "" })
+	charHighlightSection:toggle({ name = "character material", flag = "char_material" })
+	charHighlightSection:dropdown({ name = "material", flag = "char_material_value", items = { "ForceField", "Neon", "Glass", "Metal", "Plastic", "SmoothPlastic" }, default = "ForceField" })
+
+	local charColumn2 = characterTab:column({})
+	local hatSection = charColumn2:section({ name = "china hat" })
+	hatSection:toggle({ name = "enabled", flag = "char_hat" })
+	hatSection:colorpicker({ name = "colour", flag = "char_hat_color", color = Color3.fromRGB(255, 120, 200) })
+	hatSection:slider({ name = "scale", flag = "char_hat_scale", min = 0.5, max = 4, default = 1.6, interval = 0.1, suffix = "" })
+
+	local auraSection = charColumn2:section({ name = "particle aura" })
+	auraSection:toggle({ name = "enabled", flag = "char_aura" })
+	auraSection:colorpicker({ name = "colour", flag = "char_aura_color", color = Color3.fromRGB(120, 200, 255) })
+
+	local rainbowSection = charColumn2:section({ name = "rainbow tool" })
+	rainbowSection:toggle({ name = "enabled", flag = "char_rainbow" })
+	rainbowSection:slider({ name = "speed", flag = "char_rainbow_speed", min = 0.05, max = 3, default = 0.4, interval = 0.05, suffix = "" })
+	rainbowSection:slider({ name = "transparency", flag = "char_rainbow_transparency", min = 0, max = 1, default = 0.3, interval = 0.05, suffix = "" })
+
+	local misc = window:tab({ name = "misc" })
+	local miscColumn = misc:column({})
+	local miscSection = miscColumn:section({ name = "script" })
+	local utilitySection = miscColumn:section({ name = "utility" })
+	utilitySection:toggle({ name = "anti bounty", flag = "antibounty_enabled" })
+	utilitySection:toggle({ name = "auto bounty", flag = "autobounty_enabled" })
+	utilitySection:toggle({ name = "anti stomp", flag = "antistomp_enabled" })
+	utilitySection:toggle({ name = "anti afk", flag = "utility_antiafk" })
+	utilitySection:toggle({ name = "watermark", flag = "utility_watermark", default = true, callback = function(visible)
+		if library.watermark_outline then
+			library.watermark_outline.Visible = visible
+		end
+	end })
+	utilitySection:button({ name = "rejoin", callback = function()
+		notifications:create_notification({ name = "rejoining..." })
+		Utility.rejoin()
+	end })
+
+	miscSection:button({ name = "test notification", callback = function()
+		notifications:create_notification({ name = "vanta is running" })
+	end })
+
+	miscSection:button({ name = "unload", callback = unload })
+end
+
+buildMenu()
 
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })
