@@ -37527,6 +37527,14 @@ end
                                 within_reach = away ~= away or away <= reach
                             end
 
+                            -- A shotgun is never sent from, or at, a spot in the void: the server has neither there, turns every call away, and each turned-away
+                            -- call counts against its SecurityTolerance (5), past which the gun is locked out for the rest of the server. Measured on a Double-Barrel
+                            -- against a void spammer: 12 of 61 sends had an origin and a hit in the void (18 million studs out, 80 studs apart, so "in reach").
+                            if within_reach and tool and tool:GetAttribute("SecurityTolerance") ~= nil
+                                and (ragebot_aim_position["Magnitude"] >= 9e5 or local_server_position["p"]["Magnitude"] >= 9e5) then
+                                within_reach = false
+                            end
+
                             if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
                                 local since = pick_time - sent_at
                                 local cooldown = find_first_child(tool, "ShootingCooldown")
