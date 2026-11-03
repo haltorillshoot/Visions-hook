@@ -47,14 +47,23 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 | Auto Heal (17328) | Heals | Partial | Buys popcorn and eats it below a health percentage, with the eat interval. Missing: Stop Following While Healing | No (needs damage; not run) |
 | Void (17350) | Void hide, spam and bait | Partial | Has the spam cycle with void and window times and the ready-gun gate, hide while waiting, Type (random, deep, bait), Deep Distance, Offset, and Bait (distance, cooldown, time, freeze, spot random or where you stood, skipped when another gun covers the spot or health is low). Missing: Disable When, Force When, Stop If Forced, Out With Target, Hide While Target Hides | Yes on a self target: deep spot stable at 1.1e8 studs, 16 bait visits in 3 s, bait at the standing spot, cycle ran, body restored, clean disable |
 
-## Not yet inventoried
+## The older menu
 
-`Visions-hook.lua` also contains an older menu with 517 elements (204 toggles, 118 sliders, 108 colour pickers, 80 dropdowns) and systems that have no entry above: the legit bot, aim assist, triggerbot and silent aim, player and NPC ESP, skins and the shop, weather, and the Des Hood part. I counted them but did not list or audit them one by one, and none of them is in Vanta yet.
+`ORIGINAL_INVENTORY.md` lists all 517 controls of the older menu in `Visions-hook.lua`, section by section, each with a status: 98 Yes, 19 Partial, 393 No, 7 Declined. The systems with no entry in the top-level list above are in it: the legit bot (aim assist done; silent aim, triggerbot and recoil/spread options not), player ESP (box, name, distance, tool, health, armor done; chams, highlight, image, icons and the per-status colours not), movement (speed, flight, noclip, jump power, anti sit done), the lighting and weather settings, the hit and bullet feedback (tracers, markers, sounds, chams), the local character visuals, skins, the animation tools and trash talk, none of which are in Vanta yet. Not yet read in detail: the Des Hood part, the inventory sorter and the intro animation.
 
 ## What the final audit shows
 
-The audit you asked for cannot be signed off. 15 of the 28 top-level features are missing, 8 are partial, and the older menu's 517 elements and the other systems above are not accounted for individually. Nothing here was tested against a real opponent.
+The audit you asked for cannot be signed off: 393 of the 517 older-menu controls are not implemented, 7 are declined, and nothing here was tested against a real opponent. The table in `ORIGINAL_INVENTORY.md` is the full account.
 
 ## Shop (added)
 
 The shop module buys through the shop parts in `Workspace.Ignored.Shop`: 105 distinct items were found in the live game, the cheapest copy of each is used. A purchase holds the character beside the part for its whole duration and puts it back afterwards. A click from 8.8 studs below the part was refused in testing; one from 3 studs beside it was sold. Tested live with real in-game cash: cranberry, hamburger, lemonade-style cheap items, two Rifle ammo packs, a ninja mask; an unaffordable item fails and backs off.
+
+## Added in the last round
+
+| Area | What exists | Tested |
+|---|---|---|
+| Player ESP | Box, name (display name option), distance (studs or metres), tool text, health bar and text, armor bar, colour and target colour, only-target | On yourself: every element drawn and cleared. Other players: no |
+| Aim assist | Hold key, camera or mouse method, head/chest/root, FOV circle, max distance, horizontal and vertical smoothing, visibility check, ignore knocked and protected | No (needs players) |
+| Movement | Speed, flight, noclip, jump power (a game-side reset is overridden through a `__newindex` hook), anti sit | Jump power holds 120 across frames and restores to 50; noclip leaves 0 colliding parts; flight hovers; speed needs walking input |
+| Utility | Anti AFK, rejoin, watermark switch | Watermark switch yes; rejoin and anti AFK not run |

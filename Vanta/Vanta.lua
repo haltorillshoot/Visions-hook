@@ -1310,6 +1310,24 @@ function Visuals.render()
 		removeDrawing("fov")
 	end
 
+	-- Aim assist FOV circle (drawn whether or not the ragebot is on)
+	if flag("aimassist_enabled", false) and flag("aimassist_show_fov", false) then
+		local colour, opacity = pickerColor("aimassist_fov_color", Color3.fromRGB(255, 255, 255))
+
+		drawing("Circle", "aafov", {
+			Visible = true,
+			Position = mouseLocation,
+			Radius = flag("aimassist_fov", 120),
+			Thickness = 1,
+			NumSides = 64,
+			Filled = false,
+			Color = colour,
+			Transparency = opacity,
+		})
+	else
+		removeDrawing("aafov")
+	end
+
 	-- Tracer
 	if enabled and flag("tracer_show", false) and aim and not Util.inVoid(aim) then
 		local screen, onScreen = camera:WorldToViewportPoint(aim)
@@ -2070,12 +2088,512 @@ function Bounty.step(now)
 	end
 end
 
+---@module Esp
+---Drawing-library player ESP: box, name, distance, tool, health bar and text, armor bar. Drawings exist only for players that are on screen and the feature
+---is on; they are removed when it goes off, when the player leaves, and on unload.
+local Esp = { players = {}, MAX_ARMOR = 130 }
+
+local ESP_PARTS = { "box", "name", "distance", "tool", "healthBack", "healthBar", "healthText", "armorBack", "armorBar" }
+
+local function espDrawing(entry, key, kind)
+	local object = entry[key]
+
+	if not object then
+		object = Drawing.new(kind)
+		entry[key] = object
+	end
+
+	return object
+end
+
+local function hideEntry(entry)
+	for _, key in ESP_PARTS do
+		if entry[key] then
+			entry[key].Visible = false
+		end
+	end
+end
+
+local function destroyEntry(player)
+	local entry = Esp.players[player]
+
+	if not entry then
+		return
+	end
+
+	for _, key in ESP_PARTS do
+		if entry[key] then
+			entry[key]:Remove()
+		end
+	end
+
+	Esp.players[player] = nil
+end
+
+function Esp.clear()
+	for player in Esp.players do
+		destroyEntry(player)
+	end
+end
+
+---Draws one player. Returns false when nothing could be drawn (no character, in the void, off screen).
+---@param player Player
+function Esp.draw(player)
+	local entry = Esp.players[player]
+
+	if not entry then
+		entry = {}
+		Esp.players[player] = entry
+	end
+
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local head = character and character:FindFirstChild("Head")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if not (root and head and humanoid) or Util.inVoid(root.Position) then
+		hideEntry(entry)
+
+		return false
+	end
+
+	local top = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.7, 0))
+	local bottom = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+
+	if top.Z <= 0 or bottom.Z <= 0 then
+		hideEntry(entry)
+
+		return false
+	end
+
+	local height = math.max(bottom.Y - top.Y, 4)
+	local width = height * 0.55
+	local left = top.X - width / 2
+	local isTarget = player == Target.player
+	local mainColour = pickerColor(isTarget and "esp_target_color" or "esp_color", isTarget and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255))
+	local font = Drawing.Fonts and Drawing.Fonts.UI or 0
+	local textY = top.Y - 15
+
+	if flag("esp_box", true) then
+		local box = espDrawing(entry, "box", "Square")
+
+		box.Visible = true
+		box.Position = Vector2.new(left, top.Y)
+		box.Size = Vector2.new(width, height)
+		box.Color = mainColour
+		box.Thickness = 1
+		box.Filled = false
+	elseif entry.box then
+		entry.box.Visible = false
+	end
+
+	if flag("esp_name", true) then
+		local label = espDrawing(entry, "name", "Text")
+
+		label.Visible = true
+		label.Text = flag("esp_display_name", true) and player.DisplayName or player.Name
+		label.Position = Vector2.new(top.X, textY)
+		label.Size = 13
+		label.Center = true
+		label.Outline = true
+		label.Font = font
+		label.Color = mainColour
+	elseif entry.name then
+		entry.name.Visible = false
+	end
+
+	local belowY = bottom.Y + 2
+
+	if flag("esp_distance", false) then
+		local mine = Players.root(localPlayer)
+		local studs = mine and (mine.Position - root.Position).Magnitude or 0
+		local label = espDrawing(entry, "distance", "Text")
+		local metres = flag("esp_unit", "studs") == "metres"
+
+		label.Visible = true
+		label.Text = metres and string.format("%dm", studs * 0.28) or string.format("%d st", studs)
+		label.Position = Vector2.new(top.X, belowY)
+		label.Size = 12
+		label.Center = true
+		label.Outline = true
+		label.Font = font
+		label.Color = mainColour
+		belowY += 13
+	elseif entry.distance then
+		entry.distance.Visible = false
+	end
+
+	if flag("esp_tool", false) then
+		local tool = character:FindFirstChildOfClass("Tool")
+		local label = espDrawing(entry, "tool", "Text")
+		local text = tool and tool.Name or ""
+
+		label.Visible = text ~= ""
+		label.Text = flag("esp_tool_upper", false) and text:upper() or text
+		label.Position = Vector2.new(top.X, belowY)
+		label.Size = 12
+		label.Center = true
+		label.Outline = true
+		label.Font = font
+		label.Color = mainColour
+	elseif entry.tool then
+		entry.tool.Visible = false
+	end
+
+	local fraction = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+
+	if flag("esp_health_bar", true) then
+		local x = left - 4
+		local back = espDrawing(entry, "healthBack", "Line")
+		local bar = espDrawing(entry, "healthBar", "Line")
+
+		back.Visible = true
+		back.From, back.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y)
+		back.Thickness = 3
+		back.Color = Color3.new(0, 0, 0)
+
+		bar.Visible = fraction > 0
+		bar.From, bar.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y + height * (1 - fraction))
+		bar.Thickness = 1
+		bar.Color = Color3.fromRGB(255, 60, 60):Lerp(Color3.fromRGB(60, 255, 90), fraction)
+	else
+		if entry.healthBack then entry.healthBack.Visible = false end
+		if entry.healthBar then entry.healthBar.Visible = false end
+	end
+
+	if flag("esp_health_text", false) and not (flag("esp_health_hide_full", true) and fraction >= 1) then
+		local label = espDrawing(entry, "healthText", "Text")
+
+		label.Visible = true
+		label.Text = tostring(math.floor(humanoid.Health))
+		label.Position = Vector2.new(left - 14, top.Y + height * (1 - fraction))
+		label.Size = 11
+		label.Center = true
+		label.Outline = true
+		label.Font = font
+		label.Color = Color3.new(1, 1, 1)
+	elseif entry.healthText then
+		entry.healthText.Visible = false
+	end
+
+	local effects = character:FindFirstChild("BodyEffects")
+	local armor = effects and effects:FindFirstChild("Armor")
+	local armorValue = armor and armor.Value or 0
+
+	if flag("esp_armor_bar", false) and not (flag("esp_armor_hide_none", true) and armorValue <= 0) then
+		local x = left + width + 4
+		local armorFraction = math.clamp(armorValue / Esp.MAX_ARMOR, 0, 1)
+		local back = espDrawing(entry, "armorBack", "Line")
+		local bar = espDrawing(entry, "armorBar", "Line")
+
+		back.Visible = true
+		back.From, back.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y)
+		back.Thickness = 3
+		back.Color = Color3.new(0, 0, 0)
+
+		bar.Visible = armorFraction > 0
+		bar.From, bar.To = Vector2.new(x, top.Y + height), Vector2.new(x, top.Y + height * (1 - armorFraction))
+		bar.Thickness = 1
+		bar.Color = Color3.fromRGB(70, 140, 255)
+	else
+		if entry.armorBack then entry.armorBack.Visible = false end
+		if entry.armorBar then entry.armorBar.Visible = false end
+	end
+
+	return true
+end
+
+function Esp.render()
+	if not flag("esp_enabled", false) then
+		if next(Esp.players) then
+			Esp.clear()
+		end
+
+		return
+	end
+
+	for _, player in playersService:GetPlayers() do
+		if player ~= localPlayer then
+			if flag("esp_only_target", false) and player ~= Target.player then
+				destroyEntry(player)
+			else
+				Esp.draw(player)
+			end
+		end
+	end
+
+	-- players that left
+	for player in Esp.players do
+		if player.Parent ~= playersService then
+			destroyEntry(player)
+		end
+	end
+end
+
+---@module AimAssist
+---Legit aimbot: while the key is held, eases the camera (or the mouse) toward the best player inside the FOV circle. Smoothing is separate for the
+---horizontal and vertical axis; nothing is sent to the server, it only moves your own view.
+local AimAssist = { target = nil }
+
+local function aimPart(character)
+	local hitbox = flag("aimassist_hitbox", "head")
+
+	if hitbox == "head" then
+		return character:FindFirstChild("Head")
+	elseif hitbox == "chest" then
+		return character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
+	end
+
+	return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function visibleFrom(origin, part, character)
+	if not flag("aimassist_visible", true) then
+		return true
+	end
+
+	local params = RaycastParams.new()
+
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { localPlayer.Character, character }
+
+	return workspace:Raycast(origin, part.Position - origin, params) == nil
+end
+
+local function bestAimTarget()
+	local mouseLocation = userInputService:GetMouseLocation()
+	local fov = flag("aimassist_fov", 120)
+	local maxDistance = flag("aimassist_distance", 500)
+	local best, bestPart, bestScore = nil, nil, math.huge
+
+	for _, player in playersService:GetPlayers() do
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+		if player ~= localPlayer and humanoid and humanoid.Health > 0 and Players.phase(player) ~= "respawning" then
+			local part = aimPart(character)
+
+			if part and not Util.inVoid(part.Position) and (part.Position - camera.CFrame.Position).Magnitude <= maxDistance then
+				local skip = (flag("aimassist_ignore_knocked", true) and Players.knocked(player))
+					or (flag("aimassist_ignore_protected", true) and Players.phase(player) == "protected")
+				local screen, onScreen = camera:WorldToViewportPoint(part.Position)
+
+				if not skip and onScreen then
+					local distance = (Vector2.new(screen.X, screen.Y) - mouseLocation).Magnitude
+
+					if distance <= fov and distance < bestScore and visibleFrom(camera.CFrame.Position, part, character) then
+						best, bestPart, bestScore = player, part, distance
+					end
+				end
+			end
+		end
+	end
+
+	return best, bestPart
+end
+
+function AimAssist.step()
+	local bind = flag("aimassist_key")
+
+	if not flag("aimassist_enabled", false) or type(bind) ~= "table" or not bind.active or userInputService:GetFocusedTextBox() then
+		AimAssist.target = nil
+
+		return
+	end
+
+	local player, part = bestAimTarget()
+
+	AimAssist.target = player
+
+	if not part then
+		return
+	end
+
+	local horizontal = math.max(flag("aimassist_h_smooth", 6), 1)
+	local vertical = math.max(flag("aimassist_v_smooth", 6), 1)
+
+	if flag("aimassist_method", "camera") == "mouse" then
+		local screen = camera:WorldToViewportPoint(part.Position)
+		local delta = Vector2.new(screen.X, screen.Y) - userInputService:GetMouseLocation()
+
+		mousemoverel(delta.X / horizontal, delta.Y / vertical)
+
+		return
+	end
+
+	local cframe = camera.CFrame
+	local wanted = (part.Position - cframe.Position).Unit
+	local currentYaw = math.atan2(-cframe.LookVector.X, -cframe.LookVector.Z)
+	local currentPitch = math.asin(cframe.LookVector.Y)
+	local wantedYaw = math.atan2(-wanted.X, -wanted.Z)
+	local wantedPitch = math.asin(wanted.Y)
+	local yawDelta = (wantedYaw - currentYaw + math.pi) % (math.pi * 2) - math.pi
+	local pitch = math.clamp(currentPitch + (wantedPitch - currentPitch) / vertical, -1.45, 1.45)
+
+	camera.CFrame = CFrame.new(cframe.Position) * CFrame.fromOrientation(pitch, currentYaw + yawDelta / horizontal, 0)
+end
+
+---@module Movement
+---Your own character's movement: extra speed, flight, noclip, jump power, anti sit. It changes the character on your client; where the server does not
+---agree, the server wins. Runs before the Body step, so the position Body saves as "real" already includes the movement.
+local Movement = { flying = false, jumpDefault = nil, noclipParts = {}, jumpValue = nil, humanoid = nil, hooked = false, active = true }
+
+---Da Hood's own script writes JumpPower back every frame (measured: 50, 120 and 50 again within one frame), so a plain write never lasts. While Jump Power is on,
+---the writes the game makes to your humanoid's JumpPower are given the chosen value instead; nothing else is touched.
+function Movement.installHook()
+	if Movement.hooked then
+		return
+	end
+
+	Movement.hooked = true
+
+	local original
+	original = hookmetamethod(game, "__newindex", newcclosure(function(self, key, value)
+		if Movement.active and Movement.jumpValue and key == "JumpPower" and self == Movement.humanoid and not checkcaller() then
+			return original(self, key, Movement.jumpValue)
+		end
+
+		return original(self, key, value)
+	end))
+end
+
+local function movementParts()
+	local character = localPlayer.Character
+
+	return character, character and character:FindFirstChildOfClass("Humanoid"), character and character:FindFirstChild("HumanoidRootPart")
+end
+
+function Movement.step(dt)
+	local character, humanoid, root = movementParts()
+
+	if not (character and humanoid and root) or humanoid.Health <= 0 then
+		return
+	end
+
+	local flightOn = flag("move_flight", false) and not Players.knocked(localPlayer)
+
+	if flightOn and userInputService:GetFocusedTextBox() == nil then
+		local look = camera.CFrame
+		local direction = Vector3.zero
+
+		if userInputService:IsKeyDown(Enum.KeyCode.W) then direction += look.LookVector end
+		if userInputService:IsKeyDown(Enum.KeyCode.S) then direction -= look.LookVector end
+		if userInputService:IsKeyDown(Enum.KeyCode.D) then direction += look.RightVector end
+		if userInputService:IsKeyDown(Enum.KeyCode.A) then direction -= look.RightVector end
+		if userInputService:IsKeyDown(Enum.KeyCode.Space) then direction += Vector3.yAxis end
+		if userInputService:IsKeyDown(Enum.KeyCode.LeftControl) then direction -= Vector3.yAxis end
+
+		root.AssemblyLinearVelocity = direction.Magnitude > 0 and direction.Unit * flag("move_flight_speed", 60) or Vector3.zero
+		Movement.flying = true
+	elseif Movement.flying then
+		Movement.flying = false
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	-- extra speed: the character is moved along its walking direction on top of the normal walk
+	if flag("move_speed", false) and not flightOn and humanoid.MoveDirection.Magnitude > 0 then
+		root.CFrame += humanoid.MoveDirection * flag("move_speed_value", 20) * dt
+	end
+
+	Movement.humanoid = humanoid
+
+	if flag("move_jump", false) then
+		Movement.jumpDefault = Movement.jumpDefault or { humanoid.UseJumpPower, humanoid.JumpPower }
+		Movement.jumpValue = flag("move_jump_power", 70)
+		humanoid.UseJumpPower = true
+		humanoid.JumpPower = Movement.jumpValue
+	elseif Movement.jumpDefault then
+		Movement.jumpValue = nil
+		humanoid.UseJumpPower, humanoid.JumpPower = Movement.jumpDefault[1], Movement.jumpDefault[2]
+		Movement.jumpDefault = nil
+	end
+
+	if flag("move_antisit", false) then
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+
+		if humanoid.Sit then
+			humanoid.Sit = false
+		end
+	end
+end
+
+---Noclip is applied on the physics step, before the character collides.
+function Movement.stepped()
+	if not flag("move_noclip", false) then
+		return
+	end
+
+	local character = localPlayer.Character
+
+	if not character then
+		return
+	end
+
+	for _, part in character:GetDescendants() do
+		if part:IsA("BasePart") and part.CanCollide then
+			part.CanCollide = false
+			Movement.noclipParts[part] = true
+		end
+	end
+end
+
+function Movement.restore()
+	Movement.jumpValue = nil
+	Movement.active = false
+
+	for part in Movement.noclipParts do
+		if part.Parent then
+			part.CanCollide = true
+		end
+	end
+
+	Movement.noclipParts = {}
+
+	local _, humanoid, root = movementParts()
+
+	if humanoid and Movement.jumpDefault then
+		humanoid.UseJumpPower, humanoid.JumpPower = Movement.jumpDefault[1], Movement.jumpDefault[2]
+	end
+
+	if root and Movement.flying then
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	Movement.jumpDefault, Movement.flying = nil, false
+end
+
+---@module Utility
+---Anti AFK (answers the idle kick the way a player moving would), rejoin (back into this same server), the watermark switch.
+local Utility = {}
+
+function Utility.antiAfk()
+	local ok, service = pcall(game.GetService, game, "VirtualUser")
+
+	if not ok then
+		return
+	end
+
+	service:CaptureController()
+	service:ClickButton2(Vector2.new())
+end
+
+function Utility.rejoin()
+	local teleport = game:GetService("TeleportService")
+
+	if #playersService:GetPlayers() <= 1 then
+		teleport:Teleport(game.PlaceId, localPlayer)
+	else
+		teleport:TeleportToPlaceInstance(game.PlaceId, game.JobId, localPlayer)
+	end
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
 
 function Ragebot.start()
 	Aim.install()
+	Movement.installHook()
 
 	Target.changed[#Target.changed + 1] = function(player)
 		Resolver.reset()
@@ -2098,8 +2616,11 @@ function Ragebot.start()
 	Ragebot.maid:give(AdStrafe.release)
 	Ragebot.maid:give(Bounty.release)
 
-	Ragebot.maid:give(runService.Heartbeat:Connect(function()
+	Ragebot.maid:give(runService.Heartbeat:Connect(function(dt)
 		local now = os.clock()
+
+		-- before the body step, so the position it saves as "real" already includes the movement
+		Movement.step(dt)
 
 		-- the features that need no target: the shop, the bounty watch and the held-trigger full auto
 		Shop.auto(now)
@@ -2151,6 +2672,16 @@ function Ragebot.start()
 
 	Ragebot.maid:give(runService.PreRender:Connect(Body.restore))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Visuals.render))
+	Ragebot.maid:give(runService.RenderStepped:Connect(Esp.render))
+	Ragebot.maid:give(runService.RenderStepped:Connect(AimAssist.step))
+	Ragebot.maid:give(runService.Stepped:Connect(Movement.stepped))
+	Ragebot.maid:give(Esp.clear)
+	Ragebot.maid:give(Movement.restore)
+	Ragebot.maid:give(localPlayer.Idled:Connect(function()
+		if flag("utility_antiafk", false) then
+			Utility.antiAfk()
+		end
+	end))
 	Ragebot.maid:give(Visuals.clear)
 
 	Ragebot.maid:give(userInputService.InputBegan:Connect(function(input, processed)
@@ -2250,6 +2781,17 @@ skySection:slider({ name = "zig zag speed", flag = "follow_zigzag_speed", min = 
 skySection:slider({ name = "teleport min", flag = "follow_teleport_min", min = 1, max = 100, default = 2, interval = 1, suffix = " st" })
 skySection:slider({ name = "teleport max", flag = "follow_teleport_max", min = 2, max = 200, default = 17, interval = 1, suffix = " st" })
 
+local characterColumn = move:column({})
+local characterSection = characterColumn:section({ name = "character" })
+characterSection:toggle({ name = "speed", flag = "move_speed" })
+characterSection:slider({ name = "speed value", flag = "move_speed_value", min = 1, max = 100, default = 20, interval = 1, suffix = " st/s" })
+characterSection:toggle({ name = "flight", flag = "move_flight" })
+characterSection:slider({ name = "flight speed", flag = "move_flight_speed", min = 10, max = 200, default = 60, interval = 1, suffix = " st/s" })
+characterSection:toggle({ name = "noclip", flag = "move_noclip" })
+characterSection:toggle({ name = "jump power", flag = "move_jump" })
+characterSection:slider({ name = "jump power value", flag = "move_jump_power", min = 10, max = 300, default = 70, interval = 1, suffix = "" })
+characterSection:toggle({ name = "anti sit", flag = "move_antisit" })
+
 local voidColumn = move:column({})
 local voidSection = voidColumn:section({ name = "void spam" })
 voidSection:toggle({ name = "enabled", flag = "voidspam_enabled" })
@@ -2336,6 +2878,43 @@ loadoutSection:toggle({ name = "enabled", flag = "shop_loadout" })
 loadoutSection:dropdown({ name = "guns", flag = "shop_loadout_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock", "silencer", "knife" }, default = { "rifle" }, multi = true })
 loadoutSection:slider({ name = "ammo packs", flag = "shop_loadout_packs", min = 0, max = 20, default = 5, interval = 1, suffix = "" })
 
+
+local espColumn = visuals:column({})
+local espSection = espColumn:section({ name = "player esp" })
+espSection:toggle({ name = "enabled", flag = "esp_enabled" })
+espSection:toggle({ name = "only target", flag = "esp_only_target" })
+espSection:toggle({ name = "box", flag = "esp_box", default = true })
+espSection:toggle({ name = "name", flag = "esp_name", default = true })
+espSection:toggle({ name = "use display name", flag = "esp_display_name", default = true })
+espSection:toggle({ name = "distance", flag = "esp_distance" })
+espSection:dropdown({ name = "unit", flag = "esp_unit", items = { "studs", "metres" }, default = "studs" })
+espSection:toggle({ name = "tool text", flag = "esp_tool" })
+espSection:toggle({ name = "uppercase tool", flag = "esp_tool_upper" })
+espSection:toggle({ name = "health bar", flag = "esp_health_bar", default = true })
+espSection:toggle({ name = "health text", flag = "esp_health_text" })
+espSection:toggle({ name = "hide health text if full", flag = "esp_health_hide_full", default = true })
+espSection:toggle({ name = "armor bar", flag = "esp_armor_bar" })
+espSection:toggle({ name = "hide armor bar if none", flag = "esp_armor_hide_none", default = true })
+espSection:colorpicker({ name = "colour", flag = "esp_color", color = Color3.fromRGB(255, 255, 255) })
+espSection:colorpicker({ name = "target colour", flag = "esp_target_color", color = Color3.fromRGB(255, 80, 80) })
+
+local legit = window:tab({ name = "legit" })
+local legitColumn = legit:column({})
+local aimSection = legitColumn:section({ name = "aim assist" })
+aimSection:toggle({ name = "enabled", flag = "aimassist_enabled" })
+aimSection:keybind({ name = "aim key", flag = "aimassist_key", key = Enum.KeyCode.Q, mode = "Hold" })
+aimSection:dropdown({ name = "method", flag = "aimassist_method", items = { "camera", "mouse" }, default = "camera" })
+aimSection:dropdown({ name = "hitbox", flag = "aimassist_hitbox", items = { "head", "chest", "root" }, default = "head" })
+aimSection:slider({ name = "field of view", flag = "aimassist_fov", min = 10, max = 800, default = 120, interval = 1, suffix = "px" })
+aimSection:slider({ name = "max distance", flag = "aimassist_distance", min = 50, max = 3000, default = 500, interval = 10, suffix = " st" })
+aimSection:slider({ name = "horizontal smoothing", flag = "aimassist_h_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
+aimSection:slider({ name = "vertical smoothing", flag = "aimassist_v_smooth", min = 1, max = 50, default = 6, interval = 1, suffix = "" })
+aimSection:toggle({ name = "visible only", flag = "aimassist_visible", default = true })
+aimSection:toggle({ name = "ignore knocked", flag = "aimassist_ignore_knocked", default = true })
+aimSection:toggle({ name = "ignore spawn protected", flag = "aimassist_ignore_protected", default = true })
+aimSection:toggle({ name = "show fov", flag = "aimassist_show_fov" })
+aimSection:colorpicker({ name = "fov colour", flag = "aimassist_fov_color", color = Color3.fromRGB(255, 255, 255) })
+
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})
 local miscSection = miscColumn:section({ name = "script" })
@@ -2343,6 +2922,16 @@ local utilitySection = miscColumn:section({ name = "utility" })
 utilitySection:toggle({ name = "anti bounty", flag = "antibounty_enabled" })
 utilitySection:toggle({ name = "auto bounty", flag = "autobounty_enabled" })
 utilitySection:toggle({ name = "anti stomp", flag = "antistomp_enabled" })
+utilitySection:toggle({ name = "anti afk", flag = "utility_antiafk" })
+utilitySection:toggle({ name = "watermark", flag = "utility_watermark", default = true, callback = function(visible)
+	if library.watermark_outline then
+		library.watermark_outline.Visible = visible
+	end
+end })
+utilitySection:button({ name = "rejoin", callback = function()
+	notifications:create_notification({ name = "rejoining..." })
+	Utility.rejoin()
+end })
 
 miscSection:button({ name = "test notification", callback = function()
 	notifications:create_notification({ name = "vanta is running" })
@@ -2364,6 +2953,6 @@ miscSection:button({ name = "unload", callback = unload })
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, aimassist = AimAssist, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })
