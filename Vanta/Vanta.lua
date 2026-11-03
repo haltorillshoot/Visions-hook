@@ -801,7 +801,7 @@ end
 
 ---Body provider: the follow's own place, whenever it is on and there is somewhere to go.
 function Follow.want(now)
-	if not flag("follow_enabled", false) or not Target.player then
+	if not flag("ragebot_enabled", false) or not flag("follow_enabled", false) or not Target.player then
 		Follow.held = nil
 
 		return nil
@@ -936,7 +936,7 @@ VoidSpam.gunReady = function()
 end
 
 function VoidSpam.want(now)
-	if not flag("voidspam_enabled", false) then
+	if not flag("ragebot_enabled", false) or not flag("voidspam_enabled", false) then
 		VoidSpam.reset()
 
 		return nil
@@ -1186,7 +1186,7 @@ local AutoStomp = { lastStomp = 0 }
 local STOMP_OFFSET = Vector3.new(0, 3, 0)
 
 function AutoStomp.want(now)
-	if not flag("autostomp_enabled", false) then
+	if not flag("ragebot_enabled", false) or not flag("autostomp_enabled", false) then
 		return nil
 	end
 
@@ -1393,6 +1393,428 @@ function Visuals.render()
 	end
 end
 
+---@module Shop
+---Buying through the game's own shop parts. Every item is a part in Workspace.Ignored.Shop named like `5 [Rifle Ammo] - $281` with a Head and a
+---ClickDetector; a purchase stands the body at the part and clicks until the cash drops. The cheapest of the many copies of an item is used.
+---Purchases go one at a time. A refused one is not asked again at once (the wait doubles from 0.5 s up to 8 s), and a purchase can be held back while
+---other players stand near the shop. The auto buys (armor, ammo, heal, mask, loadout) only ask this module for items; none of them moves the body.
+local Shop = {
+	items = {},
+	names = {},
+	queue = {},
+	current = nil,
+	bought = 0,
+	failures = {},
+	blockedUntil = {},
+	heldTool = nil,
+	autoAt = 0,
+	healAt = 0,
+	popcorn = nil,
+}
+
+local MAX_BACKOFF = 8
+
+local function dataFolder()
+	return localPlayer:FindFirstChild("DataFolder")
+end
+
+---Cash on hand.
+function Shop.cash()
+	local folder = dataFolder()
+	local currency = folder and folder:FindFirstChild("Currency")
+
+	return currency and currency.Value or 0
+end
+
+---Reads the shop parts once; the cheapest copy of each item is kept.
+function Shop.scan()
+	table.clear(Shop.items)
+	table.clear(Shop.names)
+
+	local ignored = workspace:FindFirstChild("Ignored")
+	local folder = ignored and ignored:FindFirstChild("Shop")
+
+	if not folder then
+		return 0
+	end
+
+	for _, part in folder:GetChildren() do
+		local packs, name, price = part.Name:lower():match("^(%d*)%s*%[(.-)%]%s*[%-%=]%s*%$(%d+)")
+		price = tonumber(price)
+
+		if name and price and price > 0 then
+			local head = part:FindFirstChild("Head")
+			local detector = part:FindFirstChildOfClass("ClickDetector")
+
+			if head and detector then
+				local known = Shop.items[name]
+
+				if not known or price < known.price then
+					Shop.items[name] = { name = name, price = price, head = head, detector = detector, packSize = tonumber(packs) }
+				end
+			end
+		end
+	end
+
+	for name in Shop.items do
+		Shop.names[#Shop.names + 1] = name
+	end
+
+	table.sort(Shop.names)
+
+	return #Shop.names
+end
+
+local function notify(text)
+	if flag("shop_notify", true) and notifications then
+		notifications:create_notification({ name = text })
+	end
+end
+
+---Ask for an item. `packs` is how many times to click (ammo packs); returns false when the item is unknown, already waiting or backing off.
+---@param name string lower case item name, e.g. "rifle ammo" or "high-medium armor"
+---@param packs number?
+function Shop.request(name, packs)
+	local item = Shop.items[name]
+
+	if not item or (packs and packs <= 0) then
+		return false
+	end
+
+	if Shop.current and Shop.current.item == item then
+		return false
+	end
+
+	for _, queued in Shop.queue do
+		if queued.item == item then
+			return false
+		end
+	end
+
+	if os.clock() < (Shop.blockedUntil[name] or 0) then
+		return false
+	end
+
+	Shop.queue[#Shop.queue + 1] = { item = item, packs = packs or 1 }
+
+	return true
+end
+
+---True while a purchase is running (other modules leave the body alone then).
+function Shop.busy()
+	return Shop.current ~= nil
+end
+
+---Whether another player stands near the shop part, for Safe Purchasing.
+local function shopWatched(position)
+	local radius = flag("shop_safe_distance", 50)
+	local mode = flag("shop_safe_avoid", "target")
+
+	for _, player in playersService:GetPlayers() do
+		if player ~= localPlayer and (mode == "anyone" or player == Target.player) and not Players.knocked(player) then
+			local root = Players.root(player)
+
+			if root and (root.Position - position).Magnitude < radius then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function finish(success)
+	local current = Shop.current
+
+	Shop.current = nil
+
+	if not current then
+		return
+	end
+
+	local name = current.item.name
+
+	if success then
+		Shop.failures[name] = nil
+		-- a short breather: the item takes a moment to show up in the bag, and asking again at once bought a second mask in testing
+		Shop.blockedUntil[name] = os.clock() + 1.5
+		notify("bought " .. name)
+	else
+		local failures = (Shop.failures[name] or 0) + 1
+
+		Shop.failures[name] = failures
+		Shop.blockedUntil[name] = os.clock() + math.min(0.5 * 2 ^ (failures - 1), MAX_BACKOFF)
+		notify("could not buy " .. name)
+	end
+
+	-- back to where the character was
+	local root = Players.root(localPlayer)
+	local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+	if root and humanoid and humanoid.Health > 0 and current.origin then
+		root.CFrame = current.origin
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	-- the gun that was in hand goes back
+	local held = Shop.heldTool
+	Shop.heldTool = nil
+
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if held and held.Parent == localPlayer:FindFirstChild("Backpack") and humanoid then
+		humanoid:EquipTool(held)
+	end
+end
+
+---Where the body stands for a purchase: beside the part, a few studs out (measured: a click from 8.8 studs below it was refused, one from 3 studs
+---beside it was sold; the detector reaches 9).
+local function shopSpot(item)
+	return CFrame.new(item.head.Position + Vector3.new(0, 0, 3))
+end
+
+---Runs after the body has moved, so the click happens with the body at the shop.
+function Shop.step(now)
+	local current = Shop.current
+
+	if not current then
+		local nextRequest = table.remove(Shop.queue, 1)
+		local character = localPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+		if not nextRequest or not humanoid or humanoid.Health <= 0 or Players.knocked(localPlayer) then
+			return
+		end
+
+		-- a pack of ammo is refused while a reload runs: ask again later
+		local effects = character:FindFirstChild("BodyEffects")
+		local reload = effects and effects:FindFirstChild("Reload")
+
+		if nextRequest.item.name:find("ammo") and reload and reload.Value == true then
+			return
+		end
+
+		if flag("shop_safe", false) and shopWatched(nextRequest.item.head.Position) then
+			Shop.blockedUntil[nextRequest.item.name] = now + 1
+			notify("held " .. nextRequest.item.name .. " (safe purchasing)")
+
+			return
+		end
+
+		local held = character:FindFirstChildOfClass("Tool")
+
+		if held and not nextRequest.item.name:find("armor") then
+			Shop.heldTool = held
+			humanoid:UnequipTools()
+		end
+
+		local root = Players.root(localPlayer)
+
+		if not root then
+			return
+		end
+
+		Shop.current = {
+			item = nextRequest.item,
+			packs = nextRequest.packs,
+			startedAt = now,
+			startBought = Shop.bought,
+			origin = root.CFrame,
+		}
+
+		return
+	end
+
+	-- The character is held at the shop for the whole purchase, not just for a frame: the server only sells to a player it has standing there, and
+	-- a spot that is put back before every frame never reached it.
+	local root = Players.root(localPlayer)
+
+	if root then
+		root.CFrame = shopSpot(current.item)
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	local done = Shop.bought - current.startBought
+	local timeout = Util.ping() * 2 + current.packs * 0.36 + 0.3
+
+	if done >= current.packs then
+		finish(true)
+	elseif now - current.startedAt > timeout then
+		finish(done > 0)
+	else
+		fireclickdetector(current.item.detector)
+	end
+end
+
+---Counts every drop in the cash as one purchase.
+function Shop.watchCash(maid)
+	local folder = dataFolder()
+	local currency = folder and folder:FindFirstChild("Currency")
+
+	if not currency then
+		return
+	end
+
+	local last = currency.Value
+
+	maid:give(currency:GetPropertyChangedSignal("Value"):Connect(function()
+		if currency.Value < last then
+			Shop.bought += 1
+		end
+
+		last = currency.Value
+	end))
+end
+
+---@param name string
+local function ownsTool(name)
+	local character = localPlayer.Character
+	local backpack = localPlayer:FindFirstChild("Backpack")
+
+	for _, container in { character, backpack } do
+		if container then
+			for _, tool in container:GetChildren() do
+				if tool:IsA("Tool") and tool.Name:lower() == "[" .. name .. "]" then
+					return tool
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+local function armorValue()
+	local character = localPlayer.Character
+	local effects = character and character:FindFirstChild("BodyEffects")
+	local armor = effects and effects:FindFirstChild("Armor")
+
+	return armor and armor.Value or nil
+end
+
+local function heal(now, humanoid, spare)
+	local fraction = flag("shop_heal_below", 50) / 100
+
+	if humanoid.Health / humanoid.MaxHealth >= fraction then
+		-- healed: the food goes back in the bag
+		if Shop.popcorn and Shop.popcorn.Parent == localPlayer.Character then
+			Shop.popcorn.Parent = localPlayer:FindFirstChild("Backpack")
+		end
+
+		Shop.popcorn = nil
+
+		return
+	end
+
+	local food = ownsTool("popcorn")
+
+	if not food then
+		if spare then
+			Shop.request("popcorn")
+		end
+
+		return
+	end
+
+	Shop.popcorn = food
+
+	if food.Parent ~= localPlayer.Character then
+		humanoid:EquipTool(food)
+
+		return
+	end
+
+	if now - Shop.healAt >= flag("shop_heal_cooldown", 0.3) then
+		Shop.healAt = now
+		food:Activate()
+	end
+end
+
+---The auto buys, checked four times a second.
+function Shop.auto(now)
+	if now - Shop.autoAt < 0.25 or Shop.current then
+		return
+	end
+
+	Shop.autoAt = now
+
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid or humanoid.Health <= 0 or Players.knocked(localPlayer) then
+		return
+	end
+
+	local spare = Shop.cash() > flag("shop_keep_cash", 5000)
+
+	if flag("shop_armor", false) then
+		local armor = armorValue()
+
+		if armor and armor < flag("shop_armor_below", 52) and spare then
+			Shop.request("high-medium armor")
+		end
+	end
+
+	if flag("shop_ammo", false) and #Shop.queue == 0 then
+		local folder = dataFolder()
+		local inventory = folder and folder:FindFirstChild("Inventory")
+
+		for _, info in allGuns() do
+			local record = inventory and inventory:FindFirstChild(info.tool.Name)
+			local maxAmmo = info.tool:FindFirstChild("MaxAmmo")
+
+			if record and maxAmmo and maxAmmo.Value > 0 then
+				local clips = math.floor((tonumber(record.Value) or 0) / maxAmmo.Value)
+
+				if clips < flag("shop_ammo_clips", 2) + 1 and spare then
+					Shop.request(info.tool.Name:sub(2, -2):lower() .. " ammo", flag("shop_ammo_packs", 1))
+				end
+			end
+		end
+	end
+
+	if flag("shop_heal", false) then
+		heal(now, humanoid, spare)
+	end
+
+	if flag("shop_mask", false) and not character:FindFirstChild("In-gameMask") then
+		local mask = ownsTool("mask")
+
+		if mask then
+			if mask.Parent ~= character then
+				humanoid:EquipTool(mask)
+			else
+				mask:Activate()
+			end
+		elseif spare then
+			Shop.request("ninja mask")
+		end
+	end
+
+	if flag("shop_loadout", false) then
+		local wanted = flag("shop_loadout_guns", { "rifle" })
+
+		for _, gun in type(wanted) == "table" and wanted or { wanted } do
+			local tool = ownsTool(gun)
+
+			if not tool then
+				Shop.request(gun)
+			else
+				-- the gun is owned: top it up when the reserve is below one magazine
+				local folder = dataFolder()
+				local inventory = folder and folder:FindFirstChild("Inventory")
+				local record = inventory and inventory:FindFirstChild(tool.Name)
+				local maxAmmo = tool:FindFirstChild("MaxAmmo")
+
+				if record and maxAmmo and (tonumber(record.Value) or 0) < maxAmmo.Value then
+					Shop.request(gun .. " ammo", flag("shop_loadout_packs", 5))
+				end
+			end
+		end
+	end
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -1416,12 +1838,22 @@ function Ragebot.start()
 	Body.addProvider("follow", Follow.want)
 	VoidSpam.gunReady = AutoFire.anyReady
 
+	Shop.watchCash(Ragebot.maid)
+
 	Ragebot.maid:give(runService.Heartbeat:Connect(function()
 		local now = os.clock()
 
+		-- the shop works with the ragebot off; nothing else moves the body then
+		Shop.auto(now)
+
 		if not flag("ragebot_enabled", false) then
-			Body.restore()
 			Follow.aim = nil
+
+			if not Shop.busy() then
+				Body.apply(now)
+			end
+
+			Shop.step(now)
 
 			return
 		end
@@ -1441,8 +1873,16 @@ function Ragebot.start()
 		end
 
 		-- the body goes first so the gun script reads the spot the server will have it at when the tool is activated
-		Body.apply(now)
-		AutoFire.step(now)
+		-- a purchase holds the character at the shop; nothing else moves it until the purchase is done
+		if not Shop.busy() then
+			Body.apply(now)
+		end
+
+		Shop.step(now)
+
+		if not Shop.busy() then
+			AutoFire.step(now)
+		end
 	end))
 
 	Ragebot.maid:give(runService.PreRender:Connect(Body.restore))
@@ -1583,6 +2023,49 @@ local followVisualSection = targetVisualColumn:section({ name = "follow spot" })
 followVisualSection:toggle({ name = "visualize", flag = "follow_visualize" })
 followVisualSection:colorpicker({ name = "colour", flag = "follow_visualize_color", color = Color3.fromRGB(120, 200, 255) })
 
+-- the shop parts are read before the menu is built so the manual purchase list can name them
+Shop.scan()
+
+local shopTab = window:tab({ name = "shop" })
+local shopColumn = shopTab:column({})
+local purchaseSection = shopColumn:section({ name = "purchasing" })
+purchaseSection:toggle({ name = "safe purchasing", flag = "shop_safe" })
+purchaseSection:dropdown({ name = "avoid", flag = "shop_safe_avoid", items = { "target", "anyone" }, default = "target" })
+purchaseSection:slider({ name = "avoid within", flag = "shop_safe_distance", min = 10, max = 200, default = 50, interval = 1, suffix = " st" })
+purchaseSection:slider({ name = "keep cash", flag = "shop_keep_cash", min = 0, max = 50000, default = 5000, interval = 100, suffix = "$" })
+purchaseSection:toggle({ name = "notifications", flag = "shop_notify", default = true })
+purchaseSection:dropdown({ name = "item", flag = "shop_manual_item", items = #Shop.names > 0 and Shop.names or { "none" }, default = Shop.items["popcorn"] and "popcorn" or nil, scrolling = true })
+purchaseSection:button({ name = "buy item", callback = function()
+	local chosen = flag("shop_manual_item")
+
+	if type(chosen) == "string" and not Shop.request(chosen) then
+		notifications:create_notification({ name = "cannot buy " .. chosen .. " right now" })
+	end
+end })
+
+local autoSection = shopColumn:section({ name = "auto armor" })
+autoSection:toggle({ name = "enabled", flag = "shop_armor" })
+autoSection:slider({ name = "buy if below", flag = "shop_armor_below", min = 1, max = 200, default = 52, interval = 1, suffix = "" })
+
+local ammoSection = shopColumn:section({ name = "auto ammo" })
+ammoSection:toggle({ name = "enabled", flag = "shop_ammo" })
+ammoSection:slider({ name = "minimum clips", flag = "shop_ammo_clips", min = 0, max = 10, default = 2, interval = 1, suffix = "" })
+ammoSection:slider({ name = "packs per purchase", flag = "shop_ammo_packs", min = 1, max = 20, default = 1, interval = 1, suffix = "" })
+
+local shopColumn2 = shopTab:column({})
+local healSection = shopColumn2:section({ name = "auto heal" })
+healSection:toggle({ name = "enabled", flag = "shop_heal" })
+healSection:slider({ name = "heal below", flag = "shop_heal_below", min = 1, max = 100, default = 50, interval = 1, suffix = "%" })
+healSection:slider({ name = "eat every", flag = "shop_heal_cooldown", min = 0.05, max = 1, default = 0.3, interval = 0.05, suffix = "s" })
+
+local maskSection = shopColumn2:section({ name = "auto mask" })
+maskSection:toggle({ name = "enabled", flag = "shop_mask" })
+
+local loadoutSection = shopColumn2:section({ name = "auto loadout" })
+loadoutSection:toggle({ name = "enabled", flag = "shop_loadout" })
+loadoutSection:dropdown({ name = "guns", flag = "shop_loadout_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock", "silencer", "knife" }, default = { "rifle" }, multi = true })
+loadoutSection:slider({ name = "ammo packs", flag = "shop_loadout_packs", min = 0, max = 20, default = 5, interval = 1, suffix = "" })
+
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})
 local miscSection = miscColumn:section({ name = "script" })
@@ -1606,6 +2089,6 @@ miscSection:button({ name = "unload", callback = unload })
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop }
 
 notifications:create_notification({ name = "loaded vanta" })

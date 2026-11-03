@@ -10,9 +10,9 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 
 | Status | Count | Features |
 |---|---|---|
-| Done | 5 | Auto Stomp, 3D Target Circle, View Target, Show FOV, Tracer |
-| Partial | 8 | Automatic Fire, Auto Equip, Resolver, Prediction, Lead Fast Targets, Target Selection, Follow Target, Void |
-| No | 15 | Quick Draw, A/D, Hitboxes, Full Auto, Maximum Fire Rate, Anti Bounty, Auto Bounty, Safe Purchasing, Auto Loadout, Auto Ammo, Auto Armor, Anti Stomp, Anti Report, Auto Mask, Auto Heal |
+| Done | 7 | Auto Stomp, 3D Target Circle, View Target, Show FOV, Tracer, Auto Ammo, Auto Mask |
+| Partial | 12 | Automatic Fire, Auto Equip, Resolver, Prediction, Lead Fast Targets, Target Selection, Follow Target, Void, Safe Purchasing, Auto Loadout, Auto Armor, Auto Heal |
+| No | 9 | Quick Draw, A/D, Hitboxes, Full Auto, Maximum Fire Rate, Anti Bounty, Auto Bounty, Anti Stomp, Anti Report |
 
 ## Feature by feature
 
@@ -36,15 +36,15 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 | Auto Stomp (17248) | Stomps knocked targets | Done | Stop When Target Dead; Target Statuses, Wait For All and Prioritize Over Reloading missing | No (needs a knocked player) |
 | Anti Bounty (17255) | Bounty handling | No | not started | |
 | Auto Bounty (17263) | Bounty handling | No | not started | |
-| Safe Purchasing (17271) | Shop safety | No | not started | |
-| Auto Loadout (17278) | Buys a loadout | No | needs the shop interface | |
+| Safe Purchasing (17271) | Holds a purchase while players stand near the shop | Partial | Avoid target or anyone within a set distance. Missing: the friendly, neutral and enemy status choices (Vanta has no player statuses) | No (needs another player) |
+| Auto Loadout (17278) | Buys a loadout | Partial | Buys the chosen guns you do not own and tops up their reserve ammo (packs slider). Missing: Disable When | No (spends real in-game cash on guns; not run) |
 | Follow Target (17285) | Moves the body round the target | Partial | Has orbit, random, above, strafe above, teleport, zigzag, distance, height, speed, reposition, follow into void, Stop If, Lead and Lead Time, Orbit Shape (circle, square, triangle, pentagon, hexagon, decagon, heart), Teleport Min/Max, Zig Zag Height and Speed, Visualize. Missing: Adjust | Yes on a self target: all seven shapes at the right radius, teleport range 5.4 to 24.7 for 5 to 25, zig zag flips at the set speed, Stop If stops the body, visualize drawn and removed, clean disable |
-| Auto Ammo (17292) | Buys ammo | No | needs the shop interface | |
-| Auto Armor (17299) | Buys armor | No | needs the shop interface | |
+| Auto Ammo (17292) | Buys ammo | Done | Minimum Clips, packs per purchase; Disable When missing | Yes: two Rifle ammo packs bought, reserve 35 to 45, cash dropped by 562 |
+| Auto Armor (17299) | Buys armor | Partial | Buy If Below and the keep-cash reserve; Try Cooldown missing | The purchase path is tested with other items; armor itself was not bought |
 | Anti Stomp (17306) | Protects against stomps | No | not started | |
 | Anti Report (17313) | Report handling | No | not started | |
-| Auto Mask (17321) | Buys and wears a mask | No | needs the shop interface | |
-| Auto Heal (17328) | Heals | No | needs the shop interface | |
+| Auto Mask (17321) | Buys and wears a mask | Done | Buys a ninja mask and puts it on; does nothing while one is worn. Disable options missing | Yes: mask bought and worn; nothing bought while worn |
+| Auto Heal (17328) | Heals | Partial | Buys popcorn and eats it below a health percentage, with the eat interval. Missing: Stop Following While Healing | No (needs damage; not run) |
 | Void (17350) | Void hide, spam and bait | Partial | Has the spam cycle with void and window times and the ready-gun gate, hide while waiting, Type (random, deep, bait), Deep Distance, Offset, and Bait (distance, cooldown, time, freeze, spot random or where you stood, skipped when another gun covers the spot or health is low). Missing: Disable When, Force When, Stop If Forced, Out With Target, Hide While Target Hides | Yes on a self target: deep spot stable at 1.1e8 studs, 16 bait visits in 3 s, bait at the standing spot, cycle ran, body restored, clean disable |
 
 ## Not yet inventoried
@@ -54,3 +54,7 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 ## What the final audit shows
 
 The audit you asked for cannot be signed off. 15 of the 28 top-level features are missing, 8 are partial, and the older menu's 517 elements and the other systems above are not accounted for individually. Nothing here was tested against a real opponent.
+
+## Shop (added)
+
+The shop module buys through the shop parts in `Workspace.Ignored.Shop`: 105 distinct items were found in the live game, the cheapest copy of each is used. A purchase holds the character beside the part for its whole duration and puts it back afterwards. A click from 8.8 studs below the part was refused in testing; one from 3 studs beside it was sold. Tested live with real in-game cash: cranberry, hamburger, lemonade-style cheap items, two Rifle ammo packs, a ninja mask; an unaffordable item fails and backs off.
