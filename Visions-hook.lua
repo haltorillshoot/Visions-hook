@@ -21850,8 +21850,24 @@ do
     local blank_player_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAMAAAC67D+PAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///wAAAFXC034AAAACdFJOU/8A5bcwSgAAAAlwSFlzAAAOxAAADsQBlSsOGwAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIDUuMS4y+7wDtgAAALZlWElmSUkqAAgAAAAFABoBBQABAAAASgAAABsBBQABAAAAUgAAACgBAwABAAAAAgAAADEBAgAQAAAAWgAAAGmHBAABAAAAagAAAAAAAAAMdwEA6AMAAAx3AQDoAwAAUGFpbnQuTkVUIDUuMS4yAAMAAJAHAAQAAAAwMjMwAaADAAEAAAABAAAABaAEAAEAAACUAAAAAAAAAAIAAQACAAQAAABSOTgAAgAHAAQAAAAwMTAwAAAAAO7qLRjGzAACAAAAI0lEQVQYV2NgZGRkAAIQBWGB2DiZSGphAEUBhAVkY2MyMAIACxYALVlZOREAAAAASUVORK5CYII=")
     local staff_player_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADdUAAA3VAT3WWPEAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAbl8BAOgDAABuXwEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADGgMOKJmQafQAAAE5JREFUKFOVjsEOgDAMQsdu/v/HetTRoKm0yeI7lI4UsuFcQs+XKd0CaeBNWGj9kg9LiCObT4t7//6Y0x1sRHN0SE9pUA4Zphafw00HAG7iXzDzhK35MgAAAABJRU5ErkJggg==")
 
+    -- each character is registered once, by CharacterAdded or by the watch below, whichever gets there first
+    local characters_registering = setmetatable({}, {["__mode"] = "k"})
+
     local on_character_added = LPH_NO_VIRTUALIZE(function(character)
-        local humanoid = wait_for_child(character, "Humanoid", 5)
+        if characters_registering[character] then
+            return
+        end
+
+        characters_registering[character] = true
+
+        -- Waited for as long as the character exists: it used to give up after 5 s, and a respawn slower than that left the record on the last life for
+        -- good (still dead, still the old character), so the ragebot read the target as respawning and hid and held its shots until a re-inject.
+        local humanoid = nil
+
+        repeat
+            humanoid = wait_for_child(character, "Humanoid", 5)
+        until humanoid or character["Parent"] == nil
+
         local head = wait_for_child(character, "Head", 5)
 
         if not humanoid then
@@ -21866,9 +21882,15 @@ do
             return
         end
 
+        -- a newer character came while this one was loading: that one owns the record
+        if player["Character"] ~= character then
+            return
+        end
+
         data[3] = character
-        -- Knocked out in the last life says nothing about this one; it is read again once BodyEffects has loaded.
+        -- Knocked out or dead in the last life says nothing about this one; both are read again once BodyEffects has loaded.
         data[18] = false
+        data[7] = false
 
         -- Nor does the last life's tool: a character that is destroyed fires no ChildRemoved for it (the children below set it again).
         if data[13] ~= nil then
@@ -22156,6 +22178,29 @@ do
 
         new_data[17] = wait_for_child(wait_for_child(player, "DataFolder", 9e9), "Information", 9e9)
     end)
+
+    -- A record that still holds an older character than the player's own (a CharacterAdded that was missed) is registered again.
+    do
+        local next_character_check = 0
+
+        create_connection(run_service["Heartbeat"], function()
+            local now = clock()
+
+            if now < next_character_check then
+                return
+            end
+
+            next_character_check = now + 1
+
+            for player, data in player_data do
+                local character = player ~= local_player and player["Character"]
+
+                if character and data[3] ~= character and not characters_registering[character] then
+                    spawn(on_character_added, character)
+                end
+            end
+        end)
+    end
 
     local remove_player = LPH_JIT_MAX(function(player)
         if player == local_player then
@@ -37117,7 +37162,7 @@ end
                 -- the character is out (in_void is the state the character was left in by the last step), and for a moment into each
                 -- window, so the server has the character at the target by the time the shot reaches it.
                 if aim_valid and not invulnerable_void_active and clock() - (hide_manager["spam_cycle_at"] or -1) < 0.1 then
-                    local settle = getgenv()["neverlose_spam_settle"] or math.min(local_ping/1000 + 0.03, 0.15)
+                    local settle = hide_manager["spam_settle"]()
 
                     -- (standing on the map as bait: the ragebot shoots from there once the server has had the body there for the settle time)
                     local baiting = clock() - (hide_manager["bait_visible_at"] or -1) < 0.1 and clock() - (hide_manager["bait_since"] or 0) >= settle
@@ -37146,7 +37191,14 @@ end
                 -- or the shot delay.
                 local follow_burst = false
 
-                if local_following and not hide_manager["was_following"] then
+                -- A target that comes out of the void while it is being followed takes the body from the void to the map with no break in the follow, and
+                -- the server has it there just as late as at the start of a follow, so the wait and the burst below start over.
+                local follow_last_aim = hide_manager["follow_last_aim"]
+                local follow_left_void = local_following and follow_last_aim ~= nil and follow_last_aim["Magnitude"] >= 9e5 and aim_length < 9e5
+
+                hide_manager["follow_last_aim"] = local_following and ragebot_aim_position or nil
+
+                if local_following and (not hide_manager["was_following"] or follow_left_void) then
                     hide_manager["follow_started_at"] = clock()
                     hide_manager["follow_burst_due"] = true
                 end
@@ -37274,8 +37326,15 @@ end
                         -- turns follow each other at the Gun Gap (140 ms, the smallest gap that was taken every time; 0 sends them in consecutive frames, the
                         -- nearest to "at once": the server is said to keep the first and drop the others sent inside a tenth of a second, and a dropped gun is only
                         -- asked again after its own wait, so the gap is there to be tried).
+                        --
+                        -- Gun Gap 0 ("at once"): every gun that is due goes in this one tick, each on its own cooldown, with no gap and no SwitchCooldown wait. A
+                        -- refused send costs these guns nothing, but it does cost a shotgun SecurityTolerance, so a shotgun still goes first and alone among the
+                        -- shotguns, only 0.14 s after the last send, and the other guns wait for it when it is due.
                         local all_guns = auto_fire_always_fire == true -- Fire All Guns is part of Always Fire
                         local volley_gap = getgenv()["neverlose_gun_gap"] or (all_guns and (tonumber(flags["auto_fire_gun_gap"]) or 140)/1000 or 0.15)
+                        local fire_at_once = all_guns and volley_gap <= 0
+                        local volley = fire_at_once and {} or nil
+                        local shell_in_volley, shell_waiting = false, false
                         local switch_slow = hide_manager["switch_slow"]
                         local gap_between = function(from_name, to_name)
                             if switch_slow[from_name] and switch_slow[to_name] then
@@ -37331,6 +37390,14 @@ end
 
                             if plan_tool and (tool_a == plan_tool) ~= (tool_b == plan_tool) then
                                 return tool_a == plan_tool
+                            end
+
+                            if fire_at_once then
+                                local shell_a, shell_b = tool_a:GetAttribute("SecurityTolerance") ~= nil, tool_b:GetAttribute("SecurityTolerance") ~= nil
+
+                                if shell_a ~= shell_b then
+                                    return shell_a
+                                end
                             end
 
                             local slow_a, slow_b = is_slow_gun(tool_a), is_slow_gun(tool_b)
@@ -37392,6 +37459,29 @@ end
                             if tool and within_reach and candidate[3] > 0 and hide_manager["gun_ready"](tool, candidate[3]) then
                                 local since = pick_time - sent_at
                                 local cooldown = find_first_child(tool, "ShootingCooldown")
+
+                                if fire_at_once then
+                                    local own_wait = (cooldown and cooldown["Value"] or 0.05) + 0.015
+                                    local own_ready = pick_time - (fired_at[tool] or -math.huge) >= own_wait or hide_manager["fake_bullet_due"](tool)
+
+                                    if own_ready then
+                                        if tool:GetAttribute("SecurityTolerance") == nil then
+                                            if not shell_waiting then
+                                                volley[candidate] = true
+                                                chosen_gun = chosen_gun or candidate
+                                            end
+                                        elseif not shell_in_volley and since >= 0.14 then
+                                            shell_in_volley = true
+                                            volley[candidate] = true
+                                            chosen_gun = chosen_gun or candidate
+                                        elseif not shell_in_volley then
+                                            shell_waiting = true
+                                        end
+                                    end
+
+                                    continue
+                                end
+
                                 -- (the same gun again: after its cooldown, or as a fake bullet while its last send has not been taken)
                                 local window_over = sent_gun == nil or (sent_gun == tool and (since >= (cooldown and cooldown["Value"] or 0.05) + 0.015 or hide_manager["fake_bullet_due"](tool))) or (sent_gun ~= tool and since >= gap_between(sent_gun["Name"], tool["Name"]))
 
@@ -37489,8 +37579,8 @@ end
 
                             local local_gun = new_local_guns[i]
 
-                            -- only the gun picked above is sent this tick
-                            if local_gun ~= chosen_gun then
+                            -- only the gun picked above is sent this tick (every gun of the volley at Gun Gap 0)
+                            if local_gun ~= chosen_gun and not (volley and volley[local_gun]) then
                                 continue
                             end
 
@@ -41353,6 +41443,7 @@ end
         menu_references["void_hide_teleport_time"]:set_visible(false)
         menu_references["void_hide_void_time"]:set_visible(false)
 
+        local SPAM_OUT_HOLD = 1.5
         local void_hide_teleport_time = flags["void_hide_teleport_time"]
         local void_hide_void_time = flags["void_hide_void_time"]
         local void_hide_offset = flags["void_hide_offset"]
@@ -41625,7 +41716,15 @@ end
                     -- jumping about), the body comes out too and stands on it (the window's place, below) for as long as it stays out, and the spam
                     -- goes on once it hides again. Measured against a target that void spams: it was out 7 times in 2 minutes, 0.44 s each, while
                     -- this body's own windows (0.1 s every half second) never met one of them, and no shot went out in any.
+                    -- Only for a target seen in the void in the last SPAM_OUT_HOLD seconds: it used to count any target on the map as "come out", so against
+                    -- one that never hides the body stood on it for good and the void / teleport cycle never ran.
+                    if spam_on_target and ragebot_aim_position ~= nil and ragebot_aim_position["Magnitude"] >= 9e5 then
+                        hide_manager["spam_void_target"] = ragebot_target
+                        hide_manager["spam_void_seen_at"] = tick
+                    end
+
                     local target_out = spam_on_target and flags["void_hide_out_with_target"] ~= false and ragebot_aim_position ~= nil
+                        and hide_manager["spam_void_target"] == ragebot_target and tick - (hide_manager["spam_void_seen_at"] or -math.huge) < SPAM_OUT_HOLD
                         and ragebot_aim_position["Magnitude"] < 9e5 and not ragebot_target[7] and not ragebot_target[18]
                         and not (hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position))
 
@@ -41635,6 +41734,11 @@ end
                     local target_hidden = spam_on_target and flags["void_hide_hide_while_target_hides"] ~= false and ragebot_aim_position ~= nil
                         and hide_manager["is_void_jittering"] and hide_manager["is_void_jittering"](ragebot_target, ragebot_aim_position)
 
+                    -- The window has to outlast the ragebot's hold (spam_settle) or no shot ever goes out in it: at 70 ms of ping the hold had used up all
+                    -- of the default 0.1 s. Teleport Time and Void Time are the least, the period always leaves some time in the void.
+                    local spam_window = math.max(void_hide_teleport_time, hide_manager["spam_settle"]() + 0.08)
+                    local spam_period = math.max(void_hide_void_time, spam_window + 0.05)
+
                     if target_out then
                         if not spam_out_since then
                             spam_out_since = tick
@@ -41642,11 +41746,11 @@ end
                         end
 
                         in_void = false
-                    elseif not target_hidden and tick - last > void_hide_void_time then
+                    elseif not target_hidden and tick - last > spam_period then
                         last = tick
                         hide_manager["spam_cycle_start"] = tick
                         in_void = false
-                    elseif not target_hidden and tick - last < void_hide_teleport_time then
+                    elseif not target_hidden and tick - last < spam_window then
                         in_void = false
                     elseif do_void_hide then
                         spam_out_since = nil
@@ -41889,7 +41993,8 @@ end
         local setscriptable = setscriptable
 
         local do_auto_equip = LPH_JIT_MAX(function(dt, hrp)
-            local backpack = local_player["Backpack"]
+            -- (find, not index: the player has no Backpack for a moment around a respawn, and indexing it threw an error every time)
+            local backpack = find_first_child(local_player, "Backpack")
             if backpack and not purchasing and hrp and (not auto_equip_unequip_when_when_no_target or ragebot_target ~= nil) then
                 -- The fists and the wallet go back in the bag before the guns come out: with one of them out ahead of the gun another hub saw
                 -- the server take no shot at all (714 sent, none taken). Only those two: food and the like are other features' business.
@@ -44058,7 +44163,7 @@ local get_silent_aim_position = nil
                 end
 
                 -- only while the target can be hit by a manipulated shot right now (no longer for a moment after every shot as well)
-                local shown = wanted and can_now
+                local shown = (wanted and can_now) == true
 
                 if shown then
                     local mouse = get_mouse_location(user_input_service)
@@ -44760,6 +44865,11 @@ do
     -- The ragebot's target is in the void and its spot there has jumped in the last half second (do_ragebot marks it).
     hide_manager["is_void_jittering"] = function(target, position)
         return target ~= nil and position ~= nil and position["Magnitude"] >= 9e5 and clock() - (hide_manager["target_void_jitter_at"] or -1) < 0.5
+    end
+
+    -- How long the server needs to have the body out of the void before a shot from there counts (the ragebot holds its shots that long into a window).
+    hide_manager["spam_settle"] = function()
+        return getgenv()["neverlose_spam_settle"] or math.min(local_ping/1000 + 0.03, 0.15)
     end
 
     hide_manager["lagged_position"] = function(lag)
