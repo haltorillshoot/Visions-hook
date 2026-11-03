@@ -35287,10 +35287,23 @@ end
         return nil
     end)
 
+    -- Everything the void readings and the Spam cycle remember about the target they were taken from. Cleared when the target changes or dies, so a
+    -- new target (or the same one respawned) is never judged by the old one's void spot, jitter or "seen in the void" time.
+    local clear_target_void_state = LPH_NO_VIRTUALIZE(function()
+        hide_manager["target_void_last"] = nil
+        hide_manager["target_void_jitter_at"] = nil
+        hide_manager["target_void_jitter_target"] = nil
+        hide_manager["spam_void_target"] = nil
+        hide_manager["spam_void_seen_at"] = nil
+        hide_manager["fling_check"] = nil
+    end)
+
     set_ragebot_target = LPH_NO_VIRTUALIZE(function(target, message)
         if ragebot_target == target then
             return
         end
+
+        clear_target_void_state()
 
         if do_notification and message and message ~= "" then
             new_notification((message and message ~= "") and message or "ragebot target set to none", 1)
@@ -35314,6 +35327,13 @@ end
 
         if fov_circle_outline then
             tween(fov_circle_outline, {["Color"] = ragebot_target and flags["ragebot_field_of_view_active_outline"] or flags["ragebot_field_of_view_outline_color"], ["Transparency"] = ragebot_target and 1-flags["ragebot_field_of_view_active_outline_transparency"] or 1-flags["ragebot_field_of_view_outline_transparency"]}, quad, out, 0.11)
+        end
+    end)
+
+    -- The selected target dying (and so respawning) starts its void state over, whether or not it stays the target.
+    create_connection(signals["on_player_died"], function(data)
+        if data == ragebot_target then
+            clear_target_void_state()
         end
     end)
 
@@ -36991,6 +37011,7 @@ end
                     if hitbox_position["Magnitude"] >= 9e5 then
                         if last_void and last_void[1] == target and (hitbox_position - last_void[2])["Magnitude"] > 5000 then
                             hide_manager["target_void_jitter_at"] = clock()
+                            hide_manager["target_void_jitter_target"] = target
                         end
 
                         hide_manager["target_void_last"] = {target, hitbox_position}
@@ -44868,7 +44889,7 @@ do
 
     -- The ragebot's target is in the void and its spot there has jumped in the last half second (do_ragebot marks it).
     hide_manager["is_void_jittering"] = function(target, position)
-        return target ~= nil and position ~= nil and position["Magnitude"] >= 9e5 and clock() - (hide_manager["target_void_jitter_at"] or -1) < 0.5
+        return target ~= nil and position ~= nil and position["Magnitude"] >= 9e5 and hide_manager["target_void_jitter_target"] == target and clock() - (hide_manager["target_void_jitter_at"] or -1) < 0.5
     end
 
     -- How long the server needs to have the body out of the void before a shot from there counts (the ragebot holds its shots that long into a window).
