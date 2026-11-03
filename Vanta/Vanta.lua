@@ -439,6 +439,38 @@ Target.set = setTarget
 
 local lastAutoPick = 0
 
+---Target When Shot At: whoever the game names as the last to damage you becomes the target (when there is none, or always with Force).
+---@param maid table
+function Target.watchDamage(maid)
+	local function watch(character)
+		local effects = character:WaitForChild("BodyEffects", 10)
+		local damager = effects and effects:WaitForChild("LastDamager", 10)
+
+		if not damager then
+			return
+		end
+
+		maid:give(damager:GetPropertyChangedSignal("Value"):Connect(function()
+			if not flag("target_when_shot_at", false) or not flag("ragebot_enabled", false) then
+				return
+			end
+
+			local value = damager.Value
+			local player = typeof(value) == "Instance" and (value:IsA("Player") and value or playersService:GetPlayerFromCharacter(value)) or nil
+
+			if player and player ~= localPlayer and player ~= Target.player and Target.eligible(player) and (Target.player == nil or flag("target_force", false)) then
+				setTarget(player)
+			end
+		end))
+	end
+
+	if localPlayer.Character then
+		task.spawn(watch, localPlayer.Character)
+	end
+
+	maid:give(localPlayer.CharacterAdded:Connect(watch))
+end
+
 ---Keeps the target honest every frame: left the game, respawned, died or got knocked.
 function Target.step(now)
 	local player = Target.player
@@ -451,7 +483,7 @@ function Target.step(now)
 			local root = Players.root(player)
 
 			-- the conditions the Untarget When list names; Auto Stomp keeps a knocked target so it can be finished
-			drop = (picked("target_untarget_when", "dead", { "dead" }) and Players.phase(player) == "respawning")
+			drop = (picked("target_untarget_when", "dead", { "dead" }) and Players.phase(player) == "respawning" and not flag("target_wait_protection", true))
 				or (picked("target_untarget_when", "knocked", { "dead" }) and Players.knocked(player) and not flag("autostomp_enabled", false))
 				or (picked("target_untarget_when", "flung", { "dead" }) and root ~= nil and root.AssemblyLinearVelocity.Magnitude > 250)
 		end
@@ -491,6 +523,9 @@ local Resolver = {
 	velocity = Vector3.zero,
 	spots = {},
 	weightedAt = nil :: number?,
+	subject = nil :: Model?,
+	estimate = Vector3.zero,
+	recordedAt = 0,
 }
 
 function Resolver.reset()
@@ -505,6 +540,8 @@ function Resolver.reset()
 	Resolver.clusterShare = 0
 	Resolver.spots = {}
 	Resolver.weightedAt = nil
+	Resolver.estimate = Vector3.zero
+	Resolver.recordedAt = 0
 end
 
 ---Record where the target shows this frame.
@@ -615,7 +652,8 @@ local function busiestCluster(points, radius)
 end
 
 ---Velocity over the last tenth of a second of map sightings.
-local function measuredVelocity()
+---The position change over the last tenth of a second of map sightings.
+local function deltaVelocity()
 	local samples = Resolver.samples
 	local newest = samples[#samples]
 
@@ -637,6 +675,31 @@ local function measuredVelocity()
 	end
 
 	return Vector3.zero
+end
+
+---Where the target's velocity comes from: the position change (delta), the body's own velocity, a smoothed position change (estimator), the way the humanoid
+---is walking or the way the body faces (both times its walk speed), or nothing at all (no lead).
+local function measuredVelocity()
+	local source = flag("velocity_source", "delta")
+	local character = Resolver.subject
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if source == "none" then
+		return Vector3.zero
+	elseif source == "velocity" and root and not Util.inVoid(root.Position) then
+		return root.AssemblyLinearVelocity
+	elseif source == "move direction" and root and humanoid and not Util.inVoid(root.Position) then
+		return humanoid.MoveDirection * humanoid.WalkSpeed
+	elseif source == "look vector" and root and humanoid and not Util.inVoid(root.Position) then
+		return root.CFrame.LookVector * humanoid.WalkSpeed
+	elseif source == "estimator" then
+		Resolver.estimate = Resolver.estimate:Lerp(deltaVelocity(), 0.3)
+
+		return Resolver.estimate
+	end
+
+	return deltaVelocity()
 end
 
 ---The busiest cluster of recent map sightings (or, for a short while, the last map spot). Cached for a twentieth of a second: the clustering is the
@@ -1320,6 +1383,13 @@ function VoidSpam.want(now)
 		return nil
 	end
 
+	-- Wait For Spawn Protection (with Hide While Waiting): a target that is loading or holding its spawn protection is waited for out of reach
+	if flag("target_wait_protection", true) and flag("voidspam_hide_waiting", true) and Players.phase(Target.player) ~= nil then
+		VoidSpam.phase, VoidSpam.spot = "void", VoidSpam.spot or voidSpot()
+
+		return VoidSpam.spot
+	end
+
 	local targetHiding = Util.inVoid(aim)
 
 	if targetHiding then
@@ -1373,7 +1443,7 @@ end
 ---@module AutoFire
 ---Fires the guns through the game's own tools: the gun is equipped, the aim is set for its script, and the tool is activated. Each gun keeps its own
 ---cooldown and ammo; a shotgun is never fired from or at the void (the server turns those calls away and counts them against its SecurityTolerance).
-local AutoFire = { lastShot = {}, lastEquip = 0, lastReload = {}, current = nil, lastTool = nil :: Instance?, lastSent = 0, lastUnequip = 0 }
+local AutoFire = { lastShot = {}, lastEquip = 0, lastReload = {}, current = nil, lastTool = nil :: Instance?, lastSent = 0, lastUnequip = 0, pending = false, lastAttempt = 0 }
 
 local function mainEvent()
 	return replicatedStorage:FindFirstChild("MainEvent")
@@ -1568,6 +1638,16 @@ function AutoFire.step(now)
 		return
 	end
 
+	-- Fire Cooldown: the least time between two attempts; a delayed shot already on its way is waited for
+	if AutoFire.pending or now - AutoFire.lastAttempt < flag("autofire_cooldown", 0) / 1000 then
+		return
+	end
+
+	-- nothing is shot at a target that is respawning, still loading or under its spawn protection
+	if Players.phase(Target.player) ~= nil then
+		return
+	end
+
 	local chosen = nil
 
 	for _, info in guns do
@@ -1602,10 +1682,37 @@ function AutoFire.step(now)
 	-- Hitboxes: the head when it is ticked (it wins over the others), otherwise the torso for body, arms and legs
 	local root = Target.character and Target.character:FindFirstChild(picked("autofire_hitbox", "head", { "head" }) and "Head" or "HumanoidRootPart")
 
-	Aim.set(aim, root, now, 0.2)
 	AutoFire.lastShot[chosen.tool] = now
 	AutoFire.lastTool, AutoFire.lastSent = chosen.tool, now
-	chosen.tool:Activate()
+	AutoFire.lastAttempt = now
+
+	local delay = flag("autofire_delay", 0) / 1000
+
+	if delay <= 0 then
+		Aim.set(aim, root, now, 0.2)
+		chosen.tool:Activate()
+
+		return
+	end
+
+	-- Shot Delay: the shot goes out this long after it was decided, if it is still wanted by then (same target, the window still open, the gun in hand)
+	AutoFire.pending = true
+
+	local target = Target.player
+
+	task.delay(delay, function()
+		AutoFire.pending = false
+
+		local current = Follow.aim
+		local later = os.clock()
+		local stillWindow = not flag("voidspam_enabled", false) or VoidSpam.phase == "window"
+
+		if flag("autofire_enabled", false) and flag("ragebot_enabled", false) and Target.player == target and current and not Util.inVoid(current)
+			and stillWindow and chosen.tool.Parent == localPlayer.Character then
+			Aim.set(current, Target.character and Target.character:FindFirstChild(picked("autofire_hitbox", "head", { "head" }) and "Head" or "HumanoidRootPart"), later, 0.2)
+			chosen.tool:Activate()
+		end
+	end)
 end
 
 ---@module AutoStomp
@@ -1619,7 +1726,7 @@ local STOMP_OFFSET = Vector3.new(0, 3, 0)
 function AutoStomp.pick()
 	local target = Target.player
 
-	if target and Players.knocked(target) then
+	if target and Players.knocked(target) and not flag("autostomp_wait_all", false) then
 		return target
 	end
 
@@ -1630,6 +1737,18 @@ function AutoStomp.pick()
 	end
 
 	local best, bestDistance = nil, flag("autostomp_range", 300)
+
+	-- Wait For All Targets Knocked: while anyone of the allowed statuses in range is still standing, nobody is stomped
+	if flag("autostomp_wait_all", false) then
+		for _, player in playersService:GetPlayers() do
+			local root = player ~= localPlayer and Players.root(player)
+
+			if root and not Util.inVoid(root.Position) and (root.Position - mine.Position).Magnitude <= bestDistance and not Players.knocked(player)
+				and Players.phase(player) == nil and picked("autostomp_statuses", Status.get(player), { "neutral", "enemy" }) then
+				return nil
+			end
+		end
+	end
 
 	for _, player in playersService:GetPlayers() do
 		if player ~= localPlayer and Players.knocked(player) and Players.phase(player) ~= "respawning"
@@ -5194,6 +5313,7 @@ function Ragebot.start()
 		end
 	end))
 	Status.load()
+	Target.watchDamage(Ragebot.maid)
 	Skins.start(Ragebot.maid)
 	Inventory.start(Ragebot.maid)
 	Ragebot.maid:give(AdStrafe.release)
@@ -5229,7 +5349,13 @@ function Ragebot.start()
 		local root = Target.player and Players.root(Target.player)
 
 		if root then
-			Resolver.record(root.Position, now)
+			-- Resolver Rate: how often the position is read for the resolver (0 = every frame)
+			Resolver.subject = Target.character
+
+			if now - Resolver.recordedAt >= flag("resolver_rate", 0) then
+				Resolver.recordedAt = now
+				Resolver.record(root.Position, now)
+			end
 
 			local aim = Resolver.aim(now)
 
@@ -5351,6 +5477,9 @@ local function buildMenu()
 	targetSection:slider({ name = "max distance", flag = "target_distance", min = 50, max = 3000, default = 1000, interval = 10, suffix = " st" })
 	targetSection:slider({ name = "automatic cooldown", flag = "target_cooldown", min = 0.05, max = 2, default = 0.25, interval = 0.05, suffix = "s" })
 	targetSection:dropdown({ name = "ignore if", flag = "target_ignore_if", items = { "in void", "protected", "knocked" }, default = { "in void", "protected", "knocked" }, multi = true })
+	targetSection:toggle({ name = "target when shot at", flag = "target_when_shot_at" })
+	targetSection:toggle({ name = "force (switch target when shot at)", flag = "target_force" })
+	targetSection:toggle({ name = "wait for spawn protection", flag = "target_wait_protection", default = true })
 	targetSection:dropdown({ name = "target statuses", flag = "target_statuses", items = { "neutral", "friendly", "enemy" }, default = { "neutral", "enemy" }, multi = true })
 	targetSection:dropdown({ name = "untarget when", flag = "target_untarget_when", items = { "dead", "knocked", "flung" }, default = { "dead" }, multi = true })
 
@@ -5358,6 +5487,7 @@ local function buildMenu()
 	stompSection:toggle({ name = "enabled", flag = "autostomp_enabled" })
 	stompSection:toggle({ name = "stop when target dead", flag = "autostomp_stop_dead", default = true })
 	stompSection:dropdown({ name = "target statuses", flag = "autostomp_statuses", items = { "neutral", "friendly", "enemy" }, default = { "neutral", "enemy" }, multi = true })
+	stompSection:toggle({ name = "wait for all targets knocked", flag = "autostomp_wait_all" })
 	stompSection:slider({ name = "range", flag = "autostomp_range", min = 20, max = 1000, default = 300, interval = 10, suffix = " st" })
 
 	local fireColumn = rage:column({})
@@ -5375,9 +5505,13 @@ local function buildMenu()
 	fireSection:dropdown({ name = "equip order", flag = "autoequip_guns", items = { "rifle", "double-barrel sg", "flintlock", "revolver", "tacticalshotgun", "shotgun", "smg", "glock" }, default = { "rifle", "double-barrel sg", "flintlock", "revolver" }, multi = true })
 	fireSection:toggle({ name = "prioritize double-barrel", flag = "autoequip_db" })
 	fireSection:dropdown({ name = "unequip when", flag = "autoequip_unequip", items = { "no target", "target knocked", "target dead" }, default = {}, multi = true })
+	fireSection:slider({ name = "fire cooldown", flag = "autofire_cooldown", min = 0, max = 300, default = 0, interval = 1, suffix = "ms" })
+	fireSection:slider({ name = "shot delay", flag = "autofire_delay", min = 0, max = 1000, default = 0, interval = 5, suffix = "ms" })
 	fireSection:slider({ name = "gun gap", flag = "autofire_gap", min = 0, max = 300, default = 40, interval = 5, suffix = "ms" })
 
 	local resolverSection = fireColumn:section({ name = "resolver" })
+	resolverSection:slider({ name = "resolver rate", flag = "resolver_rate", min = 0, max = 0.1, default = 0, interval = 0.005, suffix = "s" })
+	resolverSection:dropdown({ name = "velocity source", flag = "velocity_source", items = { "delta", "velocity", "estimator", "move direction", "look vector", "none" }, default = "delta" })
 	resolverSection:dropdown({ name = "mode", flag = "resolver_mode", items = { "off", "cluster", "adaptive", "weighted", "hybrid" }, default = "adaptive" })
 	resolverSection:slider({ name = "out of void bonus", flag = "resolver_map_bonus", min = 0, max = 12, default = 5, interval = 0.5, suffix = " st" })
 	resolverSection:slider({ name = "normal position trust", flag = "resolver_trust", min = 0.1, max = 5, default = 1.5, interval = 0.05, suffix = "" })

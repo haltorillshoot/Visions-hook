@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 263, Partial 38, No 193, Declined 23.
+**Totals (517 controls):** Yes 273, Partial 37, No 181, Declined 26.
 
 ## panel_section
 
@@ -682,23 +682,23 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | spam resolver | toggle | Partial | AutoFire / Resolver |
 | target hitbox | dropdown | Yes | Ragebot / AutoFire / AdStrafe / Target |
 | prediction | slider | Partial | AutoFire / Resolver |
-| shot delay | slider | No |  |
+| shot delay | slider | Yes | AutoFire |
 | field of view | slider | Yes | Ragebot / AutoFire / AdStrafe / Target |
-| fire cooldown | slider | No |  |
+| fire cooldown | slider | Yes | AutoFire |
 
 ## auto_fire_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
 | at target vehicle | toggle | No |  |
-| always fire | toggle | No |  |
+| always fire | toggle | Declined | sends shots at targets out of reach; the server turns them away and counts them against a shotgun lockout |
 | dont render | toggle | No |  |
 | show fake bullets | toggle | No |  |
 | pre fire | toggle | No |  |
 | pre fire time | slider | No |  |
-| bullet manipulation | toggle | No |  |
+| bullet manipulation | toggle | Declined | changes the shot data claimed to the server / exceeds the server fire rate |
 | fast retry | toggle | No |  |
-| double tap | toggle | No |  |
+| double tap | toggle | Declined | changes the shot data claimed to the server / exceeds the server fire rate |
 | gun gap | slider | Yes | AutoFire |
 
 ## ad_strafe_settings
@@ -735,9 +735,9 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| resolver rate | slider | No |  |
-| strength | slider | Partial | Resolver lead |
-| velocity source | dropdown | No |  |
+| resolver rate | slider | Yes | Resolver |
+| strength | slider | Yes | Resolver |
+| velocity source | dropdown | Yes | Resolver |
 
 ## target_selection_settings
 
@@ -747,10 +747,10 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | automatic | toggle | Yes | Target |
 | cooldown | slider | Yes | Target |
 | target bind | keybind | Yes | Target |
-| target when shot at | toggle | No |  |
-| force | toggle | No |  |
-| wait for spawn protection | toggle | No |  |
-| void while waiting | toggle | No |  |
+| target when shot at | toggle | Yes | Target / VoidSpam |
+| force | toggle | Yes | Target / VoidSpam |
+| wait for spawn protection | toggle | Yes | Target / VoidSpam |
+| void while waiting | toggle | Yes | Target / VoidSpam |
 | untarget when | dropdown | Yes | Target |
 | target statuses | dropdown | Yes | Target |
 | target players | dropdown | No |  |
@@ -908,7 +908,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 |---|---|---|---|
 | stop when target dead | toggle | Yes | AutoStomp |
 | target statuses | dropdown | Yes | AutoStomp |
-| wait for all targets knocked | toggle | No |  |
+| wait for all targets knocked | toggle | Yes | AutoStomp |
 | prioritize over reloading | toggle | No |  |
 
 ## auto_ammo_settings

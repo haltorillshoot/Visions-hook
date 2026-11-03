@@ -126,3 +126,14 @@ Tested live: the weapon list (21), a texture skin (texture changed and restored)
 Not reproduced: knife skins (they need the hand weld and the knife's animation and sounds), custom skins from files (meshes, beams, particles, sounds, animations) and the refresh-custom-skins button.
 
 **Inventory sorter.** The game saves a hotbar layout as the setting `HotbarLayout` and arranges its hotbar by it. The module works the layout out from nine slot choices and sends that same setting (`UpdateSingleSetting`), only when it differs from the saved one and at most every 1.5 s; Sort Now and an auto switch (after the backpack changes and after a respawn). Tested live end to end: the default layout, "already saved" when the slots match, a real send (the server's attribute changed to the new layout) and a second send that restored the account's original layout exactly. Not reproduced: ordering the tools that have no slot, which the original does by moving them out of the hotbar through the hotbar script's internals.
+
+## Fire extras (added)
+
+- **Fire cooldown** (the least time between two attempts) and **shot delay** (a shot goes out that long after it was decided, and is dropped if the target, the window or the gun in hand is gone by then).
+- **Resolver rate** (how often the target's position is read) and **velocity source** (delta, velocity, estimator, move direction, look vector, none).
+- **Target when shot at** (the game's `BodyEffects.LastDamager` names who hurt you; with Force it also switches an existing target) and **wait for spawn protection** (a respawning, loading or protected target is waited for out of reach and never shot at).
+- **Wait for all targets knocked** for Auto Stomp.
+
+Tested live with a fake client-side gun (nothing real was fired): cooldown 0 gave 20 activations in 1.5 s, 300 ms gave 5; a 250 ms shot delay gave gaps of 0.251 s; a delayed shot was dropped when the target was cleared (0 activations after); the five velocity sources each gave their own value; resolver rate 0.1 gave 10 samples a second against 160. Not tested: target when shot at and wait for all targets knocked, because the second account left the server before they were run (the code paths are the ones the first tests used).
+
+Not reproduced: always fire, bullet manipulation and double tap (they send shots the server turns away, change the shot data, or exceed its fire rate), and at target vehicle, dont render, show fake bullets, pre fire and fast retry (visual attempts and options I did not find a clear behaviour for), prioritize over reloading, follow adjust.
