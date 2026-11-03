@@ -3,13 +3,6 @@
 -- says so and stops, so nothing made for this game ever runs in another one. Visions-hook.lua hands over to this file when it is started in Des
 -- Hood, and it can also be run on its own.
 
-local DES_HOOD_PLACE = 82613047987648
-
-if game.PlaceId ~= DES_HOOD_PLACE then
-    warn("[Visions hook] The Des Hood part only runs in Des Hood (place " .. DES_HOOD_PLACE .. "); this is place " .. tostring(game.PlaceId) .. ".")
-    return
-end
-
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
