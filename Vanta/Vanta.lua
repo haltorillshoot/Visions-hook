@@ -97,6 +97,17 @@ local function flag(name, fallback)
 	return value
 end
 
+---Whether a dropdown (single or multi) has the item selected.
+local function picked(name, item, fallback)
+	local value = flag(name, fallback)
+
+	if type(value) == "table" then
+		return table.find(value, item) ~= nil
+	end
+
+	return value == item
+end
+
 ---@module Players
 local Players = {}
 
@@ -188,11 +199,11 @@ function Target.eligible(player)
 		return false
 	end
 
-	if phase == "protected" and flag("target_skip_protected", true) then
+	if phase == "protected" and picked("target_ignore_if", "protected", { "in void", "protected", "knocked" }) then
 		return false
 	end
 
-	if Players.knocked(player) and flag("target_skip_knocked", true) then
+	if Players.knocked(player) and picked("target_ignore_if", "knocked", { "in void", "protected", "knocked" }) then
 		return false
 	end
 
@@ -216,11 +227,11 @@ local function pick()
 		local position = root.Position
 		local score = nil
 
-		if Util.inVoid(position) then
+		if Util.inVoid(position) and picked("target_ignore_if", "in void", { "in void", "protected", "knocked" }) then
 			continue
 		end
 
-		if myRoot and (position - myRoot.Position).Magnitude > maxDistance then
+		if myRoot and not Util.inVoid(position) and (position - myRoot.Position).Magnitude > maxDistance then
 			continue
 		end
 
@@ -276,9 +287,18 @@ function Target.step(now)
 
 	if player then
 		local gone = player.Parent ~= playersService
-		local knocked = Players.knocked(player) and flag("target_skip_knocked", true) and not flag("target_hold_knocked", false) and not flag("autostomp_enabled", false)
+		local drop = false
 
-		if gone or knocked then
+		if not gone then
+			local root = Players.root(player)
+
+			-- the conditions the Untarget When list names; Auto Stomp keeps a knocked target so it can be finished
+			drop = (picked("target_untarget_when", "dead", { "dead" }) and Players.phase(player) == "respawning")
+				or (picked("target_untarget_when", "knocked", { "dead" }) and Players.knocked(player) and not flag("autostomp_enabled", false))
+				or (picked("target_untarget_when", "flung", { "dead" }) and root ~= nil and root.AssemblyLinearVelocity.Magnitude > 250)
+		end
+
+		if gone or drop then
 			setTarget(nil)
 		elseif player.Character ~= Target.character then
 			-- a new character: same player, fresh state for everything that tracks it
@@ -290,7 +310,7 @@ function Target.step(now)
 		end
 	end
 
-	if not Target.player and flag("target_automatic", false) and now - lastAutoPick >= 0.25 then
+	if not Target.player and flag("target_automatic", false) and now - lastAutoPick >= flag("target_cooldown", 0.25) then
 		lastAutoPick = now
 		setTarget(pick())
 	end
@@ -310,6 +330,7 @@ local Resolver = {
 	clusteredAt = -1,
 	cluster = nil :: Vector3?,
 	clusterShare = 0,
+	velocity = Vector3.zero,
 }
 
 function Resolver.reset()
@@ -472,6 +493,8 @@ function Resolver.aim(now)
 	local shows = newest.position
 	local onMap = not Util.inVoid(shows)
 	local velocity = measuredVelocity()
+
+	Resolver.velocity = velocity
 	local fast = velocity.Magnitude > MAX_REAL_SPEED
 	local useCluster = mode == "cluster" or (mode == "adaptive" and (not onMap or fast or Resolver.jumpedAt and now - Resolver.jumpedAt < 0.75))
 
@@ -584,6 +607,7 @@ local Body = {
 	appliedAt = 0,
 	spot = nil,
 	spotAt = 0,
+	lastMap = nil :: CFrame?,
 }
 
 function Body.addProvider(name, want)
@@ -602,6 +626,10 @@ function Body.apply(now)
 
 	if not root or Body.applied then
 		return
+	end
+
+	if not Util.inVoid(root.Position) then
+		Body.lastMap = root.CFrame
 	end
 
 	for _, provider in Body.providers do
@@ -657,12 +685,80 @@ local function ringOffset(angle, distance)
 	return Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
 end
 
+local POLYGON_SIDES = { triangle = 3, square = 4, pentagon = 5, hexagon = 6, decagon = 10 }
+
+---A point on the chosen shape round the target, `phase` being how far round it is (0 to 1).
+local function shapeOffset(shape, phase, radius)
+	local sides = POLYGON_SIDES[shape]
+
+	if sides then
+		-- along the straight edges between the corners
+		local scaled = phase * sides
+		local corner = math.floor(scaled)
+		local along = scaled - corner
+		local from = ringOffset(corner / sides * math.pi * 2, radius)
+		local to = ringOffset((corner + 1) / sides * math.pi * 2, radius)
+
+		return from:Lerp(to, along)
+	end
+
+	if shape == "heart" then
+		local t = phase * math.pi * 2
+		local x = 16 * math.sin(t) ^ 3
+		local z = 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
+
+		return Vector3.new(x, 0, z) * (radius / 16)
+	end
+
+	return ringOffset(phase * math.pi * 2, radius)
+end
+
+---Follow's reasons to stand still.
+local function followStopped(player)
+	if picked("follow_stop_if", "target knocked", { "no gun equipped", "target knocked", "reloading" }) and player and Players.knocked(player) then
+		return true
+	end
+
+	local character = localPlayer.Character
+
+	if picked("follow_stop_if", "no gun equipped", { "no gun equipped", "target knocked", "reloading" }) and character then
+		local tool = character:FindFirstChildOfClass("Tool")
+
+		if not (tool and tool:FindFirstChild("Ammo")) then
+			return true
+		end
+	end
+
+	if picked("follow_stop_if", "reloading", { "no gun equipped", "target knocked", "reloading" }) and character then
+		local effects = character:FindFirstChild("BodyEffects")
+		local reload = effects and effects:FindFirstChild("Reload")
+
+		if reload and reload.Value == true then
+			return true
+		end
+	end
+
+	return false
+end
+
 ---Where the body goes for a given aim position, in the chosen style. Shared with Void Spam so a window out of the void uses the same place.
 ---@param aim Vector3
 ---@param now number
 ---@return CFrame
 function Follow.cframeFor(aim, now)
+	-- Lead: where the target will be by the time the body has been taken there (its speed times Lead Time, at most 60 studs)
+	if flag("follow_lead", true) then
+		local lead = Resolver.velocity * (flag("follow_lead_time", 80) / 1000)
+
+		if lead.Magnitude > 60 then
+			lead = lead.Unit * 60
+		end
+
+		aim += Vector3.new(lead.X, 0, lead.Z)
+	end
+
 	local style = flag("follow_style", "orbit")
+	local shape = flag("follow_shape", "circle")
 	local distance = flag("follow_distance", 15)
 	local height = flag("follow_height", 0)
 	local low, high = flag("follow_sky_min", 10), flag("follow_sky_max", 20)
@@ -670,9 +766,9 @@ function Follow.cframeFor(aim, now)
 	local offset
 
 	if style == "orbit" then
-		offset = ringOffset(now * flag("follow_speed", 75) / 100 * math.pi * 2, distance) + Vector3.new(0, height, 0)
+		offset = shapeOffset(shape, (now * flag("follow_speed", 75) / 100) % 1, distance) + Vector3.new(0, height, 0)
 	elseif style == "zigzag" then
-		local side = math.floor(now / math.max(reposition, 0.05)) % 2 == 0 and 1 or -1
+		local side = math.floor(now * flag("follow_zigzag_speed", 35) / 5) % 2 == 0 and 1 or -1
 
 		offset = Vector3.new(side * distance, flag("follow_zigzag_height", 3), 0)
 	else
@@ -685,10 +781,13 @@ function Follow.cframeFor(aim, now)
 			elseif style == "above" then
 				Follow.held = Vector3.new(0, low + (high - low) * math.random(), 0)
 			elseif style == "strafe above" then
-				Follow.held = ringOffset(angle, distance) + Vector3.new(0, height + low + (high - low) * math.random(), 0)
+				Follow.held = shapeOffset(shape, math.random(), distance) + Vector3.new(0, height + low + (high - low) * math.random(), 0)
 			else
-				-- "teleport": a random place on a ring round the target
-				Follow.held = ringOffset(angle, distance * (0.4 + 0.6 * math.random())) + Vector3.new(0, math.random() * 5, 0)
+				-- "teleport": a random place round the target between Teleport Min and Teleport Max studs out, up to 5 studs over it
+				local near = flag("follow_teleport_min", 2)
+				local far = math.max(flag("follow_teleport_max", 17), near)
+
+				Follow.held = ringOffset(angle, near + (far - near) * math.random()) + Vector3.new(0, math.random() * 5, 0)
 			end
 
 			Follow.heldAt, Follow.heldStyle = now, style
@@ -722,13 +821,17 @@ function Follow.want(now)
 		return nil
 	end
 
+	if followStopped(Target.player) then
+		return nil
+	end
+
 	return Follow.cframeFor(aim, now)
 end
 
 ---@module VoidSpam
 ---Cycles the body between the void and short windows at the target. A window only opens when a gun can shoot in it, because every moment out of the void
 ---is a moment the target can shoot back; if no gun is ready for IDLE_WINDOW seconds a window opens anyway so the cycle can never stop shooting.
-local VoidSpam = { phase = "void", phaseAt = 0, spot = nil, idleSince = 0 }
+local VoidSpam = { phase = "void", phaseAt = 0, spot = nil, idleSince = 0, baitUntil = 0, baitAt = 0, baitCFrame = nil :: CFrame?, deepSpot = nil :: CFrame?, deepFor = nil :: Instance? }
 
 local IDLE_WINDOW = 2.5
 
@@ -738,8 +841,93 @@ local function randomVoidSpot()
 	return CFrame.new(math.random(-range, range), math.random(1e5, range), math.random(-range, range))
 end
 
+---One spot far out along a random direction, kept for the whole life (Deep Distance million studs): the body hardly moves there.
+local function deepVoidSpot()
+	if not VoidSpam.deepSpot or VoidSpam.deepFor ~= localPlayer.Character then
+		local far = flag("voidspam_deep", 100) * 1e6
+		local angle = math.random() * math.pi * 2
+
+		VoidSpam.deepSpot = CFrame.new(math.cos(angle) * far, far * 0.5, math.sin(angle) * far)
+		VoidSpam.deepFor = localPlayer.Character
+	end
+
+	return VoidSpam.deepSpot
+end
+
+local function voidSpot()
+	if flag("voidspam_type", "random") == "deep" then
+		return deepVoidSpot()
+	end
+
+	return randomVoidSpot()
+end
+
+---True when another player's gun reaches the spot (a bait visit there would be shot at).
+local function coveredByOthers(spot)
+	for _, player in playersService:GetPlayers() do
+		if player ~= localPlayer and player ~= Target.player and not Players.knocked(player) then
+			local character = player.Character
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			local tool = character and character:FindFirstChildOfClass("Tool")
+			local range = tool and tool:FindFirstChild("Range")
+
+			if root and range and (root.Position - spot).Magnitude <= range.Value + 15 then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+---Bait: a short visit to a spot on the map every Bait Cooldown, Bait Time long, so a target that follows the body comes after it. A visit is skipped when
+---another player's gun covers the spot or the body is below 40% health.
+local function baitSpot(now)
+	if now < VoidSpam.baitUntil and VoidSpam.baitCFrame then
+		if flag("voidspam_bait_freeze", false) then
+			return VoidSpam.baitCFrame
+		end
+
+		local jitter = flag("voidspam_offset", 3)
+
+		return VoidSpam.baitCFrame + Vector3.new(math.random(-jitter, jitter), math.random(-jitter, jitter), math.random(-jitter, jitter))
+	end
+
+	if now - VoidSpam.baitAt < flag("voidspam_bait_cooldown", 0.5) then
+		return nil
+	end
+
+	VoidSpam.baitAt = now
+
+	local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+	if humanoid and humanoid.Health < humanoid.MaxHealth * 0.4 then
+		return nil
+	end
+
+	local spot
+
+	if flag("voidspam_bait_spot", "random") == "where you stood" and Body.lastMap then
+		spot = Body.lastMap
+	else
+		local range = flag("voidspam_bait_distance", 250)
+
+		spot = CFrame.new(math.random(-range, range), math.random(-200, 200), math.random(-range, range))
+	end
+
+	if coveredByOthers(spot.Position) then
+		return nil
+	end
+
+	VoidSpam.baitCFrame = spot
+	VoidSpam.baitUntil = now + flag("voidspam_bait_time", 0.03)
+
+	return spot
+end
+
 function VoidSpam.reset()
 	VoidSpam.phase, VoidSpam.phaseAt, VoidSpam.spot, VoidSpam.idleSince = "void", 0, nil, 0
+	VoidSpam.baitUntil, VoidSpam.baitAt, VoidSpam.baitCFrame = 0, 0, nil
 end
 
 ---Set by AutoFire: whether any gun in hand could fire right now.
@@ -760,7 +948,7 @@ function VoidSpam.want(now)
 	if not valid then
 		-- nobody to shoot at: stay hidden while waiting (a respawning target is waited for), otherwise leave the body alone
 		if flag("voidspam_hide_waiting", true) and Target.player then
-			VoidSpam.spot = VoidSpam.spot or randomVoidSpot()
+			VoidSpam.spot = VoidSpam.spot or voidSpot()
 
 			return VoidSpam.spot
 		end
@@ -786,10 +974,22 @@ function VoidSpam.want(now)
 	end
 
 	if VoidSpam.phase == "window" then
-		return Follow.cframeFor(aim, now)
+		local place = Follow.cframeFor(aim, now)
+		local jitter = flag("voidspam_offset", 3)
+
+		-- Offset: a little random movement on the window's place so the body is not a still target
+		return place + Vector3.new(math.random(-jitter, jitter), math.random(-jitter, jitter), math.random(-jitter, jitter))
 	end
 
-	VoidSpam.spot = VoidSpam.spot or randomVoidSpot()
+	if flag("voidspam_type", "random") == "bait" then
+		local visit = baitSpot(now)
+
+		if visit then
+			return visit
+		end
+	end
+
+	VoidSpam.spot = VoidSpam.spot or voidSpot()
 
 	return VoidSpam.spot
 end
@@ -797,7 +997,7 @@ end
 ---@module AutoFire
 ---Fires the guns through the game's own tools: the gun is equipped, the aim is set for its script, and the tool is activated. Each gun keeps its own
 ---cooldown and ammo; a shotgun is never fired from or at the void (the server turns those calls away and counts them against its SecurityTolerance).
-local AutoFire = { lastShot = {}, lastEquip = 0, lastReload = {}, current = nil }
+local AutoFire = { lastShot = {}, lastEquip = 0, lastReload = {}, current = nil, lastTool = nil :: Instance?, lastSent = 0 }
 
 local function mainEvent()
 	return replicatedStorage:FindFirstChild("MainEvent")
@@ -956,6 +1156,11 @@ function AutoFire.step(now)
 		return
 	end
 
+	-- Gun Gap: a different gun waits this long after the last one sent (the server takes about one shot per short window across all the guns)
+	if AutoFire.lastTool and AutoFire.lastTool ~= chosen.tool and now - AutoFire.lastSent < flag("autofire_gap", 40) / 1000 then
+		return
+	end
+
 	if chosen.tool.Parent ~= character then
 		if now - AutoFire.lastEquip >= 0.15 then
 			AutoFire.lastEquip = now
@@ -969,6 +1174,7 @@ function AutoFire.step(now)
 
 	Aim.set(aim, root, now, 0.2)
 	AutoFire.lastShot[chosen.tool] = now
+	AutoFire.lastTool, AutoFire.lastSent = chosen.tool, now
 	chosen.tool:Activate()
 end
 
@@ -1151,6 +1357,25 @@ function Visuals.render()
 		end
 	end
 
+	-- where the follow is taking the body
+	if enabled and flag("follow_visualize", false) and Body.spot and not Util.inVoid(Body.spot) then
+		local point, onScreen = camera:WorldToViewportPoint(Body.spot)
+		local colour, opacity = pickerColor("follow_visualize_color", Color3.fromRGB(120, 200, 255))
+
+		drawing("Circle", "followspot", {
+			Visible = onScreen and point.Z > 0,
+			Position = Vector2.new(point.X, point.Y),
+			Radius = 6,
+			Thickness = 2,
+			NumSides = 24,
+			Filled = false,
+			Color = colour,
+			Transparency = opacity,
+		})
+	else
+		removeDrawing("followspot")
+	end
+
 	-- the camera on the target
 	local humanoid = player and player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 
@@ -1270,9 +1495,9 @@ local targetSection = ragebotColumn:section({ name = "target selection" })
 targetSection:dropdown({ name = "priority", flag = "target_priority", items = { "closest to mouse", "closest to character", "lowest health", "random" }, default = "closest to mouse" })
 targetSection:slider({ name = "fov", flag = "target_fov", min = 10, max = 1000, default = 180, interval = 1, suffix = "px" })
 targetSection:slider({ name = "max distance", flag = "target_distance", min = 50, max = 3000, default = 1000, interval = 10, suffix = " st" })
-targetSection:toggle({ name = "skip spawn protected", flag = "target_skip_protected", default = true })
-targetSection:toggle({ name = "skip knocked", flag = "target_skip_knocked", default = true })
-targetSection:toggle({ name = "keep knocked target", flag = "target_hold_knocked" })
+targetSection:slider({ name = "automatic cooldown", flag = "target_cooldown", min = 0.05, max = 2, default = 0.25, interval = 0.05, suffix = "s" })
+targetSection:dropdown({ name = "ignore if", flag = "target_ignore_if", items = { "in void", "protected", "knocked" }, default = { "in void", "protected", "knocked" }, multi = true })
+targetSection:dropdown({ name = "untarget when", flag = "target_untarget_when", items = { "dead", "knocked", "flung" }, default = { "dead" }, multi = true })
 
 local stompSection = ragebotColumn:section({ name = "auto stomp" })
 stompSection:toggle({ name = "enabled", flag = "autostomp_enabled" })
@@ -1283,6 +1508,7 @@ local fireSection = fireColumn:section({ name = "auto fire" })
 fireSection:toggle({ name = "enabled", flag = "autofire_enabled" })
 fireSection:dropdown({ name = "hitbox", flag = "autofire_hitbox", items = { "head", "torso" }, default = "head" })
 fireSection:toggle({ name = "auto reload", flag = "autofire_reload", default = true })
+fireSection:slider({ name = "gun gap", flag = "autofire_gap", min = 0, max = 300, default = 40, interval = 5, suffix = "ms" })
 
 local resolverSection = fireColumn:section({ name = "resolver" })
 resolverSection:dropdown({ name = "mode", flag = "resolver_mode", items = { "off", "cluster", "adaptive" }, default = "adaptive" })
@@ -1301,11 +1527,18 @@ followSection:slider({ name = "height", flag = "follow_height", min = -100, max 
 followSection:slider({ name = "orbit speed", flag = "follow_speed", min = 1, max = 100, default = 75, interval = 1, suffix = "%" })
 followSection:slider({ name = "reposition every", flag = "follow_reposition", min = 0, max = 2, default = 0.05, interval = 0.01, suffix = "s" })
 followSection:toggle({ name = "follow into void", flag = "follow_into_void", default = true })
+followSection:dropdown({ name = "stop if", flag = "follow_stop_if", items = { "no gun equipped", "target knocked", "reloading" }, default = { "no gun equipped", "target knocked", "reloading" }, multi = true })
+followSection:toggle({ name = "lead", flag = "follow_lead", default = true })
+followSection:slider({ name = "lead time", flag = "follow_lead_time", min = 0, max = 300, default = 80, interval = 5, suffix = "ms" })
+followSection:dropdown({ name = "orbit shape", flag = "follow_shape", items = { "circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart" }, default = "circle" })
 
 local skySection = followColumn:section({ name = "above settings" })
 skySection:slider({ name = "height min", flag = "follow_sky_min", min = 1, max = 100, default = 10, interval = 1, suffix = " st" })
 skySection:slider({ name = "height max", flag = "follow_sky_max", min = 2, max = 200, default = 20, interval = 1, suffix = " st" })
 skySection:slider({ name = "zig zag height", flag = "follow_zigzag_height", min = -50, max = 50, default = 3, interval = 1, suffix = " st" })
+skySection:slider({ name = "zig zag speed", flag = "follow_zigzag_speed", min = 1, max = 100, default = 35, interval = 1, suffix = "x" })
+skySection:slider({ name = "teleport min", flag = "follow_teleport_min", min = 1, max = 100, default = 2, interval = 1, suffix = " st" })
+skySection:slider({ name = "teleport max", flag = "follow_teleport_max", min = 2, max = 200, default = 17, interval = 1, suffix = " st" })
 
 local voidColumn = move:column({})
 local voidSection = voidColumn:section({ name = "void spam" })
@@ -1313,6 +1546,16 @@ voidSection:toggle({ name = "enabled", flag = "voidspam_enabled" })
 voidSection:slider({ name = "void time", flag = "voidspam_void", min = 0.05, max = 1.5, default = 0.35, interval = 0.01, suffix = "s" })
 voidSection:slider({ name = "window time", flag = "voidspam_window", min = 0.05, max = 0.6, default = 0.12, interval = 0.01, suffix = "s" })
 voidSection:toggle({ name = "hide while waiting", flag = "voidspam_hide_waiting", default = true })
+voidSection:dropdown({ name = "type", flag = "voidspam_type", items = { "random", "deep", "bait" }, default = "random" })
+voidSection:slider({ name = "deep distance", flag = "voidspam_deep", min = 1, max = 1000, default = 100, interval = 1, suffix = "m st" })
+voidSection:slider({ name = "offset", flag = "voidspam_offset", min = 0, max = 30, default = 3, interval = 1, suffix = " st" })
+
+local baitSection = voidColumn:section({ name = "bait" })
+baitSection:slider({ name = "bait distance", flag = "voidspam_bait_distance", min = 200, max = 2500, default = 250, interval = 10, suffix = " st" })
+baitSection:slider({ name = "bait cooldown", flag = "voidspam_bait_cooldown", min = 0.01, max = 1.5, default = 0.5, interval = 0.01, suffix = "s" })
+baitSection:slider({ name = "bait time", flag = "voidspam_bait_time", min = 0.01, max = 1, default = 0.03, interval = 0.01, suffix = "s" })
+baitSection:toggle({ name = "bait freeze", flag = "voidspam_bait_freeze" })
+baitSection:dropdown({ name = "bait spot", flag = "voidspam_bait_spot", items = { "random", "where you stood" }, default = "random" })
 
 local visuals = window:tab({ name = "visuals" })
 local visualsColumn = visuals:column({})
@@ -1335,6 +1578,10 @@ circleSection:slider({ name = "radius", flag = "circle_radius", min = 1, max = 2
 
 local cameraSection = targetVisualColumn:section({ name = "camera" })
 cameraSection:toggle({ name = "view target", flag = "view_target" })
+
+local followVisualSection = targetVisualColumn:section({ name = "follow spot" })
+followVisualSection:toggle({ name = "visualize", flag = "follow_visualize" })
+followVisualSection:colorpicker({ name = "colour", flag = "follow_visualize_color", color = Color3.fromRGB(120, 200, 255) })
 
 local misc = window:tab({ name = "misc" })
 local miscColumn = misc:column({})

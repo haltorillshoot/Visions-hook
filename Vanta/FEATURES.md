@@ -18,7 +18,7 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 
 | Original (line) | What it does | Vanta | Missing options / notes | Tested |
 |---|---|---|---|---|
-| Automatic Fire (16958) | Fires the guns at the target | Partial | Has: per-gun ammo, cooldown and range, slow guns first, shotgun void guard, equip, reload, hitbox. Missing: At Target Vehicle, Dont Render, Show Fake Bullets, Pre Fire, Pre Fire Time, Bullet Manipulation, Double Tap, Gun Gap, Distance Check | No (no loaded gun and no opponent) |
+| Automatic Fire (16958) | Fires the guns at the target | Partial | Has: per-gun ammo, cooldown and range, slow guns first, shotgun void guard, equip, reload, hitbox. Gun Gap is in (minimum time between different guns). Missing: At Target Vehicle, Dont Render, Show Fake Bullets, Pre Fire, Pre Fire Time, Bullet Manipulation, Double Tap, Distance Check | No (no loaded gun and no opponent) |
 | Auto Equip (16965) | Equips guns for you | Partial | Auto Fire equips the gun it fires. Missing: Unequip When, Guns, Prioritize DB | No |
 | Quick Draw (16975) | Draws the chosen guns quickly | No | not started | |
 | A/D (16983) | A/D strafe | No | not started | |
@@ -26,7 +26,7 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 | Hitboxes (16997) | Hitbox options | No | not started | |
 | Prediction (17012) | Leads the aim | Partial | Lead is in the Resolver. Missing: Resolver Rate, Velocity Source, Strength as separate options | Yes, with the resolver |
 | Lead Fast Targets (17027) | Leads targets that move fast | Partial | Same lead as above, capped at 30 studs | Yes |
-| Target Selection (17121) | Chooses the target | Partial | Has: automatic, priority (mouse, character, health, random), FOV, distance, skip protected, skip knocked, keep knocked, notifications, target key (press selects, press clears). Missing: Cooldown, Target When Shot At, Force, Wait For Spawn Protection, Void While Waiting (Void Spam has its own), Untarget When, Target Statuses, Ignore If | No (needs players) |
+| Target Selection (17121) | Chooses the target | Partial | Has: automatic with Cooldown, priority (mouse, character, health, random), FOV, distance, Ignore If (in void, protected, knocked), Untarget When (dead, knocked, flung), notifications, target key (press selects, press clears). Missing: Target When Shot At, Force, Wait For Spawn Protection, Void While Waiting (Void Spam has its own), Target Statuses | Config round trip of the multi dropdowns: yes. Selection and the key: no (needs players) |
 | 3D Target Circle (17165) | Ring round the target | Done | Colour; the gradient colour is not there | Yes (24 line segments drawn and removed) |
 | View Target (17172) | Camera on the target | Done | | Yes |
 | Show FOV (17185) | FOV circle | Done | Colour and active colour; Outline and Follow Target options missing | Yes |
@@ -38,14 +38,14 @@ Legend: **Done** = implemented and in the Vanta menu. **Partial** = a working co
 | Auto Bounty (17263) | Bounty handling | No | not started | |
 | Safe Purchasing (17271) | Shop safety | No | not started | |
 | Auto Loadout (17278) | Buys a loadout | No | needs the shop interface | |
-| Follow Target (17285) | Moves the body round the target | Partial | Has orbit, random, above, strafe above, teleport, zigzag, distance, height, speed, reposition, follow into void. Missing: Stop If, Adjust, Lead, Orbit Shape, Teleport Min/Max, Zig Zag Speed, Visualize | Yes on a self target: body moved, real position restored, all styles ran, clean disable |
+| Follow Target (17285) | Moves the body round the target | Partial | Has orbit, random, above, strafe above, teleport, zigzag, distance, height, speed, reposition, follow into void, Stop If, Lead and Lead Time, Orbit Shape (circle, square, triangle, pentagon, hexagon, decagon, heart), Teleport Min/Max, Zig Zag Height and Speed, Visualize. Missing: Adjust | Yes on a self target: all seven shapes at the right radius, teleport range 5.4 to 24.7 for 5 to 25, zig zag flips at the set speed, Stop If stops the body, visualize drawn and removed, clean disable |
 | Auto Ammo (17292) | Buys ammo | No | needs the shop interface | |
 | Auto Armor (17299) | Buys armor | No | needs the shop interface | |
 | Anti Stomp (17306) | Protects against stomps | No | not started | |
 | Anti Report (17313) | Report handling | No | not started | |
 | Auto Mask (17321) | Buys and wears a mask | No | needs the shop interface | |
 | Auto Heal (17328) | Heals | No | needs the shop interface | |
-| Void (17350) | Void hide, spam and bait | Partial | Has the spam cycle with void and window times and the ready-gun gate, hide while waiting. Missing: Type (random, bait, deep), all Bait options, Deep Distance, Disable When, Force When, Stop If Forced, Out With Target, Hide While Target Hides, Offset | Yes on a self target: cycle ran, body restored, clean disable |
+| Void (17350) | Void hide, spam and bait | Partial | Has the spam cycle with void and window times and the ready-gun gate, hide while waiting, Type (random, deep, bait), Deep Distance, Offset, and Bait (distance, cooldown, time, freeze, spot random or where you stood, skipped when another gun covers the spot or health is low). Missing: Disable When, Force When, Stop If Forced, Out With Target, Hide While Target Hides | Yes on a self target: deep spot stable at 1.1e8 studs, 16 bait visits in 3 s, bait at the standing spot, cycle ran, body restored, clean disable |
 
 ## Not yet inventoried
 
