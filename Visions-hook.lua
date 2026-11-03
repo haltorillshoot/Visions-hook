@@ -10963,9 +10963,9 @@ function Session.buildSettingsPanels(rows)
 
 	local follow = rows.followTarget:AddOption()
 	local strafeRows, randomizeRows, skyRows, zigzagRows = {}, {}, {}, {}
-	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above", "zig zag" }, "random", function(value)
+	panelList(follow, "Follow Style", "follow_target_style", { "random spam", "random", "strafe", "randomize", "above", "zig zag", "strafe above" }, "random", function(value)
 		for _, row in ipairs(strafeRows) do
-			row:SetVisible(isPicked(value, "strafe"))
+			row:SetVisible(isPicked(value, "strafe") or isPicked(value, "strafe above"))
 		end
 
 		for _, row in ipairs(randomizeRows) do
@@ -10973,7 +10973,7 @@ function Session.buildSettingsPanels(rows)
 		end
 
 		for _, row in ipairs(skyRows) do
-			row:SetVisible(isPicked(value, "above"))
+			row:SetVisible(isPicked(value, "above") or isPicked(value, "strafe above"))
 		end
 
 		for _, row in ipairs(zigzagRows) do
@@ -10988,7 +10988,7 @@ function Session.buildSettingsPanels(rows)
 	panelSlider(follow, "Lead Time", "follow_target_lead_time", 0, 300, 0, "ms", 80)
 	-- Random, Randomize and Above keep one place this long before taking a new one (0 = a new place every frame); Zig Zag switches sides this often. The server has the body
 	-- about 0.1 s late and takes a shot only from near where it has it, so a place that changes every frame gets many shots refused.
-	panelSlider(follow, "Reposition Every", "follow_target_reposition", 0, 2, 2, "s", 0.15)
+	panelSlider(follow, "Reposition Every", "follow_target_reposition", 0, 2, 2, "s", 0.05)
 	table.insert(strafeRows, select(2, panelSlider(follow, "Height", "follow_target_height", -200, 200, 0, " studs", 0)))
 	table.insert(strafeRows, select(2, panelSlider(follow, "Speed", "follow_target_speed", 1, 100, 0, "%", 75)))
 	-- Orbit Shape (strafe): the path round the target. Randomize: a random place 'Teleport Min' to 'Teleport Max' studs out. Above: a random height over the target.
@@ -34109,13 +34109,13 @@ end
         menu_references["auto_loadout_ammo"] = menu_references["auto_loadout_settings"]:create_element({["name"] = "ammo"}, {["slider"] = {["flag"] = "auto_loadout_ammo", ["min"] = 0, ["max"] = 50, ["default"] = 5, ["suffix"] = "x"}})
         menu_references["follow_target"] = menu_references["utility_section"]:create_element({["name"] = "follow target"}, {["toggle"] = {["flag"] = "follow_target"}})
         menu_references["follow_target_settings"] = menu_references["follow_target"]:create_settings()
-        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "zig zag"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
+        menu_references["follow_target_style"] = menu_references["follow_target_settings"]:create_element({["name"] = "follow style"}, {["dropdown"] = {["flag"] = "follow_target_dropdown", ["options"] = {"random spam", "random", "strafe", "randomize", "above", "zig zag", "strafe above"}, ["default"] = {"random"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["follow_target_stop_if"] = menu_references["follow_target_settings"]:create_element({["name"] = "stop if"}, {["dropdown"] = {["flag"] = "follow_target_stop_if", ["options"] = {"no gun equipped", "target knocked", "reloading"}, ["default"] = {"no gun equipped", "target knocked", "reloading"}, ["multi"] = true, ["requires_one"] = false}})
         menu_references["follow_target_distance"] = menu_references["follow_target_settings"]:create_element({["name"] = "distance"}, {["slider"] = {["flag"] = "follow_target_distance", ["min"] = 2, ["max"] = 200, ["default"] = 15, ["suffix"] = " studs"}})
         menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
         menu_references["follow_target_lead"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead"}, {["toggle"] = {["flag"] = "follow_target_lead", ["default"] = true}})
         menu_references["follow_target_lead_time"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead time"}, {["slider"] = {["flag"] = "follow_target_lead_time", ["min"] = 0, ["max"] = 300, ["default"] = 80, ["decimals"] = 0, ["suffix"] = "ms"}})
-        menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.15, ["decimals"] = 2, ["suffix"] = "s"}})
+        menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.05, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["follow_target_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "height"}, {["slider"] = {["flag"] = "follow_target_height", ["min"] = -200, ["max"] = 200, ["default"] = 0, ["suffix"] = " studs"}})
         menu_references["follow_target_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "follow_target_speed", ["min"] = 1, ["max"] = 100, ["default"] = 75, ["suffix"] = "%"}})
         menu_references["follow_target_orbit_shape"] = menu_references["follow_target_settings"]:create_element({["name"] = "orbit shape"}, {["dropdown"] = {["flag"] = "follow_target_orbit_shape", ["options"] = {"circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart"}, ["default"] = {"circle"}, ["multi"] = false, ["requires_one"] = true}})
@@ -38402,6 +38402,10 @@ end
                 return math.sqrt(high * high + 25)
             elseif follow_target_style == "above" then
                 return math.max(flags["follow_target_sky_max"] or 20, flags["follow_target_sky_min"] or 10)
+            elseif follow_target_style == "strafe above" then
+                local up = math.abs(height["Y"]) + math.max(flags["follow_target_sky_max"] or 20, flags["follow_target_sky_min"] or 10)
+
+                return math.sqrt(distance * distance + up * up)
             elseif follow_target_style == "random" then
                 return distance * math.sqrt(3)
             end
@@ -38423,7 +38427,7 @@ end
 
             if follow_target_style == "zig zag" then
                 new_cframe = cframe_new(aim + zigzag_place(), aim)
-            elseif reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above") then
+            elseif reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above" or follow_target_style == "strafe above") then
                 new_cframe = cframe_new(aim + held["offset"]) * held["turn"]
             elseif follow_target_style == "random" then
                 new_cframe = cframe_new(aim + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
@@ -38457,13 +38461,29 @@ end
 
                 new_cframe = cframe_new(aim + vector3_new(0, low + (high - low) * math_random(), 0))
                 new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+            elseif follow_target_style == "strafe above" then
+                -- Strafe's Distance, Orbit Shape and Height with Above's Height Min / Max: a new spot on the orbit around the target and a new height
+                -- over it every time, held for Reposition Every like the other teleporting styles
+                local low = flags["follow_target_sky_min"] or 10
+                local high = math.max(flags["follow_target_sky_max"] or 20, low)
+                local share = math_random()
+                local ring
+
+                if orbit_shape ~= "circle" then
+                    ring = hide_manager["orbit_offset"](orbit_shape, share, distance)
+                else
+                    ring = (cframe_angles(0, rad(360 * share), 0) * cframe_new(0, 0, distance))["Position"]
+                end
+
+                new_cframe = cframe_new(aim + height + ring + vector3_new(0, low + (high - low) * math_random(), 0))
+                new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
             elseif orbit_shape ~= "circle" then
                 new_cframe = cframe_new(aim + height + hide_manager["orbit_offset"](orbit_shape, (clock() * speed) % 1, distance))
             else
                 new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (aim + height)
             end
 
-            if not reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above") then
+            if not reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above" or follow_target_style == "strafe above") then
                 local position = new_cframe["Position"]
                 held["style"], held["offset"], held["turn"], held["at"] = follow_target_style, position - aim, new_cframe - position, clock()
             end
@@ -38729,13 +38749,13 @@ end
 
         create_connection(menu_references["follow_target_style"]["on_dropdown_change"], function(value)
             follow_target_style = value[1]
-            menu_references["follow_target_height"]:set_visible(follow_target_style == "strafe")
-            menu_references["follow_target_speed"]:set_visible(follow_target_style == "strafe")
-            menu_references["follow_target_orbit_shape"]:set_visible(follow_target_style == "strafe")
+            menu_references["follow_target_height"]:set_visible(follow_target_style == "strafe" or follow_target_style == "strafe above")
+            menu_references["follow_target_speed"]:set_visible(follow_target_style == "strafe" or follow_target_style == "strafe above")
+            menu_references["follow_target_orbit_shape"]:set_visible(follow_target_style == "strafe" or follow_target_style == "strafe above")
             menu_references["follow_target_teleport_min"]:set_visible(follow_target_style == "randomize")
             menu_references["follow_target_teleport_max"]:set_visible(follow_target_style == "randomize")
-            menu_references["follow_target_sky_min"]:set_visible(follow_target_style == "above")
-            menu_references["follow_target_sky_max"]:set_visible(follow_target_style == "above")
+            menu_references["follow_target_sky_min"]:set_visible(follow_target_style == "above" or follow_target_style == "strafe above")
+            menu_references["follow_target_sky_max"]:set_visible(follow_target_style == "above" or follow_target_style == "strafe above")
             menu_references["follow_target_zigzag_height"]:set_visible(follow_target_style == "zig zag")
             menu_references["follow_target_zigzag_speed"]:set_visible(follow_target_style == "zig zag")
             hide_manager["follow_visual_clear"]()
