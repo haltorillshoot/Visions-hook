@@ -94,3 +94,13 @@ All of these are local to your screen and put back what they replaced.
 Tested live: every world setting switched on and off (time, sky id, atmosphere density, colour correction 1.5 and blur 9 created as separate effects and then removed, weather patch created and destroyed, cursor hidden and restored, lighting technology set); crosshair nine objects drawn and cleared; character highlight, hat, aura and 24 ForceField parts applied and fully reverted; ESP chams on the second account on and off.
 
 The main chunk had reached the limit of 200 local variables while this was added (the script failed to run until the menu was moved into a function); the menu now builds inside `buildMenu()`.
+
+## Remaining misc (added)
+
+Movement: lock walk speed, remove slowdowns and remove jump cooldown (they drop or correct the writes the game makes to your humanoid's WalkSpeed and JumpPower, through the shared hook), anti trip, spinbot, and the pushback guard (when one frame carries the body backwards by more than 24 studs and more than 8 frames of travel, speed and flight fall to a quarter for 10 seconds, again for each repeat). Misc: hide other players' nametags, animation player (nine emotes and a custom asset id), unlock camera distance.
+
+Tested live: the walk speed held at 60 while locked and went back to 16 when unlocked; the spinbot turned the character and gave AutoRotate back; anti trip turned FallingDown off and on; the camera zoom limit lifted and restored; the animation played, switched and stopped; the pushback guard fell to 1/64 on a simulated push back and returned to 1 after ten seconds. Not tested: remove slowdowns and remove jump cooldown (they need the game to write a lower value), hide nametags on the second account (it had left the server by then).
+
+Not reproduced: animation breaker (changes what other players see of your animations) and trash talk (automated chat messages).
+
+**A reload bug fixed.** Each load installed three more metamethod hooks (they cannot be removed) and the layers stacked, so a client that had been reloaded many times slowed on every instance index, call and write; one test client dropped out of the connection while I was reloading it. There is now one hook per kind for the whole session (`Hooks.set`); a load or an unload only changes the handler behind it. Six reloads in a row left three hooks and the same timing.

@@ -108,6 +108,47 @@ local function picked(name, item, fallback)
 	return value == item
 end
 
+---@module Hooks
+---One metamethod hook per kind for the whole session. A hook cannot be removed, and a new one on every load stacked a layer on every instance index, call and
+---write (a client that was reloaded many times slowed down and then dropped). So the first load installs a thin hook that calls whatever handler is set
+---for that metamethod, and later loads, and unloading, only change the handler. An empty handler passes straight through.
+local Hooks = {}
+
+---@param metamethod string "__index", "__newindex" or "__namecall"
+---@param handler function? (original, ...) -> ...; nil passes through
+function Hooks.set(metamethod, handler)
+	local registry = environment.VantaHooks
+
+	if not registry then
+		registry = {}
+		environment.VantaHooks = registry
+	end
+
+	local entry = registry[metamethod]
+
+	if not entry and handler == nil then
+		return
+	end
+
+	if not entry then
+		entry = {}
+		registry[metamethod] = entry
+
+		local original
+		original = hookmetamethod(game, metamethod, newcclosure(function(...)
+			local handle = entry.handler
+
+			if handle then
+				return handle(original, ...)
+			end
+
+			return original(...)
+		end))
+	end
+
+	entry.handler = handler
+end
+
 ---@module Players
 local Players = {}
 
@@ -576,14 +617,7 @@ function Aim.clear()
 end
 
 function Aim.install()
-	if Aim.hooked then
-		return
-	end
-
-	Aim.hooked = true
-
-	local original
-	original = hookmetamethod(game, "__index", newcclosure(function(self, key)
+	Hooks.set("__index", function(original, self, key)
 		if Aim.active and Aim.position and self == mouse and not checkcaller() then
 			if os.clock() > Aim.expires then
 				Aim.clear()
@@ -595,7 +629,7 @@ function Aim.install()
 		end
 
 		return original(self, key)
-	end))
+	end)
 end
 
 ---@module Body
@@ -2694,25 +2728,35 @@ end
 ---@module Movement
 ---Your own character's movement: extra speed, flight, noclip, jump power, anti sit. It changes the character on your client; where the server does not
 ---agree, the server wins. Runs before the Body step, so the position Body saves as "real" already includes the movement.
-local Movement = { flying = false, jumpDefault = nil, noclipParts = {}, jumpValue = nil, humanoid = nil, hooked = false, active = true }
+local Movement = { flying = false, jumpDefault = nil, noclipParts = {}, jumpValue = nil, humanoid = nil, hooked = false, active = true, pushScale = 1, pushUntil = 0, pushPart = nil :: Instance?, pushPosition = nil :: Vector3?, pushVelocity = Vector3.zero, pushSettled = 0, tripHumanoid = nil :: Instance? }
 
 ---Da Hood's own script writes JumpPower back every frame (measured: 50, 120 and 50 again within one frame), so a plain write never lasts. While Jump Power is on,
 ---the writes the game makes to your humanoid's JumpPower are given the chosen value instead; nothing else is touched.
 function Movement.installHook()
-	if Movement.hooked then
-		return
-	end
+	Hooks.set("__newindex", function(original, self, key, value)
+		if Movement.active and self == Movement.humanoid and not checkcaller() then
+			if key == "JumpPower" then
+				if Movement.jumpValue then
+					return original(self, key, Movement.jumpValue)
+				end
 
-	Movement.hooked = true
+				-- the game sets JumpPower to 0 for its jump cooldown
+				if flag("move_no_jump_cooldown", false) and value == 0 then
+					return
+				end
+			elseif key == "WalkSpeed" then
+				if flag("move_lock_walk", false) then
+					return
+				end
 
-	local original
-	original = hookmetamethod(game, "__newindex", newcclosure(function(self, key, value)
-		if Movement.active and Movement.jumpValue and key == "JumpPower" and self == Movement.humanoid and not checkcaller() then
-			return original(self, key, Movement.jumpValue)
+				if flag("move_no_slow", false) and type(value) == "number" and value < 16 then
+					return original(self, key, 16)
+				end
+			end
 		end
 
 		return original(self, key, value)
-	end))
+	end)
 end
 
 local function movementParts()
@@ -2728,6 +2772,37 @@ function Movement.step(dt)
 		return
 	end
 
+	local now = os.clock()
+
+	-- Pushback guard: when one frame carries the body backwards, against the way it was going, by more than 24 studs and more than 8 frames of that
+	-- travel, speed and flight drop to a quarter for 10 seconds. It stands aside while Vanta itself moves the body and for a moment after a respawn.
+	if Movement.pushScale < 1 and now >= Movement.pushUntil then
+		Movement.pushScale = 1
+	end
+
+	if flag("move_pushback", true) and (flag("move_speed", false) or flag("move_flight", false)) then
+		if Body.spot or Shop.busy() or root ~= Movement.pushPart then
+			Movement.pushPart, Movement.pushPosition, Movement.pushSettled = root, nil, now + 1.5
+		else
+			local position, lastPosition, lastVelocity = root.Position, Movement.pushPosition, Movement.pushVelocity
+
+			Movement.pushPosition, Movement.pushVelocity = position, root.AssemblyLinearVelocity
+
+			if lastPosition and now >= Movement.pushSettled and lastVelocity.Magnitude >= 1 then
+				local back = -(position - lastPosition):Dot(lastVelocity.Unit)
+
+				if back > math.max(24, lastVelocity.Magnitude * math.max(dt, 1 / 60) * 8) then
+					Movement.pushScale = math.max(Movement.pushScale * 0.25, 1 / 64)
+					Movement.pushUntil = now + 10
+
+					if notifications then
+						notifications:create_notification({ name = string.format("pushed back %d studs: speed slowed to %d%% for 10s", back, Movement.pushScale * 100) })
+					end
+				end
+			end
+		end
+	end
+
 	local flightOn = flag("move_flight", false) and not Players.knocked(localPlayer)
 
 	if flightOn and userInputService:GetFocusedTextBox() == nil then
@@ -2741,7 +2816,7 @@ function Movement.step(dt)
 		if userInputService:IsKeyDown(Enum.KeyCode.Space) then direction += Vector3.yAxis end
 		if userInputService:IsKeyDown(Enum.KeyCode.LeftControl) then direction -= Vector3.yAxis end
 
-		root.AssemblyLinearVelocity = direction.Magnitude > 0 and direction.Unit * flag("move_flight_speed", 60) or Vector3.zero
+		root.AssemblyLinearVelocity = direction.Magnitude > 0 and direction.Unit * flag("move_flight_speed", 60) * Movement.pushScale or Vector3.zero
 		Movement.flying = true
 	elseif Movement.flying then
 		Movement.flying = false
@@ -2750,7 +2825,7 @@ function Movement.step(dt)
 
 	-- extra speed: the character is moved along its walking direction on top of the normal walk
 	if flag("move_speed", false) and not flightOn and humanoid.MoveDirection.Magnitude > 0 then
-		root.CFrame += humanoid.MoveDirection * flag("move_speed_value", 20) * dt
+		root.CFrame += humanoid.MoveDirection * flag("move_speed_value", 20) * Movement.pushScale * dt
 	end
 
 	Movement.humanoid = humanoid
@@ -2772,6 +2847,27 @@ function Movement.step(dt)
 		if humanoid.Sit then
 			humanoid.Sit = false
 		end
+	end
+
+	-- anti trip: the character cannot fall over
+	if flag("move_antitrip", false) then
+		if Movement.tripHumanoid ~= humanoid then
+			Movement.tripHumanoid = humanoid
+			humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+		end
+	elseif Movement.tripHumanoid then
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+		Movement.tripHumanoid = nil
+	end
+
+	-- spinbot: the character turns on the spot
+	if flag("move_spin", false) then
+		humanoid.AutoRotate = false
+		root.CFrame *= CFrame.Angles(0, flag("move_spin_speed", 50) / 3 * math.min(dt, 1 / 30), 0)
+		Movement.spinning = true
+	elseif Movement.spinning then
+		Movement.spinning = false
+		humanoid.AutoRotate = true
 	end
 end
 
@@ -2797,6 +2893,21 @@ end
 
 function Movement.restore()
 	Movement.jumpValue = nil
+	Movement.pushScale = 1
+
+	local _, current = movementParts()
+
+	if current then
+		if Movement.tripHumanoid then
+			current:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+		end
+
+		if Movement.spinning then
+			current.AutoRotate = true
+		end
+	end
+
+	Movement.tripHumanoid, Movement.spinning = nil, false
 	Movement.active = false
 
 	for part in Movement.noclipParts do
@@ -3329,22 +3440,17 @@ function Feedback.start(maid)
 		watchPlayer(player, maid)
 	end))
 
-	if not Feedback.hooked then
-		Feedback.hooked = true
+	Hooks.set("__namecall", function(original, self, ...)
+		if Feedback.active and getnamecallmethod() == "FireServer" and not checkcaller() then
+			local kind, handle, origin, hit = ...
 
-		local original
-		original = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-			if Feedback.active and getnamecallmethod() == "FireServer" and not checkcaller() then
-				local kind, handle, origin, hit = ...
-
-				if kind == "ShootGun" and typeof(origin) == "Vector3" and typeof(hit) == "Vector3" then
-					pcall(Feedback.shot, typeof(handle) == "Instance" and handle.Parent or nil, origin, hit)
-				end
+			if kind == "ShootGun" and typeof(origin) == "Vector3" and typeof(hit) == "Vector3" then
+				pcall(Feedback.shot, typeof(handle) == "Instance" and handle.Parent or nil, origin, hit)
 			end
+		end
 
-			return original(self, ...)
-		end))
-	end
+		return original(self, ...)
+	end)
 
 	maid:give(function()
 		Feedback.active = false
@@ -3868,6 +3974,114 @@ function LocalChar.step(dt)
 	end
 end
 
+---@module Misc
+---Small things on your own client: hide other players' nametags, play an animation on your character, lift the camera zoom limit.
+---Each one remembers what it changed and puts it back.
+local Misc = { nametags = {}, animation = nil, track = nil, animationId = nil, zoomSaved = nil }
+
+local EMOTES = {
+	["sleep"] = "rbxassetid://10714360343",
+	["floss"] = "rbxassetid://10714340543",
+	["hype"] = "rbxassetid://10714369624",
+	["china dance"] = "rbxassetid://112134517351163",
+	["aura idle"] = "rbxassetid://131556235813350",
+	["headless basketball"] = "rbxassetid://71379317586292",
+	["aura farming"] = "rbxassetid://119737281881349",
+	["sturdy"] = "rbxassetid://95578613077512",
+	["ramge"] = "rbxassetid://104322051945322",
+}
+
+local EMOTE_NAMES = { "sleep", "floss", "hype", "china dance", "aura idle", "headless basketball", "aura farming", "sturdy", "ramge", "custom" }
+
+local function restoreNametags()
+	for humanoid, original in Misc.nametags do
+		if humanoid.Parent then
+			humanoid.DisplayDistanceType, humanoid.HealthDisplayType = original[1], original[2]
+		end
+	end
+
+	Misc.nametags = {}
+end
+
+local function stopAnimation()
+	if Misc.track then
+		Misc.track:Stop()
+		Misc.track = nil
+	end
+
+	if Misc.animation then
+		Misc.animation:Destroy()
+		Misc.animation = nil
+	end
+
+	Misc.animationId = nil
+end
+
+function Misc.restore()
+	restoreNametags()
+	stopAnimation()
+
+	if Misc.zoomSaved then
+		localPlayer.CameraMaxZoomDistance = Misc.zoomSaved
+		Misc.zoomSaved = nil
+	end
+end
+
+function Misc.step()
+	-- nametags of the other players
+	if flag("misc_hide_nametags", false) then
+		for _, player in playersService:GetPlayers() do
+			local humanoid = player ~= localPlayer and player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+
+			if humanoid then
+				Misc.nametags[humanoid] = Misc.nametags[humanoid] or { humanoid.DisplayDistanceType, humanoid.HealthDisplayType }
+				humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+				humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+			end
+		end
+	elseif next(Misc.nametags) then
+		restoreNametags()
+	end
+
+	-- camera zoom limit
+	if flag("misc_zoom", false) then
+		Misc.zoomSaved = Misc.zoomSaved or localPlayer.CameraMaxZoomDistance
+		localPlayer.CameraMaxZoomDistance = 9e9
+	elseif Misc.zoomSaved then
+		localPlayer.CameraMaxZoomDistance = Misc.zoomSaved
+		Misc.zoomSaved = nil
+	end
+
+	-- animation player: loaded again when the animation or the character changes
+	if flag("misc_anim", false) then
+		local character = localPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+		local name = flag("misc_anim_name", "sleep")
+		local id = name == "custom" and ("rbxassetid://" .. tostring(flag("misc_anim_id", "15609995579"))) or EMOTES[name]
+
+		if animator and id and (Misc.animationId ~= id or not Misc.track or Misc.track.Parent == nil) then
+			stopAnimation()
+
+			local animation = Instance.new("Animation")
+
+			animation.AnimationId = id
+			Misc.animation = animation
+			Misc.animationId = id
+
+			local ok, track = pcall(animator.LoadAnimation, animator, animation)
+
+			if ok and track then
+				track.Looped = true
+				track:Play()
+				Misc.track = track
+			end
+		end
+	elseif Misc.track or Misc.animation then
+		stopAnimation()
+	end
+end
+
 ---@module Ragebot
 ---The driver: one Heartbeat step, one PreRender step, same order every frame.
 local Ragebot = { maid = Maid.new() }
@@ -3955,6 +4169,8 @@ function Ragebot.start()
 	Ragebot.maid:give(runService.RenderStepped:Connect(Visuals.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(Esp.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(World.step))
+	Ragebot.maid:give(runService.RenderStepped:Connect(Misc.step))
+	Ragebot.maid:give(Misc.restore)
 	Ragebot.maid:give(runService.RenderStepped:Connect(Crosshair.render))
 	Ragebot.maid:give(runService.RenderStepped:Connect(LocalChar.step))
 	Ragebot.maid:give(World.restore)
@@ -4002,6 +4218,11 @@ function Ragebot.stop()
 	Body.restore()
 	Aim.active = false
 	Aim.clear()
+
+	-- the hooks stay installed (they cannot be removed) but no longer do anything
+	Hooks.set("__index", nil)
+	Hooks.set("__newindex", nil)
+	Hooks.set("__namecall", nil)
 	Ragebot.maid:clean()
 end
 
@@ -4099,6 +4320,13 @@ local function buildMenu()
 	characterSection:toggle({ name = "jump power", flag = "move_jump" })
 	characterSection:slider({ name = "jump power value", flag = "move_jump_power", min = 10, max = 300, default = 70, interval = 1, suffix = "" })
 	characterSection:toggle({ name = "anti sit", flag = "move_antisit" })
+	characterSection:toggle({ name = "anti trip", flag = "move_antitrip" })
+	characterSection:toggle({ name = "lock walk speed", flag = "move_lock_walk" })
+	characterSection:toggle({ name = "remove slowdowns", flag = "move_no_slow" })
+	characterSection:toggle({ name = "remove jump cooldown", flag = "move_no_jump_cooldown" })
+	characterSection:toggle({ name = "pushback guard", flag = "move_pushback", default = true })
+	characterSection:toggle({ name = "spinbot", flag = "move_spin" })
+	characterSection:slider({ name = "spin speed", flag = "move_spin_speed", min = 1, max = 100, default = 50, interval = 1, suffix = "%" })
 
 	local voidColumn = move:column({})
 	local voidSection = voidColumn:section({ name = "void spam" })
@@ -4414,6 +4642,11 @@ local function buildMenu()
 	utilitySection:toggle({ name = "auto bounty", flag = "autobounty_enabled" })
 	utilitySection:toggle({ name = "anti stomp", flag = "antistomp_enabled" })
 	utilitySection:toggle({ name = "anti afk", flag = "utility_antiafk" })
+	utilitySection:toggle({ name = "hide player nametags", flag = "misc_hide_nametags" })
+	utilitySection:toggle({ name = "unlock camera distance", flag = "misc_zoom" })
+	utilitySection:toggle({ name = "animation player", flag = "misc_anim" })
+	utilitySection:dropdown({ name = "animation", flag = "misc_anim_name", items = EMOTE_NAMES, default = "sleep", scrolling = true })
+	utilitySection:textbox({ name = "custom asset id", flag = "misc_anim_id", default = "15609995579" })
 	utilitySection:toggle({ name = "watermark", flag = "utility_watermark", default = true, callback = function(visible)
 		if library.watermark_outline then
 			library.watermark_outline.Visible = visible
@@ -4436,6 +4669,6 @@ buildMenu()
 library:init_config(window)
 
 Ragebot.start()
-environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
+environment.Vanta = { unload = unload, library = library, target = Target, resolver = Resolver, body = Body, voidspam = VoidSpam, autofire = AutoFire, follow = Follow, aim = Aim, visuals = Visuals, autostomp = AutoStomp, shop = Shop, bounty = Bounty, esp = Esp, feedback = Feedback, world = World, crosshair = Crosshair, localchar = LocalChar, aimassist = AimAssist, legit = Legit, silent = SilentAim, trigger = Triggerbot, movement = Movement, misc = Misc, utility = Utility, quickdraw = QuickDraw, adstrafe = AdStrafe, fullauto = FullAuto, antistomp = AntiStomp }
 
 notifications:create_notification({ name = "loaded vanta" })

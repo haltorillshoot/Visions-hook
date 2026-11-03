@@ -4,7 +4,7 @@ Generated from the 517 controls the older menu in `Visions-hook.lua` creates (`m
 
 Status: **Yes** = implemented, **Partial** = a working core with options missing, **No** = not implemented, **Declined** = deliberately not reproduced (reason given).
 
-**Totals (517 controls):** Yes 204, Partial 33, No 264, Declined 16.
+**Totals (517 controls):** Yes 216, Partial 33, No 245, Declined 23.
 
 ## panel_section
 
@@ -18,16 +18,16 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| remove jump cooldown | toggle | No |  |
-| remove slowdowns | toggle | No |  |
-| lock walk speed | toggle | No |  |
+| remove jump cooldown | toggle | Yes | Movement |
+| remove slowdowns | toggle | Yes | Movement |
+| lock walk speed | toggle | Yes | Movement |
 | jump power | toggle | Yes | Movement |
-| anti trip | toggle | No |  |
+| anti trip | toggle | Yes | Movement |
 | anti sit | toggle | Yes | Movement |
 | noclip | toggle | Yes | Movement |
 | speed | toggle | Yes | Movement |
 | flight | toggle | Yes | Movement |
-| pushback guard | toggle | No |  |
+| pushback guard | toggle | Yes | Movement |
 
 ## jump_power_settings
 
@@ -51,39 +51,39 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| animation breaker | toggle | No |  |
-| animation player | toggle | No |  |
-| trash talk | toggle | No |  |
-| spinbot | toggle | No |  |
-| hide player nametags | toggle | No |  |
+| animation breaker | toggle | Declined | breaks the animation state other players see / automated chat messages |
+| animation player | toggle | Yes | Movement / Misc |
+| trash talk | toggle | Declined | breaks the animation state other players see / automated chat messages |
+| spinbot | toggle | Yes | Movement / Misc |
+| hide player nametags | toggle | Yes | Movement / Misc |
 
 ## animation_breaker_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| lag | slider | No |  |
-| jitter | slider | No |  |
+| lag | slider | Declined | part of animation breaker |
+| jitter | slider | Declined | part of animation breaker |
 
 ## animation_player_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| animation | dropdown | No |  |
-| asset id | textbox | No |  |
+| animation | dropdown | Yes | Misc |
+| asset id | textbox | Yes | Misc |
 
 ## trash_talk_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| message list | dropdown | No |  |
-| always | toggle | No |  |
-| activate when | dropdown | No |  |
+| message list | dropdown | Declined | part of trash talk (automated chat) |
+| always | toggle | Declined | part of trash talk (automated chat) |
+| activate when | dropdown | Declined | part of trash talk (automated chat) |
 
 ## spinbot_settings
 
 | Original control | Type | Vanta | Where / note |
 |---|---|---|---|
-| speed | slider | No |  |
+| speed | slider | Yes | Movement |
 
 ## utility_section
 
@@ -92,7 +92,7 @@ Status: **Yes** = implemented, **Partial** = a working core with options missing
 | remove flintlock knockback | toggle | No |  |
 | unlock custom crosshair | toggle | No |  |
 | unlock animation packs | toggle | No |  |
-| unlock camera distance | toggle | No |  |
+| unlock camera distance | toggle | Yes | Misc |
 | remove anti gun macro | toggle | No |  |
 | auto vehicle | toggle | No |  |
 | semi god | toggle | No |  |
