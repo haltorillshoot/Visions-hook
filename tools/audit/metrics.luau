@@ -1,6 +1,6 @@
 local fs = require("@lune/fs")
 local luau = require("@lune/luau")
-local base = "C:/Users/polla/Visions-hook/"
+local base = ""
 for _, name in ipairs({ "Visions-hook.lua", "Des-Hood/Des-Hood.lua", "Vanta/Vanta.lua", "Visions-hook-menu.lua", "Raknet/DesyncResearch.lua", "Raknet/RaknetResearch.lua" }) do
 	local source = fs.readFile(base .. name)
 	local best, bytecode = math.huge, nil

@@ -1,5 +1,9 @@
-import re, json, collections
-src = open("C:/Users/polla/Visions-hook/Visions-hook.lua", encoding="utf-8", errors="ignore").read().replace("\r\n", "\n")
+"""Static feature and option inventory of Visions-hook.lua. Usage: python tools/audit/inventory.py [output.json]"""
+import re, json, collections, sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[2]
+src = (root / "Visions-hook.lua").read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
 lines = src.split("\n")
 
 # 1) engine elements: menu_references["k"] = parent:create_element({["name"] = "n"}, {["type"] = {["flag"]=..., ["default"]=...}})
@@ -44,4 +48,5 @@ def section(line):
 per = collections.Counter(section(e["line"]) for e in elements)
 print("\nengine options per section marker (top 25):")
 for k, v in per.most_common(25): print("%4d  %s" % (v, k))
-json.dump({"elements": elements, "native": native, "nl": nl}, open("C:/Users/polla/audit/inventory.json", "w"), indent=1)
+if len(sys.argv) > 1:
+    json.dump({"elements": elements, "native": native, "nl": nl}, open(sys.argv[1], "w"), indent=1)

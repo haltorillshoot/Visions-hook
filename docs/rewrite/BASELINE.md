@@ -39,7 +39,7 @@ Limit: keys built from a prefix at run time (`auto_sorter_slot_` plus a number, 
 | `Raknet/DesyncResearch.lua` | 34.3 KB | 23.9 KB | 1 ms | yes |
 | `Raknet/RaknetResearch.lua` | 10.6 KB | 7.2 KB | 1 ms | yes |
 
-Reproduce with `lune run tools/audit/metrics.luau` (edit the base path at the top).
+Reproduce from the repository root with `lune run tools/audit/metrics`.
 
 ## Static code metrics for `Visions-hook.lua`
 
