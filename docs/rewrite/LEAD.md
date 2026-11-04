@@ -49,6 +49,12 @@ Both changes are in `Lead.followAhead` (Follow Target's Lead option) and need no
 
 Compile size: bytecode 1271.6 KB to 1274.5 KB, compile time within noise.
 
+## In-game verification so far (partial)
+
+On 2026-11-04 the rewritten `Visions-hook.lua` (commit `d4e9e5f`) was loaded on a fresh Da Hood client with the saved `hvh` config. Observed: it loaded with no warnings or errors in the console; the engine came up with the same 598 flags as the original; the loaded values matched the earlier session (Prediction Strength 147, void weight 2.76, Automatic targeting on); the Lead module was found in memory and returned the expected values with Roblox's own `Vector3` (`followAhead` 4.00 studs at 50 studs/s, 1.40 at 35 studs/s, `isTrusted` true for agreeing velocities).
+
+Not done: the shooting baseline. The test account had no gun after rejoining (backpack: Combat, Phone, Wallet, TipJar), Auto Loadout did not buy one within a minute, and the shot count stayed at 0, so there is no hit-rate comparison yet. The two test clients were also restarted, so the earlier baseline conditions (a Based Hub opponent) no longer exist; a fair comparison has to run the original and the rewrite back to back under the same conditions.
+
 ## Not verified
 
-Nothing here has run in Roblox. The maths is proven equal to the original offline, but the engine around it (the floor probe, argument order at the call sites beyond what the mutation tests cover, the load order of the bundled region) has only been exercised through the shipped-block test and a compile check. In-game verification plan: load the rewritten script on the test client, repeat the baseline run (original: 30/30 and 29/30 hits, pooled 98.3%), and compare follow tracking against the original with an opponent that moves at 30 to 60 studs/s. The second part needs the opponent rig, which is blocked until Based Hub's void mode is off on the second client.
+Beyond the checks above, nothing here has run in Roblox. The maths is proven equal to the original offline, but the engine around it (the floor probe, argument order at the call sites beyond what the mutation tests cover, the load order of the bundled region) has only been exercised through the shipped-block test and a compile check. In-game verification plan: load the rewritten script on the test client, repeat the baseline run (original: 30/30 and 29/30 hits, pooled 98.3%), and compare follow tracking against the original with an opponent that moves at 30 to 60 studs/s. The second part needs the opponent rig, which is blocked until Based Hub's void mode is off on the second client.
