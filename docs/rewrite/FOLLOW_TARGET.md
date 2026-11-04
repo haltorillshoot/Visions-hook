@@ -47,7 +47,18 @@ With both accounts running the script they fought each other. Over 20 s on each 
 
 **Open problem, not yet explained:** the first time I reloaded the script over a running session on the shooter client (Stage 1 build replaced by this one), no session was left afterwards (no session object, no engine flags, no menu) and nothing was logged. A second load onto that clean state worked. It is unknown whether re-running the original script over a running original session does the same, so this may or may not be caused by the rewrite; it needs a control run (original over original) before it can be called either way.
 
-Control attempt (not completed): on the shooter client I unloaded the session (clean: no session, no flags, nothing in the log), loaded the original from the backup branch onto that clean state, and the client disconnected from the server within about a minute (the other account was then alone in the server). No Visions error was logged. Two earlier clients also disappeared right after a script was loaded onto them, so a client dropping after a (re)load has now happened several times; the cause (the game, the executor, or a manual close) is not known. The control has to be repeated on fresh clients, one step per fresh client: original loaded clean, original loaded over a running original, rewrite loaded over a running rewrite.
+Control run, second attempt (2026-11-04, the shooter account rejoined as a fresh client): every reload variant worked, each checked 40 seconds after the load with the client still in the server and the session alive with 598 engine flags and the menu references present:
+
+| step | result |
+|---|---|
+| original loaded onto a clean client | session alive, 598 flags |
+| original loaded over the running original | session alive, 598 flags |
+| rewrite loaded over the running original | session alive, 598 flags |
+| rewrite loaded over the running rewrite | session alive, 598 flags |
+
+So reloading over a running session is not broken in general, for the original or for the rewrite, and the first anomaly (Stage 2 over Stage 1 on the shooter client, no session left) did not reproduce. A fifth reload, rewrite over rewrite on the second account (the opponent), ended with that client disconnecting from the server before it could be checked, so that one has no result. Both anomalies happened on clients that had been running for a while (one of them in a fight between the two accounts); the cause is not known and nothing here ties either of them to the rewrite.
+
+Earlier control attempt (not completed): on the shooter client I unloaded the session (clean: no session, no flags, nothing in the log), loaded the original from the backup branch onto that clean state, and the client disconnected from the server within about a minute (the other account was then alone in the server). No Visions error was logged. Two earlier clients also disappeared right after a script was loaded onto them, so a client dropping after a (re)load has now happened several times; the cause (the game, the executor, or a manual close) is not known. The control has to be repeated on fresh clients, one step per fresh client: original loaded clean, original loaded over a running original, rewrite loaded over a running rewrite.
 
 ## Not verified
 
