@@ -14,6 +14,7 @@ run python -I tools/build/bundle.py --check
 run lune run tests/compile.spec
 run lune run tests/lead/golden.spec
 run lune run tests/lead/model.spec
+run lune run tests/follow/golden.spec
 run python -I tools/audit/check_keys.py
 run lune run Raknet/tests/raknet_research.spec
 run lune run Raknet/tests/desync_research.spec

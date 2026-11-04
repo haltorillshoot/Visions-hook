@@ -54,7 +54,7 @@ Candidate weaknesses (none measured):
 - Style dispatch is three separate string if-chains (`follow_hold_time`, `follow_reach`, `follow_cframe`) that have to be edited together.
 - `follow_adjust` raycasts for walls and re-searches when the aim moved more than 4 studs or after the reposition interval (0.02-0.25 s). For fast targets that probably means a search nearly every frame; the cost scales with target speed.
 - The lead (section 5) switches on at 40 studs/s as a step, not a ramp.
-- The target is taken from the ragebot (`ragebot_target`). Target switching and retention live in the target selection code, which I have not audited yet.
+- The target is taken from the ragebot (`ragebot_target`). Target switching and retention live in the target selection code, audited in Stage 2: automatic picking (`do_ragebot`, `pick_ragebot_target`) only runs when there is no current target (`not target`), and `Target Selection Cooldown` only limits how often an empty target is retried. A target is therefore kept until it becomes invalid, so there is no flapping between two targets to fix in automatic mode.
 - Void recovery is a separate Heartbeat connection (38625-38670) that has to agree with the main follow state through `local_following`.
 
 ## 5. Lead, from reading

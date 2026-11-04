@@ -20,6 +20,7 @@ root = Path(__file__).resolve().parents[2]
 # module path -> (opening line, closing line) wrapped around the module source
 BUNDLES = {
     "src/Lead/LeadModel.lua": ('hide_manager["lead_model"] = (function()', "end)()"),
+    "src/FollowTarget/Placement.lua": ('hide_manager["follow_placement"] = (function()', "end)()"),
 }
 
 TARGETS = ["Visions-hook.lua"]
