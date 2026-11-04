@@ -1,0 +1,2 @@
+# Shell scripts must keep LF line endings even when core.autocrlf converts everything else on Windows.
+*.sh text eol=lf
