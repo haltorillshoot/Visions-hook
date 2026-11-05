@@ -6412,7 +6412,6 @@ local NL_TO_NEVERLOSE_FLAG = {
 	["follow_target_visualize"] = {"follow_target_visualize", "follow_target_visualize"},
 	["follow_target_visualize_color"] = {"follow_target_visualize_color", "follow_target_visualize_color", "color"},
 	["follow_target_adjust"] = {"follow_target_adjust", "follow_target_adjust"},
-	["follow_target_reposition"] = {"follow_target_reposition", "follow_target_reposition"},
 	["velocity_source"] = {"velocity_source", "velocity_source", "list"},
 	["auto_stomp_stop_when_dead"] = {"auto_stomp_stop_when_dead", "auto_stomp_stop_when_dead"},
 	["auto_stomp_target_statuses"] = {"auto_stomp_target_statuses", "auto_stomp_target_statuses", "list"},
@@ -10989,9 +10988,6 @@ function Session.buildSettingsPanels(rows)
 	-- Lead: a fast target is followed to where it will be by the time the server has the body there (its speed times Lead Time, up to 60 studs)
 	panelToggle(follow, "Lead", "follow_target_lead", true)
 	panelSlider(follow, "Lead Time", "follow_target_lead_time", 0, 300, 0, "ms", 80)
-	-- Random, Randomize and Above keep one place this long before taking a new one (0 = a new place every frame); Zig Zag switches sides this often. The server has the body
-	-- about 0.1 s late and takes a shot only from near where it has it, so a place that changes every frame gets many shots refused.
-	panelSlider(follow, "Reposition Every", "follow_target_reposition", 0, 2, 2, "s", 0.05)
 	table.insert(strafeRows, select(2, panelSlider(follow, "Height", "follow_target_height", -200, 200, 0, " studs", 0)))
 	table.insert(strafeRows, select(2, panelSlider(follow, "Speed", "follow_target_speed", 1, 100, 0, "%", 75)))
 	-- Orbit Shape (strafe): the path round the target. Randomize: a random place 'Teleport Min' to 'Teleport Max' studs out. Above: a random height over the target.
@@ -34132,7 +34128,6 @@ end
         menu_references["follow_target_adjust"] = menu_references["follow_target_settings"]:create_element({["name"] = "adjust"}, {["toggle"] = {["flag"] = "follow_target_adjust", ["default"] = false}})
         menu_references["follow_target_lead"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead"}, {["toggle"] = {["flag"] = "follow_target_lead", ["default"] = true}})
         menu_references["follow_target_lead_time"] = menu_references["follow_target_settings"]:create_element({["name"] = "lead time"}, {["slider"] = {["flag"] = "follow_target_lead_time", ["min"] = 0, ["max"] = 300, ["default"] = 80, ["decimals"] = 0, ["suffix"] = "ms"}})
-        menu_references["follow_target_reposition"] = menu_references["follow_target_settings"]:create_element({["name"] = "reposition every"}, {["slider"] = {["flag"] = "follow_target_reposition", ["min"] = 0, ["max"] = 2, ["default"] = 0.05, ["decimals"] = 2, ["suffix"] = "s"}})
         menu_references["follow_target_height"] = menu_references["follow_target_settings"]:create_element({["name"] = "height"}, {["slider"] = {["flag"] = "follow_target_height", ["min"] = -200, ["max"] = 200, ["default"] = 0, ["suffix"] = " studs"}})
         menu_references["follow_target_speed"] = menu_references["follow_target_settings"]:create_element({["name"] = "speed"}, {["slider"] = {["flag"] = "follow_target_speed", ["min"] = 1, ["max"] = 100, ["default"] = 75, ["suffix"] = "%"}})
         menu_references["follow_target_orbit_shape"] = menu_references["follow_target_settings"]:create_element({["name"] = "orbit shape"}, {["dropdown"] = {["flag"] = "follow_target_orbit_shape", ["options"] = {"circle", "square", "triangle", "pentagon", "hexagon", "decagon", "heart"}, ["default"] = {"circle"}, ["multi"] = false, ["requires_one"] = true}})
@@ -37304,48 +37299,13 @@ end
                     if clock() - hide_manager["follow_started_at"] < settle then
                         aim_valid = false
                     elseif hide_manager["follow_burst_due"] then
-                        -- Kept until the burst's first shot has gone (cleared where the shot is sent), so a Shot Lock that forms on this frame and
-                        -- holds the shot for its own round trip does not use the burst up. Given up a second after the settle.
+                        -- Kept until the burst's first shot has gone (cleared where the shot is sent). Given up a second after the settle.
                         if clock() - hide_manager["follow_started_at"] < settle + 1 then
                             last_fire = -math.huge
                             hide_manager["last_sent_at"] = nil
                             follow_burst = true
                         else
                             hide_manager["follow_burst_due"] = false
-                        end
-                    end
-                end
-
-                -- Shot Lock. Measured with Distance 26 and Reposition Every 0.02 s: the body was put somewhere new on a 30 stud circle round the target
-                -- every frame, the server had it at one place and the shot was claimed from another (the follow's reach is past the 17 studs it forgives),
-                -- so 9 shots of 11 did nothing (the DB none of 6). With a follow that can put the body more than 15 studs out, the place is now held still
-                -- (hide_manager.shot_lock, as an offset from the target) once a shot is wanted, the shots wait until the server has had the body there
-                -- for a round trip and a little (ping + 0.06 s, at least 0.1 s), and the follow goes back to moving 0.25 s after the last shot.
-                if aim_valid and local_following and flags["auto_fire"] then
-                    local reach = hide_manager["follow_reach"] and hide_manager["follow_reach"]()
-                    local now = clock()
-                    local lock = hide_manager["shot_lock"]
-
-                    if reach == nil or reach > 15 then
-                        if not lock or now >= lock[1] then
-                            -- the next hold is at the follow style's next place (the lock is over, so follow_cframe gives it), not where the body is
-                            -- now: taking the body's place held it there again and again, so Zig Zag changed place 4 times in 3 s
-                            local next_cframe = hide_manager["follow_cframe"] and hide_manager["follow_cframe"](ragebot_aim_position, false, true)
-                            local offset = next_cframe and (next_cframe["Position"] - ragebot_aim_position) or (local_server_position - ragebot_aim_position)
-
-                            if offset["Magnitude"] == offset["Magnitude"] and offset["Magnitude"] < 200 then
-                                -- held for Reposition Every (at least the round trip it waits plus 0.05 s, so the place gets shots): it used to be held
-                                -- 0.6 s and pushed on 0.25 s by every shot, and with fake bullets going out all the time the follow never moved again
-                                -- (Zig Zag at 0.22 s: 14 places in 10 s instead of about 45)
-                                local settle = math.max(local_ping / 1000 + 0.06, 0.1)
-                                local hold_time = hide_manager["follow_hold_time"] and hide_manager["follow_hold_time"]() or tonumber(flags["follow_target_reposition"]) or 0.6
-                                local hold = math.max(hold_time, settle + 0.05)
-
-                                hide_manager["shot_lock"] = {now + hold, offset, now, now + hold}
-                                aim_valid = false
-                            end
-                        elseif now - lock[3] < math.max(local_ping / 1000 + 0.06, 0.1) then
-                            aim_valid = false
                         end
                     end
                 end
@@ -37697,12 +37657,6 @@ end
                                 hide_manager["gun_ammo_sent"][handle["Parent"]] = ammo
                                 hide_manager["last_sent_gun"] = handle["Parent"]
                                 hide_manager["last_sent_at"] = last_fire
-
-                                -- the held place stays until a moment after the last shot (Shot Lock above)
-                                local lock = hide_manager["shot_lock"]
-                                if lock and clock() < lock[1] then
-                                    lock[1] = math.min(math.max(lock[1], clock() + 0.25), lock[4] or math.huge)
-                                end
 
                                 -- bullet manipulation: the gun shoots by itself, aimed by the hook above
                                 if rage_bullet_manipulation["enabled"] and rage_bullet_manipulation["installed"] and hide_manager["bm_try_pull"](handle["Parent"], ammo, pulled) then
@@ -38391,9 +38345,8 @@ end
 
             local now = clock()
 
-            -- (searched again every Reposition Every, at most every 0.25 s as before: with a short Reposition Every the adjusted place held for a
-            -- quarter of a second and was always the same nearest spot, so Random did not move at all while its places were behind walls)
-            local research = math.min(math.max(tonumber(flags["follow_target_reposition"]) or 0.25, 0.02), 0.25)
+            -- (searched again at most every 0.25 s, or when the target has moved on)
+            local research = 0.25
 
             if not adjust_state["aim"] or (aim - adjust_state["aim"])["Magnitude"] > 4 or now - adjust_state["at"] > research then
                 adjust_state["at"] = now
@@ -38413,7 +38366,7 @@ end
                     end
                 end
 
-                -- the nearest to the style's own place first (so a style that moves keeps moving: Random's new place each Reposition Every gives a new
+                -- the nearest to the style's own place first (so a style that moves keeps moving: Random's new place each time gives a new
                 -- adjusted one); among the same, the nearer to the target
                 table.sort(candidates, function(a, b)
                     if math.abs(a[2] - b[2]) > 0.5 then
@@ -38443,9 +38396,6 @@ end
         -- Where the character stands for the Follow Target settings (style, Distance, Height and Speed, Orbit Shape, Teleport Min / Max, Height Min / Max).
         -- The follow step uses it every frame, and so does the Void Hide Spam for the windows it spends out of the void on the target: `window` is that, and
         -- Random Spam then leaves out its jumps into the void (the cycle has the void already). `quiet` keeps Visualize from drawing.
-        -- Reposition Every: the place Random, Randomize and Above last took (as an offset from the target, and its turn), kept until it is that old.
-        local held = {["style"] = nil, ["offset"] = nil, ["turn"] = nil, ["at"] = -1}
-
         -- Zig Zag: Distance studs out and Zig Zag Height over the target, switching from one side of it to the other (at Zig Zag Speed) while the line it swings across turns round the target (25 degrees a switch), so the body goes back and forth across the target
         -- and on round it.
         local zigzag = {["base"] = math_random() * 2 * math["pi"], ["side"] = 1, ["at"] = -1, ["offset"] = nil}
@@ -38457,15 +38407,6 @@ end
             local leg = 2 * distance * math["sin"](rad(55)) + distance * rad(25)
 
             return math.max(leg / math.max(speed, 1), 0.03)
-        end
-
-        -- how long the Shot Lock holds one place: Zig Zag's switch time, Reposition Every for the others
-        hide_manager["follow_hold_time"] = function()
-            if follow_target_style == "zig zag" then
-                return zigzag_every()
-            end
-
-            return tonumber(flags["follow_target_reposition"]) or 0.6
         end
 
         local zigzag_place = function()
@@ -38515,21 +38456,10 @@ end
         end
 
         hide_manager["follow_cframe"] = function(aim, window, quiet)
-            -- Shot Lock (do_ragebot): the place is held still, as an offset from the target, while shots go out
-            local lock = hide_manager["shot_lock"]
-
-            if lock and clock() < lock[1] then
-                return cframe_new(aim + lock[2], aim)
-            end
-
             local new_cframe
-            local reposition = tonumber(flags["follow_target_reposition"]) or 0.15
-            local reuse = reposition > 0 and held["style"] == follow_target_style and held["offset"] and clock() - held["at"] < reposition
 
             if follow_target_style == "zig zag" then
                 new_cframe = cframe_new(aim + zigzag_place(), aim)
-            elseif reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above" or follow_target_style == "strafe above") then
-                new_cframe = cframe_new(aim + held["offset"]) * held["turn"]
             elseif follow_target_style == "random" then
                 new_cframe = cframe_new(aim + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
                 new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
@@ -38564,7 +38494,7 @@ end
                 new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
             elseif follow_target_style == "strafe above" then
                 -- Strafe's Distance, Orbit Shape and Height with Above's Height Min / Max: a new spot on the orbit around the target and a new height
-                -- over it every time, held for Reposition Every like the other teleporting styles
+                -- over it every time
                 local low = flags["follow_target_sky_min"] or 10
                 local high = math.max(flags["follow_target_sky_max"] or 20, low)
                 local share = math_random()
@@ -38582,11 +38512,6 @@ end
                 new_cframe = cframe_new(aim + height + hide_manager["orbit_offset"](orbit_shape, (clock() * speed) % 1, distance))
             else
                 new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (aim + height)
-            end
-
-            if not reuse and (follow_target_style == "random" or follow_target_style == "randomize" or follow_target_style == "above" or follow_target_style == "strafe above") then
-                local position = new_cframe["Position"]
-                held["style"], held["offset"], held["turn"], held["at"] = follow_target_style, position - aim, new_cframe - position, clock()
             end
 
             if flags["follow_target_adjust"] == true and aim["Magnitude"] < 9e5 then
