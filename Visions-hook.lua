@@ -21367,7 +21367,7 @@ do
 
     -- The codes are kept here (they used to be read from a codes.txt in somebody else's repository). Six seconds between them: the game answers one
     -- code at a time.
-    local codes = {"MACRO!", "ETERNAL", "HALLOWEEN26"}
+    local codes = {"TURKEY!"}
 
     local finished = pcall(function()
         for i = 1, #codes do
